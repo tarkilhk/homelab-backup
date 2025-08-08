@@ -143,7 +143,7 @@ export default function RunsPage() {
                   <td className="px-4 py-2">{r.finished_at ? new Date(r.finished_at).toLocaleString() : '—'}</td>
                   <td className="px-4 py-2">
                     {r.artifact_path ? (
-                      <a className="hover:underline text-[hsl(var(--accent))]" href={r.artifact_path} target="_blank" rel="noreferrer">Artifact</a>
+                      <span title={r.artifact_path}>Artifact</span>
                     ) : '—'}
                   </td>
                   <td className="px-4 py-2">

@@ -189,6 +189,7 @@ export default function TargetsPage() {
                       aria-label={label}
                       className="border rounded px-3 py-2"
                       type={inputType}
+                      placeholder={def && def.default !== undefined ? String(def.default) : undefined}
                       value={value}
                       onChange={(e) =>
                         setConfig({
