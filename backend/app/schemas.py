@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 # Target schemas
@@ -41,9 +41,7 @@ class Target(BaseModel):
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
     
-    class Config:
-        """Pydantic configuration."""
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # Job schemas
@@ -81,9 +79,7 @@ class Job(JobBase):
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
     
-    class Config:
-        """Pydantic configuration."""
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # Run schemas
@@ -125,9 +121,7 @@ class Run(RunBase):
     started_at: datetime = Field(..., description="Start timestamp")
     finished_at: Optional[datetime] = Field(None, description="Completion timestamp")
     
-    class Config:
-        """Pydantic configuration."""
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # Response schemas with relationships
