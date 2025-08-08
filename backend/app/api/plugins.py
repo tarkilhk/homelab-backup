@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-from typing import List
+from typing import List, Dict, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Body
 from fastapi.responses import JSONResponse
 
-from app.core.plugins.loader import list_plugins, get_plugin_schema_path
+from app.core.plugins.loader import list_plugins, get_plugin_schema_path, get_plugin
 
 
 router = APIRouter(prefix="/plugins", tags=["plugins"])
@@ -29,5 +29,22 @@ def get_plugin_schema(key: str) -> JSONResponse:
     with open(schema_path, "r", encoding="utf-8") as f:
         data = json.load(f)
     return JSONResponse(content=data)
+
+
+@router.post("/{key}/test")
+async def test_plugin_connectivity(key: str, config: Dict[str, Any] = Body(...)) -> JSONResponse:
+    """Invoke the plugin's test method with provided configuration and return {"ok": bool}."""
+    try:
+        plugin = get_plugin(key)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Unknown plugin")
+
+    try:
+        ok = await plugin.test(config)
+    except Exception as exc:  # pragma: no cover - defensive
+        # Do not leak secrets; return generic failure with message
+        return JSONResponse(content={"ok": False, "error": str(exc)})
+
+    return JSONResponse(content={"ok": bool(ok)})
 
 

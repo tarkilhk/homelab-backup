@@ -22,6 +22,9 @@ class BackupPlugin:
 
     async def validate_artifact(self, artifact_path: str, ctx: BackupContext) -> None:
         """Raise on failure. Default is existence + non-zero size."""
+
+     async def test(self, target_cfg: Dict[str, Any], creds: Dict[str, Any], ctx: BackupContext) -> bool:
+         """Return True if the plugin can connect to the target using the provided configuration."""
 ```
 
 ## Config Schema

@@ -29,6 +29,11 @@ class BackupPlugin(ABC):
         pass
     
     @abstractmethod
+    async def test(self, config: Dict[str, Any]) -> bool:
+        """Test connectivity to the target using the provided configuration."""
+        pass
+    
+    @abstractmethod
     async def backup(self, context: BackupContext) -> Dict[str, Any]:
         """Perform backup operation."""
         pass
