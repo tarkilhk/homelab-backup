@@ -2,6 +2,7 @@ import { useParams, Link } from 'react-router-dom'
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type JobCreate, type Job, type Target } from '../api/client'
+import { formatLocalDateTime } from '../lib/dates'
 import { Button } from '../components/ui/button'
 import { Trash2, Pencil, Play, Check, X } from 'lucide-react'
 
@@ -71,6 +72,65 @@ export default function JobsPage() {
       .filter((j) => (filters.status ? j.enabled === filters.status : true))
       .filter((j) => (filters.targetId ? j.target_id === filters.targetId : true))
   }, [jobs, targetId, filters])
+
+  // Humanize a 5-field cron expression for common cases
+  function pad2(n: number): string { return n.toString().padStart(2, '0') }
+  function formatAmPm(hour24: number, minute: number): string {
+    const am = hour24 < 12
+    const hour12 = ((hour24 % 12) || 12)
+    return `${hour12}:${pad2(minute)} ${am ? 'AM' : 'PM'}`
+  }
+  function ordinal(n: number): string {
+    const s = ['th', 'st', 'nd', 'rd']
+    const v = n % 100
+    return `${n}${s[(v - 20) % 10] || s[v] || s[0]}`
+  }
+  function cronToHuman(cron: string): string | null {
+    const parts = cron.trim().split(/\s+/)
+    if (parts.length !== 5) return null
+    const [minS, hourS, domS, monS, dowS] = parts
+    const min = /^\d+$/.test(minS) ? Number(minS) : null
+    const hour = /^\d+$/.test(hourS) ? Number(hourS) : null
+
+    // every N minutes
+    const everyNMin = minS.match(/^\*\/(\d{1,2})$/)
+    if (everyNMin && hourS === '*' && domS === '*' && monS === '*' && dowS === '*') {
+      return `Every ${Number(everyNMin[1])} minutes`
+    }
+
+    // hourly at minute
+    if (min !== null && hourS === '*' && domS === '*' && monS === '*' && dowS === '*') {
+      return `Every hour at :${pad2(min)}`
+    }
+
+    // daily
+    if (min !== null && hour !== null && domS === '*' && monS === '*' && dowS === '*') {
+      return `Every day at ${formatAmPm(hour, min)}`
+    }
+
+    // weekly - single day-of-week 0-6 or 7
+    if (min !== null && hour !== null && domS === '*' && monS === '*' && /^(?:[0-7]|[0-7]-[0-7]|[0-7](?:,[0-7])*)$/.test(dowS)) {
+      const dayMap = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+      let dayText = dowS
+      if (/^\d+$/.test(dowS)) dayText = dayMap[Number(dowS)]
+      else if (/^\d-\d$/.test(dowS)) {
+        const [a, b] = dowS.split('-').map(Number)
+        dayText = `${dayMap[a]}-${dayMap[b]}`
+      } else if (/^(?:\d,)+\d$/.test(dowS)) {
+        dayText = dowS.split(',').map((d) => dayMap[Number(d)]).join(', ')
+      }
+      return `Every ${dayText} at ${formatAmPm(hour, min)}`
+    }
+
+    // monthly on day-of-month
+    if (min !== null && hour !== null && /^\d+$/.test(domS) && monS === '*' && dowS === '*') {
+      return `Every month on the ${ordinal(Number(domS))} at ${formatAmPm(hour, min)}`
+    }
+
+    return null
+  }
+
+  const humanCron = useMemo(() => cronToHuman(form.schedule_cron), [form.schedule_cron])
 
   // Infer prefix from cron for label updates
   function inferPrefixFromCron(cron: string): string | null {
@@ -256,37 +316,69 @@ export default function JobsPage() {
             }
           }}
         >
-          {!Number.isFinite(targetId as number) && (
-            <div className="grid gap-1">
-              <label className="text-sm" htmlFor="job-target-select">Target</label>
-              <select
-                id="job-target-select"
-                className="border rounded px-3 py-2 bg-background"
-                value={selectedTargetId}
-                onChange={(e) => setSelectedTargetId(e.target.value === '' ? '' : Number(e.target.value))}
-                aria-label="Target"
-                required
-              >
-                <option value="" disabled>Select a target…</option>
-                {(targets ?? []).map((t: Target) => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
-                ))}
-              </select>
+          {(!Number.isFinite(targetId as number)) ? (
+            // Global Jobs page: render Target and Cron with aligned input row
+            <div className="sm:col-span-2 grid gap-x-4">
+              {/* Label row */}
+              <div className="grid sm:grid-cols-2 gap-x-4">
+                <label className="text-sm" htmlFor="job-target-select">Target</label>
+                <label className="text-sm" htmlFor="cron-input">Cron</label>
+              </div>
+              {/* Input row (aligned) */}
+              <div className="grid sm:grid-cols-2 gap-x-4">
+                <div>
+                  <select
+                    id="job-target-select"
+                    className="border rounded px-3 py-2 bg-background w-full"
+                    value={selectedTargetId}
+                    onChange={(e) => setSelectedTargetId(e.target.value === '' ? '' : Number(e.target.value))}
+                    aria-label="Target"
+                    required
+                  >
+                    <option value="" disabled>Select a target…</option>
+                    {(targets ?? []).map((t: Target) => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="cron-input"
+                      className="border rounded px-3 py-2 font-mono w-44"
+                      placeholder="0 2 * * *"
+                      value={form.schedule_cron}
+                      onChange={(e) => setForm({ ...form, schedule_cron: e.target.value })}
+                      required
+                    />
+                    <span className="text-sm md:text-base text-gray-500 whitespace-nowrap" aria-live="polite">
+                      {humanCron ?? '—'}
+                    </span>
+                  </div>
+                  <span className="block mt-1 text-xs text-gray-500">Use standard 5-field crontab, e.g., 0 2 * * * for 2:00 AM daily.</span>
+                </div>
+              </div>
+            </div>
+          ) : (
+            // Target-specific page: only Cron field
+            <div className="grid gap-1 sm:col-start-1 sm:row-start-1">
+              <label className="text-sm" htmlFor="cron-input">Cron</label>
+              <div className="flex items-center gap-2">
+                <input
+                  id="cron-input"
+                  className="border rounded px-3 py-2 font-mono w-44"
+                  placeholder="0 2 * * *"
+                  value={form.schedule_cron}
+                  onChange={(e) => setForm({ ...form, schedule_cron: e.target.value })}
+                  required
+                />
+                <span className="text-sm md:text-base text-gray-500 whitespace-nowrap" aria-live="polite">
+                  {humanCron ?? '—'}
+                </span>
+              </div>
+              <span className="text-xs text-gray-500">Use standard 5-field crontab, e.g., 0 2 * * * for 2:00 AM daily.</span>
             </div>
           )}
-          {/* Switch Cron to the right of Target and move Job Name below Target */}
-          <div className="grid gap-1 sm:col-start-2 sm:row-start-1">
-            <label className="text-sm" htmlFor="cron-input">Cron</label>
-            <input
-              id="cron-input"
-              className="border rounded px-3 py-2 font-mono"
-              placeholder="0 2 * * *"
-              value={form.schedule_cron}
-              onChange={(e) => setForm({ ...form, schedule_cron: e.target.value })}
-              required
-            />
-            <span className="text-xs text-gray-500">Use standard 5-field crontab, e.g., 0 2 * * * for 2:00 AM daily.</span>
-          </div>
           <div className="grid gap-1 sm:col-start-1 sm:row-start-2">
             <label className="text-sm" htmlFor="name-input">Job Name</label>
             <input
@@ -399,7 +491,7 @@ export default function JobsPage() {
                     <td className="px-4 py-2">{targetNameById.get(j.target_id) ?? target?.name ?? '—'}</td>
                     <td className="px-4 py-2 font-mono">{j.schedule_cron}</td>
                     <td className="px-4 py-2">{j.enabled}</td>
-                    <td className="px-4 py-2">{new Date(j.created_at).toLocaleString()}</td>
+                    <td className="px-4 py-2">{formatLocalDateTime(j.created_at)}</td>
                     <td className="px-4 py-2 text-right">
                       <div className="flex justify-end gap-2">
                         <button

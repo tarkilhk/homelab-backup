@@ -46,6 +46,13 @@ def get_scheduler() -> AsyncIOScheduler:
                 "max_instances": 1,
             },
         )
+        # Log creation once to aid diagnostics in early startup
+        _log_event(
+            "scheduler_created",
+            timezone="Asia/Singapore",
+            coalesce=True,
+            max_instances=1,
+        )
     return _scheduler
 
 
@@ -287,8 +294,10 @@ def run_job_immediately(db: Session, job_id: int, triggered_by: str = "manual") 
     This is used by the API "Run now" endpoint so both manual and scheduled
     runs share the exact same logic.
     """
+    _log_event("manual_run_trigger", job_id=job_id, triggered_by=triggered_by)
     job = db.get(JobModel, job_id)
     if job is None:
+        _log_event("manual_job_missing", job_id=job_id)
         raise ValueError("Job not found")
     return _perform_run(db, job, triggered_by)
 
@@ -325,11 +334,20 @@ def schedule_jobs_on_startup(scheduler: AsyncIOScheduler, db: Session) -> None:
 
     enabled_jobs = db.query(JobModel).filter(JobModel.enabled == "true").all()
 
+    _log_event(
+        "scheduler_load_jobs_start",
+        enabled_jobs=len(enabled_jobs),
+    )
+
+    scheduled_count: int = 0
+    invalid_count: int = 0
+
     for job in enabled_jobs:
         try:
             trigger = CronTrigger.from_crontab(job.schedule_cron)
         except Exception:
             _log_event("invalid_cron", job_id=job.id, schedule_cron=job.schedule_cron)
+            invalid_count += 1
             continue
 
         scheduler.add_job(
@@ -341,10 +359,18 @@ def schedule_jobs_on_startup(scheduler: AsyncIOScheduler, db: Session) -> None:
             kwargs={"job_id": job.id},
             max_instances=1,
         )
+        scheduled_count += 1
         _log_event(
             "job_scheduled",
             job_id=job.id,
             name=job.name,
             schedule_cron=job.schedule_cron,
         )
+
+    _log_event(
+        "scheduler_load_jobs_done",
+        enabled_jobs=len(enabled_jobs),
+        scheduled=scheduled_count,
+        invalid_cron=invalid_count,
+    )
 
