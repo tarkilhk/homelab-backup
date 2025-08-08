@@ -1,12 +1,38 @@
-"""Database configuration and session management."""
+"""Database configuration and session management.
+
+Supports two ways to configure the SQLite database location:
+- `DB_FOLDER` (+ optional `DB_FILENAME`) to construct the SQLite URL from a
+  directory path. This is preferred to avoid mistakes with URL formatting.
+- Fallback to `DATABASE_URL` for full control; if unset, uses a local file
+  `./homelab_backup.db`.
+"""
 
 from typing import Generator
+from pathlib import Path
 
 from sqlalchemy import create_engine, text
+import os
 from sqlalchemy.orm import Session, sessionmaker, declarative_base
 
-# SQLite database URL
-DATABASE_URL = "sqlite:///./homelab_backup.db"
+# Resolve DB location
+# Priority: DB_FOLDER (and optional DB_FILENAME) -> DATABASE_URL -> default file
+DEFAULT_DB_FILENAME = "homelab_backup.db"
+
+_db_folder = os.getenv("DB_FOLDER")
+if _db_folder:
+    # Expand and ensure directory exists
+    db_dir = Path(_db_folder).expanduser()
+    try:
+        db_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        # Directory creation failure shouldn't crash import; engine creation may still fail later
+        pass
+    db_file = db_dir / os.getenv("DB_FILENAME", DEFAULT_DB_FILENAME)
+    # `sqlite:///` + absolute path results in four slashes (sqlite:////...) which SQLAlchemy expects
+    DATABASE_URL = f"sqlite:///{db_file.resolve()}"
+else:
+    # Full URL provided or default local file
+    DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///./{DEFAULT_DB_FILENAME}")
 
 # Create engine
 engine = create_engine(
