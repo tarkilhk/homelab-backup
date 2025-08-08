@@ -2,8 +2,9 @@ export type Target = {
   id: number
   name: string
   slug: string
-  type: string
-  config_json: string
+  // New plugin-based fields
+  plugin_name?: string | null
+  plugin_config_json?: string | null
   created_at: string
   updated_at: string
 }
@@ -16,6 +17,13 @@ export type Run = {
   status: string
   message?: string | null
   artifact_path?: string | null
+}
+
+export type PluginInfo = {
+  key: string
+  name?: string
+  description?: string
+  version?: string
 }
 
 const API_BASE = '/api/v1'
@@ -33,14 +41,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T
 }
 
+type TargetCreatePlugin = { name: string; slug?: string } & {
+  plugin_name: string
+  plugin_config_json: string
+}
+
+export type TargetUpdate = Partial<{
+  name: string
+  slug?: string
+  plugin_name: string
+  plugin_config_json: string
+}>
+
 export const api = {
   listTargets: () => request<Target[]>('/targets/'),
-  createTarget: (payload: Pick<Target, 'name' | 'slug' | 'type' | 'config_json'>) =>
-    request<Target>('/targets/', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
+  createTarget: (payload: TargetCreatePlugin) =>
+    request<Target>('/targets/', { method: 'POST', body: JSON.stringify(payload) }),
+  updateTarget: (id: number, payload: TargetUpdate) =>
+    request<Target>(`/targets/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteTarget: (id: number) => request<void>(`/targets/${id}`, { method: 'DELETE' }),
   listRuns: () => request<Run[]>('/runs/'),
+  listPlugins: () => request<PluginInfo[]>('/plugins/'),
+  getPluginSchema: (key: string) => request<Record<string, unknown>>(`/plugins/${key}/schema`),
 }
 
 
