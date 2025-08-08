@@ -20,8 +20,10 @@ def setup_logging(level: Optional[str] = None) -> None:
 
     log_level = (level or os.getenv("LOG_LEVEL", "INFO")).upper()
 
-    # Configure root logger only once to avoid duplicate handlers in reloads
-    if not logging.getLogger().handlers:
+    root_logger = logging.getLogger()
+
+    # Configure handlers once to avoid duplicates in reloads
+    if not root_logger.handlers:
         logging.basicConfig(
             level=log_level,
             format=(
@@ -30,6 +32,9 @@ def setup_logging(level: Optional[str] = None) -> None:
             ),
             datefmt="%Y-%m-%d %H:%M:%S",
         )
+    
+    # Always align root level (uvicorn may install handlers before we run)
+    root_logger.setLevel(log_level)
 
     # Align common third-party loggers to our level (uvicorn, sqlalchemy)
     logging.getLogger("uvicorn").setLevel(log_level)

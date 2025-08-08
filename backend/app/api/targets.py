@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_session
 from app.models import Target as TargetModel
-from app.core.plugins.loader import get_plugin_schema_path
+from app.core.plugins.loader import get_plugin_schema_path, get_plugin
 from app.schemas import Target, TargetCreate, TargetUpdate
 import logging
 
@@ -157,4 +157,35 @@ def delete_target(target_id: int, db: Session = Depends(get_session)) -> None:
         db.rollback()
     return None
 
+
+
+@router.post("/{target_id}/test")
+async def test_target_connectivity(target_id: int, db: Session = Depends(get_session)) -> dict:
+    """Test connectivity for a stored target by invoking its plugin `test` method.
+
+    Returns: {"ok": bool}
+    """
+    target = db.get(TargetModel, target_id)
+    if target is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target not found")
+    if not target.plugin_name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Target has no plugin configured")
+
+    try:
+        cfg = json.loads(target.plugin_config_json or "{}")
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid plugin_config_json: {exc}")
+
+    try:
+        plugin = get_plugin(target.plugin_name)
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown plugin for target")
+
+    try:
+        ok = await plugin.test(cfg)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("target test failed | id=%s error=%s", target_id, exc)
+        return {"ok": False, "error": str(exc)}
+
+    return {"ok": bool(ok)}
 
