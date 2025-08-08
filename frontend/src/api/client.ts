@@ -19,6 +19,8 @@ export type Run = {
   artifact_path?: string | null
 }
 
+export type RunWithJob = Run & { job: Job }
+
 export type PluginInfo = {
   key: string
   name?: string
@@ -85,7 +87,15 @@ export const api = {
   updateTarget: (id: number, payload: TargetUpdate) =>
     request<Target>(`/targets/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteTarget: (id: number) => request<void>(`/targets/${id}`, { method: 'DELETE' }),
-  listRuns: () => request<Run[]>('/runs/'),
+  listRuns: (params?: { status?: string; start_date?: string; end_date?: string; target_id?: number }) => {
+    const search = new URLSearchParams()
+    if (params?.status) search.set('status', params.status)
+    if (params?.start_date) search.set('start_date', params.start_date)
+    if (params?.end_date) search.set('end_date', params.end_date)
+    if (params?.target_id != null) search.set('target_id', String(params.target_id))
+    const q = search.toString()
+    return request<RunWithJob[]>(`/runs/${q ? `?${q}` : ''}`)
+  },
   listPlugins: () => request<PluginInfo[]>('/plugins/'),
   getPluginSchema: (key: string) => request<Record<string, unknown>>(`/plugins/${key}/schema`),
   // Jobs
