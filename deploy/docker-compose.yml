@@ -6,6 +6,7 @@ services:
       - .env
     environment:
       - TZ=${TZ}
+      - DB_FOLDER=./db
     volumes:
       - ${BACKUP_ROOT_HOST}:/backups
       - /etc/localtime:/etc/localtime:ro

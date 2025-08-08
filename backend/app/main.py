@@ -4,10 +4,12 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
+import logging
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
 from app.core.db import init_db, bootstrap_db, SessionLocal
+from app.core.logging import setup_logging
 from app.core.scheduler import get_scheduler, schedule_jobs_on_startup
 
 
@@ -15,6 +17,8 @@ from app.core.scheduler import get_scheduler, schedule_jobs_on_startup
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan manager."""
     # Startup
+    setup_logging()
+    logger = logging.getLogger(__name__)
     init_db()
     bootstrap_db()
     
@@ -26,13 +30,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     finally:
         db.close()
     scheduler.start()
-    print("APScheduler started with Asia/Singapore timezone and jobs scheduled")
+    logger.info("APScheduler started with Asia/Singapore timezone and jobs scheduled")
     
     yield
     
     # Shutdown
     scheduler.shutdown()
-    print("APScheduler shutdown")
+    logger.info("APScheduler shutdown")
 
 
 app = FastAPI(

@@ -1,42 +1,73 @@
 """Database configuration and session management.
 
-Supports two ways to configure the SQLite database location:
-- `DB_FOLDER` (+ optional `DB_FILENAME`) to construct the SQLite URL from a
-  directory path. This is preferred to avoid mistakes with URL formatting.
-- Fallback to `DATABASE_URL` for full control; if unset, uses a local file
-  `./homelab_backup.db`.
+SQLite location is configured via a single environment variable:
+- `DB_FOLDER`: directory where the database file will be stored. The filename
+  is hardcoded to `homelab_backup.db`.
+
+If `DB_FOLDER` is not set, the default folder `./db` is used.
 """
 
 from typing import Generator
 from pathlib import Path
+import logging
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 import os
 from sqlalchemy.orm import Session, sessionmaker, declarative_base
 
-# Resolve DB location
-# Priority: DB_FOLDER (and optional DB_FILENAME) -> DATABASE_URL -> default file
+# Resolve DB location based on DB_FOLDER only (no DATABASE_URL support)
 DEFAULT_DB_FILENAME = "homelab_backup.db"
+DEFAULT_DB_FOLDER = "./db_default"
 
-_db_folder = os.getenv("DB_FOLDER")
-if _db_folder:
-    # Expand and ensure directory exists
-    db_dir = Path(_db_folder).expanduser()
+logger = logging.getLogger(__name__)
+
+requested_dir = Path(os.getenv("DB_FOLDER", DEFAULT_DB_FOLDER)).expanduser()
+logger.info("DB_FOLDER env: %s | default: %s", os.getenv("DB_FOLDER"), DEFAULT_DB_FOLDER)
+logger.info("Requested DB directory: %s", requested_dir)
+
+def _ensure_dir(path: Path) -> tuple[bool, str]:
     try:
-        db_dir.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        # Directory creation failure shouldn't crash import; engine creation may still fail later
-        pass
-    db_file = db_dir / os.getenv("DB_FILENAME", DEFAULT_DB_FILENAME)
-    # `sqlite:///` + absolute path results in four slashes (sqlite:////...) which SQLAlchemy expects
-    DATABASE_URL = f"sqlite:///{db_file.resolve()}"
-else:
-    # Full URL provided or default local file
-    DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///./{DEFAULT_DB_FILENAME}")
+        path.mkdir(parents=True, exist_ok=True)
+        if not os.access(path, os.W_OK):
+            return False, "directory not writable"
+        return True, ""
+    except Exception as exc:  # pragma: no cover - safety net
+        return False, str(exc)
+
+# Try requested directory; if unusable, fall back to default relative folder
+db_dir = requested_dir
+ok, reason = _ensure_dir(db_dir)
+if not ok:
+    logger.warning(
+        "Cannot use DB_FOLDER '%s': %s. Falling back to '%s'",
+        db_dir,
+        reason,
+        DEFAULT_DB_FOLDER,
+    )
+    db_dir = Path(DEFAULT_DB_FOLDER)
+    ok2, reason2 = _ensure_dir(db_dir)
+    if not ok2:
+        # As a last resort, use current working directory
+        logger.warning(
+            "Fallback folder '%s' also unusable: %s. Using CWD '%s'",
+            DEFAULT_DB_FOLDER,
+            reason2,
+            Path.cwd(),
+        )
+        db_dir = Path.cwd()
+        _ensure_dir(db_dir)
+
+logger.info("Using DB directory: %s", db_dir)
+
+db_file = db_dir / DEFAULT_DB_FILENAME
+logger.info("DB file path: %s", db_file)
+# `sqlite:///` + absolute path results in four slashes (sqlite:////...) which SQLAlchemy expects
+SQLITE_URL = f"sqlite:///{db_file.resolve()}"
+logger.info("SQLite URL: %s", SQLITE_URL)
 
 # Create engine
 engine = create_engine(
-    DATABASE_URL,
+    SQLITE_URL,
     connect_args={"check_same_thread": False},  # Required for SQLite
     echo=True,  # Set to False in production
 )
@@ -68,7 +99,7 @@ def init_db() -> None:
 
     # Only create missing tables; do not drop/alter existing schema here
     Base.metadata.create_all(bind=engine)
-    print("Database tables ensured (create if missing)")
+    logger.info("Database tables ensured (create if missing)")
 
 
 def drop_all_tables() -> None:  # pragma: no cover - utility, run manually only
@@ -78,7 +109,7 @@ def drop_all_tables() -> None:  # pragma: no cover - utility, run manually only
     via explicit operator action.
     """
     Base.metadata.drop_all(bind=engine)
-    print("All database tables dropped.")
+    logger.warning("All database tables dropped.")
 
 
 def bootstrap_db() -> None:
@@ -92,8 +123,8 @@ def bootstrap_db() -> None:
         
         target_count = db.query(Target).count()
         if target_count == 0:
-            print("Database is empty. Ready for initial data.")
+            logger.info("Database is empty. Ready for initial data.")
         else:
-            print(f"Database contains {target_count} targets.")
+            logger.info("Database contains %s targets.", target_count)
     finally:
         db.close()
