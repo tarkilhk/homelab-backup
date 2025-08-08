@@ -2,7 +2,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, type Target, type PluginInfo } from '../api/client'
 import { useEffect, useState } from 'react'
 import { Button } from '../components/ui/button'
-import { Trash2, Pencil } from 'lucide-react'
+import { Trash2, Pencil, Calendar } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
 export default function TargetsPage() {
   const qc = useQueryClient()
@@ -38,14 +39,32 @@ export default function TargetsPage() {
         const s = await api.getPluginSchema(form.plugin_name)
         if (!cancelled) {
           setSchema(s)
-          // Optionally seed defaults from schema; keep minimal for now
-          setConfig({})
+          // Seed config when editing; otherwise start empty
+          if (editingId) {
+            try {
+              const parsed = JSON.parse(form.plugin_config_json || '{}')
+              setConfig(parsed && typeof parsed === 'object' ? parsed : {})
+            } catch {
+              setConfig({})
+            }
+          } else {
+            setConfig({})
+          }
         }
       } catch (_err) {
         // If schema is not available (404), fall back to raw JSON
         if (!cancelled) {
           setSchema(null)
-          setConfig({})
+          if (editingId) {
+            try {
+              const parsed = JSON.parse(form.plugin_config_json || '{}')
+              setConfig(parsed && typeof parsed === 'object' ? parsed : {})
+            } catch {
+              setConfig({})
+            }
+          } else {
+            setConfig({})
+          }
         }
       }
     }
@@ -65,49 +84,8 @@ export default function TargetsPage() {
     },
   })
 
-  // Edit/Delete state
+  // Edit/Delete state (edit happens via the top form)
   const [editingId, setEditingId] = useState<number | null>(null)
-  const [editForm, setEditForm] = useState<{ name: string; plugin_name: string; plugin_config_json: string }>({
-    name: '',
-    plugin_name: '',
-    plugin_config_json: '{}',
-  })
-  const [editSchema, setEditSchema] = useState<Record<string, any> | null>(null)
-  const [editConfig, setEditConfig] = useState<Record<string, any>>({})
-
-  // Load schema when editing
-  useEffect(() => {
-    let cancelled = false
-    async function run() {
-      if (!editingId || !editForm.plugin_name) {
-        setEditSchema(null)
-        setEditConfig({})
-        return
-      }
-      try {
-        const s = await api.getPluginSchema(editForm.plugin_name)
-        if (!cancelled) {
-          setEditSchema(s)
-          // If existing JSON is parsable, use it as initial config
-          try {
-            const parsed = JSON.parse(editForm.plugin_config_json || '{}')
-            setEditConfig(parsed && typeof parsed === 'object' ? parsed : {})
-          } catch {
-            setEditConfig({})
-          }
-        }
-      } catch {
-        if (!cancelled) {
-          setEditSchema(null)
-          setEditConfig({})
-        }
-      }
-    }
-    run()
-    return () => {
-      cancelled = true
-    }
-  }, [editingId, editForm.plugin_name])
 
   const updateMut = useMutation({
     mutationFn: ({ id, body }: { id: number; body: any }) => api.updateTarget(id, body),
@@ -142,7 +120,11 @@ export default function TargetsPage() {
               plugin_name: form.plugin_name,
                 plugin_config_json: schema ? JSON.stringify(config) : form.plugin_config_json,
             }
-            createMut.mutate(payload as any)
+              if (editingId) {
+                updateMut.mutate({ id: editingId, body: payload })
+              } else {
+                createMut.mutate(payload as any)
+              }
           }}
         >
           <label className="grid gap-1">
@@ -230,12 +212,26 @@ export default function TargetsPage() {
               />
             </label>
           )}
-          <div className="sm:col-span-2">
-            <Button type="submit" disabled={createMut.isPending}>
-              {createMut.isPending ? 'Creating...' : 'Create'}
+          <div className="sm:col-span-2 flex items-center gap-2">
+            <Button type="submit" disabled={createMut.isPending || updateMut.isPending}>
+              {editingId ? (updateMut.isPending ? 'Saving...' : 'Save') : (createMut.isPending ? 'Creating...' : 'Create')}
             </Button>
-            {createMut.error && (
-              <span className="ml-3 text-sm text-red-600">{String(createMut.error)}</span>
+            {editingId && (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setEditingId(null)
+                  setForm({ name: '', plugin_name: '', plugin_config_json: '{}' })
+                  setSchema(null)
+                  setConfig({})
+                }}
+              >
+                Cancel
+              </Button>
+            )}
+            {(createMut.error || updateMut.error) && (
+              <span className="ml-3 text-sm text-red-600">{String(createMut.error || updateMut.error)}</span>
             )}
           </div>
         </form>
@@ -261,82 +257,51 @@ export default function TargetsPage() {
             <tbody>
               {(targets ?? []).map((t: Target) => (
                 <tr key={t.id} className="border-t align-top">
-                  <td className="px-4 py-2 w-[20%]">
-                    {editingId === t.id ? (
-                      <input
-                        className="border rounded px-2 py-1 w-full"
-                        value={editForm.name}
-                        onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
-                      />
-                    ) : (
-                      t.name
-                    )}
-                  </td>
-                  <td className="px-4 py-2 w-[20%]">
-                    {editingId === t.id ? (
-                      <select
-                        className="border rounded px-2 py-1 bg-background w-full"
-                        value={editForm.plugin_name}
-                        onChange={(e) => setEditForm({ ...editForm, plugin_name: e.target.value })}
-                      >
-                        {(plugins ?? []).map((p: PluginInfo) => (
-                          <option key={p.key} value={p.key}>{p.name ?? p.key}</option>
-                        ))}
-                      </select>
-                    ) : (
-                      t.plugin_name ?? '—'
-                    )}
-                  </td>
+                  <td className="px-4 py-2 w-[20%]">{t.name}</td>
+                  <td className="px-4 py-2 w-[20%]">{t.plugin_name ?? '—'}</td>
                   <td className="px-4 py-2">—</td>
                   <td className="px-4 py-2">{new Date(t.created_at).toLocaleString()}</td>
                   <td className="px-4 py-2 text-right">
-                    {editingId === t.id ? (
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          onClick={() =>
-                            updateMut.mutate({
-                              id: t.id,
-                              body: {
-                                name: editForm.name,
-                                plugin_name: editForm.plugin_name,
-                                plugin_config_json: editSchema ? JSON.stringify(editConfig) : editForm.plugin_config_json,
-                              },
-                            })
+                    <div className="flex justify-end gap-2">
+                      <button
+                        aria-label="Edit"
+                        className="p-2 rounded hover:bg-muted"
+                        onClick={() => {
+                          setEditingId(t.id)
+                          setForm({
+                            name: t.name,
+                            plugin_name: t.plugin_name ?? '',
+                            plugin_config_json: t.plugin_config_json ?? '{}',
+                          })
+                          // Seed config immediately; effect will refine after schema loads
+                          try {
+                            const parsed = JSON.parse(t.plugin_config_json || '{}')
+                            setConfig(parsed && typeof parsed === 'object' ? parsed : {})
+                          } catch {
+                            setConfig({})
                           }
-                          disabled={updateMut.isPending}
-                        >
-                          Save
-                        </Button>
-                        <Button variant="outline" onClick={() => setEditingId(null)}>Cancel</Button>
-                      </div>
-                    ) : (
-                      <div className="flex justify-end gap-2">
-                        <button
-                          aria-label="Edit"
-                          className="p-2 rounded hover:bg-muted"
-                          onClick={async () => {
-                            setEditingId(t.id)
-                            setEditForm({
-                              name: t.name,
-                              plugin_name: t.plugin_name ?? '',
-                              plugin_config_json: t.plugin_config_json ?? '{}',
-                            })
-                          }}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
-                        <button
-                          aria-label="Delete"
-                          className="p-2 rounded hover:bg-muted"
-                          onClick={() => {
-                            const ok = window.confirm(`Delete target "${t.name}"? This cannot be undone.`)
-                            if (ok) deleteMut.mutate(t.id)
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4 text-red-600" />
-                        </button>
-                      </div>
-                    )}
+                        }}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      <Link
+                        to={`/targets/${t.id}/schedule`}
+                        aria-label="Schedule"
+                        className="p-2 rounded hover:bg-muted"
+                      >
+                        <Calendar className="h-4 w-4" />
+                      </Link>
+                      <button
+                        aria-label="Delete"
+                        className="p-2 rounded hover:bg-muted"
+                        onClick={() => {
+                          const ok = window.confirm(`Delete target \"${t.name}\"? This cannot be undone.`)
+                          if (ok) deleteMut.mutate(t.id)
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4 text-red-600" />
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

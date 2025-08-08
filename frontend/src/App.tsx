@@ -9,6 +9,7 @@ export default function App() {
           <div className="flex gap-4 text-sm">
             <Link to="/" className="hover:underline">Dashboard</Link>
             <Link to="/targets" className="hover:underline">Targets</Link>
+            {/* Jobs page can be added later; scheduling lives under a target */}
             <Link to="/runs" className="hover:underline">Runs</Link>
             <Link to="/options" className="hover:underline">Options</Link>
           </div>
