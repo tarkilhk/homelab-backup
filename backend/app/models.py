@@ -17,8 +17,9 @@ class Target(Base):
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False, index=True)
     slug = Column(String(100), nullable=False, unique=True, index=True)
-    type = Column(String(50), nullable=False, index=True)
-    config_json = Column(Text, nullable=False)  # JSON configuration
+    # Plugin-based configuration only
+    plugin_name = Column(String(100), nullable=True, index=True)
+    plugin_config_json = Column(Text, nullable=True)
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     
@@ -27,7 +28,7 @@ class Target(Base):
     
     def __repr__(self) -> str:
         """String representation of the Target model."""
-        return f"<Target(id={self.id}, name='{self.name}', slug='{self.slug}', type='{self.type}')>"
+        return f"<Target(id={self.id}, name='{self.name}', slug='{self.slug}', plugin='{self.plugin_name}')>"
 
 
 class Job(Base):

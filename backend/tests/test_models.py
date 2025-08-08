@@ -34,8 +34,8 @@ def test_target_model(db_session: Session) -> None:
     target = Target(
         name="Test Database",
         slug="test-db-target",
-        type="postgres",
-        config_json='{"host": "localhost", "port": 5432, "database": "test"}'
+        plugin_name="pihole",
+        plugin_config_json='{"base_url":"http://pihole.local","token":"abc"}',
     )
     
     db_session.add(target)
@@ -46,9 +46,12 @@ def test_target_model(db_session: Session) -> None:
     assert target.id is not None
     assert target.name == "Test Database"
     assert target.slug == "test-db-target"
-    assert target.type == "postgres"
+    # Legacy columns removed; ensure plugin fields are present
     assert target.created_at is not None
     assert target.updated_at is not None
+    # New fields present (nullable in DB, but we set them here)
+    assert target.plugin_name == "pihole"
+    assert target.plugin_config_json.startswith("{")
     
     # Test string representation
     assert "Test Database" in str(target)
@@ -60,8 +63,8 @@ def test_job_model(db_session: Session) -> None:
     target = Target(
         name="Test Database",
         slug="test-db-job",
-        type="postgres",
-        config_json='{"host": "localhost", "port": 5432, "database": "test"}'
+        plugin_name="pihole",
+        plugin_config_json='{"base_url":"http://pihole.local","token":"abc"}',
     )
     db_session.add(target)
     db_session.commit()
@@ -101,8 +104,8 @@ def test_run_model(db_session: Session) -> None:
     target = Target(
         name="Test Database",
         slug="test-db-run",
-        type="postgres",
-        config_json='{"host": "localhost", "port": 5432, "database": "test"}'
+        plugin_name="pihole",
+        plugin_config_json='{"base_url":"http://pihole.local","token":"abc"}',
     )
     db_session.add(target)
     db_session.commit()
@@ -158,8 +161,8 @@ def test_cascade_delete(db_session: Session) -> None:
     target = Target(
         name="Test Database",
         slug="test-db-cascade",
-        type="postgres",
-        config_json='{"host": "localhost", "port": 5432, "database": "test"}'
+        plugin_name="pihole",
+        plugin_config_json='{"base_url":"http://pihole.local","token":"abc"}',
     )
     db_session.add(target)
     db_session.commit()

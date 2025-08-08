@@ -3,17 +3,33 @@
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 # Target schemas
 class TargetBase(BaseModel):
-    """Base schema for Target model."""
-    
+    """Base schema for Target model (plugin-based only)."""
+
     name: str = Field(..., description="Human-readable name for the target")
-    slug: str = Field(..., description="URL-friendly identifier for the target")
-    type: str = Field(..., description="Type of backup target (e.g., 'postgres', 'mysql', 'files')")
-    config_json: str = Field(..., description="JSON configuration for the target")
+    slug: Optional[str] = Field(
+        None, description="URL-friendly identifier (auto-generated if omitted)"
+    )
+    # Plugin-first (required)
+    plugin_name: Optional[str] = Field(
+        None, description="Plugin key, e.g., 'pihole'"
+    )
+    plugin_config_json: Optional[str] = Field(
+        None, description="Plugin configuration JSON"
+    )
+
+    @model_validator(mode="after")
+    def _validate_mode(self) -> "TargetBase":
+        # Enforce plugin-based creation only
+        if not self.plugin_name:
+            raise ValueError("plugin_name is required")
+        if not self.plugin_config_json:
+            raise ValueError("plugin_config_json is required when plugin_name is provided")
+        return self
 
 
 class TargetCreate(TargetBase):
@@ -23,24 +39,34 @@ class TargetCreate(TargetBase):
 
 class TargetUpdate(BaseModel):
     """Schema for updating a Target."""
-    
-    name: Optional[str] = Field(None, description="Human-readable name for the target")
-    slug: Optional[str] = Field(None, description="URL-friendly identifier for the target")
-    type: Optional[str] = Field(None, description="Type of backup target")
-    config_json: Optional[str] = Field(None, description="JSON configuration for the target")
+
+    name: Optional[str] = Field(
+        None, description="Human-readable name for the target"
+    )
+    slug: Optional[str] = Field(
+        None, description="URL-friendly identifier for the target"
+    )
+    plugin_name: Optional[str] = Field(
+        None, description="Plugin key, e.g., 'pihole'"
+    )
+    plugin_config_json: Optional[str] = Field(
+        None, description="Plugin configuration JSON"
+    )
 
 
 class Target(BaseModel):
-    """Schema for Target responses."""
-    
+    """Schema for Target responses (no legacy fields)."""
+
     id: int = Field(..., description="Unique identifier")
     name: str
     slug: str
-    type: str
-    config_json: str
+    plugin_name: Optional[str] = None
+    plugin_config_json: Optional[str] = None
     created_at: datetime = Field(..., description="Creation timestamp")
-    updated_at: datetime = Field(..., description="Last update timestamp")
-    
+    updated_at: datetime = Field(
+        ..., description="Last update timestamp"
+    )
+
     model_config = ConfigDict(from_attributes=True)
 
 

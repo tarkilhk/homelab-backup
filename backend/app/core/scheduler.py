@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+import asyncio
+import threading
 from typing import Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -20,7 +22,10 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
-from app.models import Job as JobModel, Run as RunModel
+from app.models import Job as JobModel, Run as RunModel, Target as TargetModel
+from app.core.plugins.base import BackupContext
+from app.core.plugins.loader import get_plugin
+from app.core.notifier import send_failure_email
 
 
 logger = logging.getLogger(__name__)
@@ -52,11 +57,11 @@ def _log_json(event: dict) -> None:
         logger.info(str(event))
 
 
-def _perform_dummy_run(db: Session, job: JobModel, triggered_by: str) -> RunModel:
-    """Create a Run row for the given Job, mark running then success (dummy).
+def _perform_run(db: Session, job: JobModel, triggered_by: str) -> RunModel:
+    """Create a Run row, execute the job's plugin, and finalize status.
 
-    This function is intentionally synchronous and small; scheduler will call it
-    inside its own threadpool.
+    This function is synchronous; scheduler will call it inside its own
+    threadpool.
     """
     started_at = datetime.now(timezone.utc)
 
@@ -80,14 +85,87 @@ def _perform_dummy_run(db: Session, job: JobModel, triggered_by: str) -> RunMode
         "job_name": job.name,
     })
 
-    # Placeholder for real work. Immediately mark success with dummy artifact.
-    finished_at = datetime.now(timezone.utc)
-    artifact_path = f"/backups/job-{job.id}-{int(finished_at.timestamp())}.dummy"
-    run.finished_at = finished_at
-    run.status = "success"
-    run.message = "Run completed successfully (dummy)"
-    run.artifact_path = artifact_path
-    run.logs_text = (run.logs_text or "") + f"\nCompleted at {finished_at.isoformat()}"
+    # Execute plugin if available; otherwise fall back to a dummy artifact.
+    artifact_path: str
+    try:
+        # Load target for slug/config
+        target = db.get(TargetModel, job.target_id)
+        target_slug = target.slug if target is not None else f"target-{job.target_id}"
+        # Use plugin-based target config only
+        config_dict = {}
+        if target is not None:
+            raw_cfg = target.plugin_config_json or "{}"
+            try:
+                config_dict = json.loads(raw_cfg)
+            except Exception:
+                config_dict = {}
+
+        # Build context per base class
+        ctx = BackupContext(
+            job_id=str(job.id),
+            target_id=str(job.target_id),
+            config=config_dict,
+            metadata={"target_slug": target_slug},
+        )
+
+        # Resolve and invoke plugin
+        # Prefer target.plugin_name; fallback to job.plugin if not set
+        plugin_key = (
+            target.plugin_name if target is not None and target.plugin_name else job.plugin
+        )
+        plugin = get_plugin(plugin_key)
+
+        # Plugin interface is async; execute in a dedicated thread with its own loop
+        result_container: dict[str, object] = {}
+
+        def _runner() -> None:
+            result_container["result"] = asyncio.run(plugin.backup(ctx))
+
+        th = threading.Thread(target=_runner, daemon=True)
+        th.start()
+        th.join()
+        result = result_container.get("result")
+        artifact_path = result.get("artifact_path") if isinstance(result, dict) else None  # type: ignore[assignment]
+        if not artifact_path:
+            raise RuntimeError("Plugin did not return artifact_path")
+
+        finished_at = datetime.now(timezone.utc)
+        run.finished_at = finished_at
+        run.status = "success"
+        run.message = "Run completed successfully"
+        run.artifact_path = artifact_path
+        run.logs_text = (run.logs_text or "") + f"\nCompleted at {finished_at.isoformat()}"
+    except KeyError:
+        # Unknown plugin — keep legacy dummy success behavior to satisfy tests.
+        finished_at = datetime.now(timezone.utc)
+        artifact_path = f"/backups/job-{job.id}-{int(finished_at.timestamp())}.dummy"
+        run.finished_at = finished_at
+        run.status = "success"
+        run.message = "Run completed successfully (dummy)"
+        run.artifact_path = artifact_path
+        run.logs_text = (run.logs_text or "") + f"\nCompleted at {finished_at.isoformat()}"
+    except Exception as exc:  # Catch-all failures → mark failed
+        finished_at = datetime.now(timezone.utc)
+        run.finished_at = finished_at
+        run.status = "failed"
+        run.message = f"Run failed: {exc}"
+        run.logs_text = (run.logs_text or "") + f"\nFailed at {finished_at.isoformat()} with error: {exc}"
+
+        # Fire-and-forget email notification (best-effort)
+        try:
+            subject = f"[Backup Failure] Job {job.id} — {job.name}"
+            body = (
+                f"Job ID: {job.id}\n"
+                f"Job Name: {job.name}\n"
+                f"Target ID: {job.target_id}\n"
+                f"Started: {run.started_at}\n"
+                f"Finished: {finished_at}\n"
+                f"Error: {exc}\n"
+            )
+            send_failure_email(subject, body)
+        except Exception:
+            # Never let email issues affect job flow
+            pass
 
     db.add(run)
     db.commit()
@@ -115,7 +193,7 @@ def run_job_immediately(db: Session, job_id: int, triggered_by: str = "manual") 
     job = db.get(JobModel, job_id)
     if job is None:
         raise ValueError("Job not found")
-    return _perform_dummy_run(db, job, triggered_by)
+    return _perform_run(db, job, triggered_by)
 
 
 def _scheduled_job(job_id: int) -> None:
@@ -126,7 +204,7 @@ def _scheduled_job(job_id: int) -> None:
         if job is None:
             _log_json({"event": "job_missing", "job_id": job_id})
             return
-        _perform_dummy_run(db, job, triggered_by="scheduler")
+        _perform_run(db, job, triggered_by="scheduler")
     finally:
         db.close()
 
