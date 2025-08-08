@@ -42,7 +42,6 @@ describe('TargetsPage plugin mode', () => {
 
     fireEvent.change(await screen.findByLabelText('Plugin'), { target: { value: 'pihole' } })
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Pi-hole' } })
-    fireEvent.change(screen.getByLabelText('Slug'), { target: { value: 'pihole' } })
     fireEvent.change(screen.getByLabelText('Plugin Config JSON'), { target: { value: '{"foo":"bar"}' } })
     fireEvent.submit(screen.getByText('Create').closest('form')!)
     await waitFor(() => expect(fetch).toHaveBeenCalled())

@@ -32,8 +32,6 @@ export type Job = {
   name: string
   schedule_cron: string
   enabled: string
-  plugin: string
-  plugin_version: string
   created_at: string
   updated_at: string
 }
@@ -43,8 +41,6 @@ export type JobCreate = {
   name: string
   schedule_cron: string
   enabled?: string
-  plugin: string
-  plugin_version: string
 }
 
 export type JobUpdate = Partial<{
@@ -52,8 +48,6 @@ export type JobUpdate = Partial<{
   name: string
   schedule_cron: string
   enabled: string
-  plugin: string
-  plugin_version: string
 }>
 
 const API_BASE = '/api/v1'

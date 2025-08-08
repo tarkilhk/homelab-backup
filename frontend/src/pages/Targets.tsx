@@ -285,8 +285,8 @@ export default function TargetsPage() {
                         <Pencil className="h-4 w-4" />
                       </button>
                       <Link
-                        to={`/targets/${t.id}/schedule`}
-                        aria-label="Schedule"
+                        to={`/targets/${t.id}/jobs`}
+                        aria-label="Jobs"
                         className="p-2 rounded hover:bg-muted"
                       >
                         <Calendar className="h-4 w-4" />
