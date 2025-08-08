@@ -41,8 +41,6 @@ class Job(Base):
     name = Column(String(255), nullable=False, index=True)
     schedule_cron = Column(String(100), nullable=False)  # Cron expression
     enabled = Column(String(10), nullable=False, default="true")  # "true"/"false" string
-    plugin = Column(String(100), nullable=False, index=True)
-    plugin_version = Column(String(50), nullable=False)
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     

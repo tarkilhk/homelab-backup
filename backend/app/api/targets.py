@@ -44,20 +44,36 @@ def create_target(payload: TargetCreate, db: Session = Depends(get_session)) -> 
         schema_path = get_plugin_schema_path(payload.plugin_name)
         logger.debug("plugin schema path resolved | plugin=%s path=%s", payload.plugin_name, schema_path)
         if schema_path:
-            try:
-                import jsonschema  # type: ignore
-            except Exception as exc:  # pragma: no cover - import error handling
-                logger.exception("jsonschema import failed")
-                raise HTTPException(status_code=500, detail=f"jsonschema missing: {exc}")
             with open(schema_path, "r", encoding="utf-8") as f:
                 schema = json.load(f)
-            try:
-                logger.debug("validating plugin_config_json against schema")
+            # Prefer jsonschema if available; otherwise, do a minimal fallback validation
+            try:  # pragma: no cover - simple import
+                import jsonschema  # type: ignore
+                logger.debug("validating plugin_config_json against schema via jsonschema")
                 jsonschema.validate(instance=json.loads(payload.plugin_config_json), schema=schema)  # type: ignore
                 logger.debug("plugin_config_json validation OK")
+            except ModuleNotFoundError:
+                logger.warning("jsonschema not installed; performing minimal required-field validation only")
+                try:
+                    instance = json.loads(payload.plugin_config_json)
+                except Exception as exc:  # malformed JSON
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"Invalid plugin_config_json: {exc}",
+                    )
+                required = schema.get("required", []) if isinstance(schema, dict) else []
+                missing = [k for k in required if k not in instance]
+                if missing:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"Invalid plugin_config_json: missing required {missing}",
+                    )
             except Exception as exc:
                 logger.warning("plugin_config_json validation failed: %s", exc)
-                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=f"Invalid plugin_config_json: {exc}")
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"Invalid plugin_config_json: {exc}",
+                )
 
     # Generate a slug if not provided
     def _slugify(value: str) -> str:

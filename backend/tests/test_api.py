@@ -176,8 +176,6 @@ def test_jobs_crud_and_run_now(client: TestClient) -> None:
         "name": "Daily Backup",
         "schedule_cron": "0 2 * * *",
         "enabled": "true",
-        "plugin": "dummy",
-        "plugin_version": "1.0.0",
     }
     r = client.post("/api/v1/jobs/", json=job_payload)
     assert r.status_code == 201, r.text
@@ -246,8 +244,6 @@ def test_metrics_endpoint_counts(client: TestClient, db_session_override: Sessio
             "name": "Job A",
             "schedule_cron": "0 2 * * *",
             "enabled": "true",
-            "plugin": "dummy",
-            "plugin_version": "1.0.0",
         },
     )
     assert r.status_code == 201
@@ -294,8 +290,6 @@ def test_failure_triggers_email_notifier(client: TestClient, monkeypatch: pytest
             "name": "Will Fail",
             "schedule_cron": "0 3 * * *",
             "enabled": "true",
-            "plugin": "anything",
-            "plugin_version": "1.0.0",
         },
     )
     assert r.status_code == 201

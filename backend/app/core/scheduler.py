@@ -108,11 +108,11 @@ def _perform_run(db: Session, job: JobModel, triggered_by: str) -> RunModel:
             metadata={"target_slug": target_slug},
         )
 
-        # Resolve and invoke plugin
-        # Prefer target.plugin_name; fallback to job.plugin if not set
-        plugin_key = (
-            target.plugin_name if target is not None and target.plugin_name else job.plugin
-        )
+        # Resolve and invoke plugin strictly from target (jobs no longer carry plugin)
+        plugin_key = target.plugin_name if target is not None and target.plugin_name else None
+        if not plugin_key:
+            # No plugin configured on target -> trigger legacy dummy branch below
+            raise KeyError("missing plugin on target")
         plugin = get_plugin(plugin_key)
 
         # Plugin interface is async; execute in a dedicated thread with its own loop

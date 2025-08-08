@@ -76,8 +76,6 @@ def test_job_model(db_session: Session) -> None:
         name="Daily Backup",
         schedule_cron="0 2 * * *",
         enabled="true",
-        plugin="postgres_backup",
-        plugin_version="1.0.0"
     )
     
     db_session.add(job)
@@ -90,8 +88,8 @@ def test_job_model(db_session: Session) -> None:
     assert job.name == "Daily Backup"
     assert job.schedule_cron == "0 2 * * *"
     assert job.enabled == "true"
-    assert job.plugin == "postgres_backup"
-    assert job.plugin_version == "1.0.0"
+    # plugin removed from Job; plugin belongs to Target
+    # plugin_version removed
     
     # Test relationship
     assert job.target == target
@@ -116,8 +114,6 @@ def test_run_model(db_session: Session) -> None:
         name="Daily Backup",
         schedule_cron="0 2 * * *",
         enabled="true",
-        plugin="postgres_backup",
-        plugin_version="1.0.0"
     )
     db_session.add(job)
     db_session.commit()
@@ -173,8 +169,6 @@ def test_cascade_delete(db_session: Session) -> None:
         name="Daily Backup",
         schedule_cron="0 2 * * *",
         enabled="true",
-        plugin="postgres_backup",
-        plugin_version="1.0.0"
     )
     db_session.add(job)
     db_session.commit()

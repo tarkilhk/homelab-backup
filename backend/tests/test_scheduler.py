@@ -54,8 +54,8 @@ def _create_target(db: Session) -> Target:
     target = Target(
         name="Svc",
         slug="svc",
-        type="custom",
-        config_json="{}",
+        plugin_name="dummy",
+        plugin_config_json="{}",
     )
     db.add(target)
     db.commit()
@@ -75,8 +75,6 @@ def _create_job(
         name=name,
         schedule_cron=cron,
         enabled=enabled,
-        plugin="dummy",
-        plugin_version="1.0.0",
     )
     db.add(job)
     db.commit()
