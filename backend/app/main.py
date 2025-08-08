@@ -19,6 +19,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup
     setup_logging()
     logger = logging.getLogger(__name__)
+    logger.info("App startup | configuring DB and scheduler")
     init_db()
     bootstrap_db()
     
