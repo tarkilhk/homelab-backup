@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.db import get_session
+from app.core.scheduler import run_job_immediately
 from app.models import Job as JobModel, Run as RunModel
 from app.schemas import Job, JobCreate, JobUpdate, Run
 
@@ -76,26 +77,11 @@ def delete_job(job_id: int, db: Session = Depends(get_session)) -> None:
 
 @router.post("/{job_id}/run", response_model=Run)
 def run_job_now(job_id: int, db: Session = Depends(get_session)) -> RunModel:
-    """Trigger a manual run for a job.
-
-    For now: enqueue a dummy task and immediately mark as success.
-    """
+    """Trigger a manual run for a job using the same logic as the scheduler."""
     job = db.get(JobModel, job_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
-    # Create a run with status 'success' immediately (dummy behavior)
-    run = RunModel(
-        job_id=job.id,
-        started_at=datetime.now(timezone.utc),
-        finished_at=datetime.now(timezone.utc),
-        status="success",
-        message="Manual run executed (dummy)",
-        logs_text="Run triggered manually; dummy execution marked as success.",
-    )
-    db.add(run)
-    db.commit()
-    db.refresh(run)
-    return run
+    return run_job_immediately(db, job_id=job.id, triggered_by="manual_api")
 
 

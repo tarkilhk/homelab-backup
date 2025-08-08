@@ -7,8 +7,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 
-from app.core.db import init_db, bootstrap_db
-from app.core.scheduler import get_scheduler
+from app.core.db import init_db, bootstrap_db, SessionLocal
+from app.core.scheduler import get_scheduler, schedule_jobs_on_startup
 
 
 @asynccontextmanager
@@ -19,8 +19,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     bootstrap_db()
     
     scheduler = get_scheduler()
+    # Schedule enabled jobs from DB before starting scheduler
+    db = SessionLocal()
+    try:
+        schedule_jobs_on_startup(scheduler, db)
+    finally:
+        db.close()
     scheduler.start()
-    print("APScheduler started with Asia/Singapore timezone")
+    print("APScheduler started with Asia/Singapore timezone and jobs scheduled")
     
     yield
     
