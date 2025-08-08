@@ -7,6 +7,7 @@ export default function RunsPage() {
   const [startDate, setStartDate] = useState<string>('')
   const [endDate, setEndDate] = useState<string>('')
   const [targetId, setTargetId] = useState<number | ''>('')
+  const [detailsRun, setDetailsRun] = useState<RunWithJob | null>(null)
 
   const runsQueryKey = useMemo(
     () => ['runs', { status, startDate, endDate, targetId }],
@@ -31,7 +32,11 @@ export default function RunsPage() {
     return map
   }, [targets])
 
-  const runs = useMemo(() => (data ?? []).slice(-20).reverse(), [data])
+  const runs = useMemo(() => {
+    const items = [...(data ?? [])]
+    items.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())
+    return items.slice(0, 20)
+  }, [data])
 
 
   // We now use simple date-only inputs. Normalization to start/end of day
@@ -111,15 +116,16 @@ export default function RunsPage() {
               <th className="px-4 py-2">Started</th>
               <th className="px-4 py-2">Finished</th>
               <th className="px-4 py-2">Artifact</th>
+              <th className="px-4 py-2">Details</th>
             </tr>
           </thead>
           <tbody>
             {isLoading ? (
-              <tr><td className="px-4 py-3" colSpan={7}>Loading...</td></tr>
+              <tr><td className="px-4 py-3" colSpan={8}>Loading...</td></tr>
             ) : error ? (
-              <tr><td className="px-4 py-3 text-red-600" colSpan={7}>{String(error)}</td></tr>
+              <tr><td className="px-4 py-3 text-red-600" colSpan={8}>{String(error)}</td></tr>
             ) : runs.length === 0 ? (
-              <tr><td className="px-4 py-3" colSpan={7}>No runs yet.</td></tr>
+              <tr><td className="px-4 py-3" colSpan={8}>No runs yet.</td></tr>
             ) : (
               runs.map((r: RunWithJob) => (
                 <tr key={r.id} className="border-t">
@@ -140,12 +146,51 @@ export default function RunsPage() {
                       <a className="hover:underline text-[hsl(var(--accent))]" href={r.artifact_path} target="_blank" rel="noreferrer">Artifact</a>
                     ) : '—'}
                   </td>
+                  <td className="px-4 py-2">
+                    {r.status === 'failed' || r.message || r.logs_text ? (
+                      <button
+                        className="text-xs underline text-[hsl(var(--accent))] cursor-pointer"
+                        onClick={() => setDetailsRun(r)}
+                      >
+                        View
+                      </button>
+                    ) : '—'}
+                  </td>
                 </tr>
               ))
             )}
           </tbody>
         </table>
       </section>
+
+      {detailsRun && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center" onClick={() => setDetailsRun(null)}>
+          <div className="bg-background border rounded-md shadow-xl max-w-2xl w-full mx-4" onClick={(e) => e.stopPropagation()}>
+            <div className="p-3 border-b flex items-center">
+              <div className="font-semibold">Run #{detailsRun.id} — {detailsRun.job?.name ?? `Job #${detailsRun.job_id}`}</div>
+              <button className="ml-auto text-sm cursor-pointer" onClick={() => setDetailsRun(null)}>Close</button>
+            </div>
+            <div className="p-4 space-y-3">
+              <div>
+                <div className="text-xs text-gray-600">Status</div>
+                <div>{detailsRun.status}</div>
+              </div>
+              {detailsRun.message && (
+                <div>
+                  <div className="text-xs text-gray-600">Message</div>
+                  <div className="whitespace-pre-wrap text-red-700">{detailsRun.message}</div>
+                </div>
+              )}
+              {detailsRun.logs_text && (
+                <div>
+                  <div className="text-xs text-gray-600">Logs</div>
+                  <pre className="bg-muted/40 p-3 rounded max-h-80 overflow-auto whitespace-pre-wrap">{detailsRun.logs_text}</pre>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

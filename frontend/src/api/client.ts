@@ -17,6 +17,7 @@ export type Run = {
   status: string
   message?: string | null
   artifact_path?: string | null
+  logs_text?: string | null
 }
 
 export type RunWithJob = Run & { job: Job }
