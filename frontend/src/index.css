@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+/* Map CSS variables to Tailwind v4 design tokens so utilities like border-border work */
+@theme {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-border: hsl(var(--border));
+}
+
 @layer base {
   :root {
     --background: 0 0% 100%;

@@ -23,7 +23,7 @@ function wrapper(children: React.ReactNode) {
 describe('TargetsPage', () => {
   it('renders list and create form', async () => {
     render(wrapper(<TargetsPage />))
-    expect(await screen.findByText('Targets')).toBeInTheDocument()
+    await screen.findByText('Targets')
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'N' } })
     fireEvent.change(screen.getByLabelText('Slug'), { target: { value: 'n' } })
     fireEvent.change(screen.getByLabelText('Type'), { target: { value: 't' } })
