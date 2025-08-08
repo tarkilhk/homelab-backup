@@ -11,10 +11,14 @@ import logging
 
 
 class PiHolePlugin(BackupPlugin):
-    """Pi-hole backup plugin using Teleporter export.
+    """Pi-hole backup plugin using Teleporter export (session auth).
 
-    Performs an authenticated download of the Teleporter archive (ZIP)
-    and stores it under the conventional backup directory.
+    Flow:
+    - POST {base_url}/api/auth with JSON {"password": ...} to obtain session cookie (sid)
+      and CSRF token
+    - GET {base_url}/api/teleporter with `X-CSRF-TOKEN` header and session cookie to
+      download a ZIP archive
+    - Save artifact under `/backups/<slug>/<YYYY-MM-DD>/pihole-teleporter-<ts>.zip`
     """
 
     def __init__(self, name: str, version: str = "0.1.0") -> None:
@@ -26,10 +30,12 @@ class PiHolePlugin(BackupPlugin):
         if not isinstance(config, dict):
             return False
         base_url = config.get("base_url")
-        token = config.get("token") or config.get("api_token")
+        # Accept login for UI parity, but Pi-hole v6 auth only requires password
+        login = config.get("login")
+        password = config.get("password")
         if not base_url or not isinstance(base_url, str):
             return False
-        if not token or not isinstance(token, str):
+        if not password or not isinstance(password, str):
             return False
         return True
 
@@ -56,9 +62,10 @@ class PiHolePlugin(BackupPlugin):
         # Read config
         cfg = getattr(context, "config", {}) or {}
         base_url = str(cfg.get("base_url", "")).rstrip("/")
-        token = cfg.get("token") or cfg.get("api_token")
-        if not base_url or not token:
-            raise ValueError("Pi-hole config must include base_url and token")
+        login = cfg.get("login")  # not used by v6 API, retained for UX
+        password = cfg.get("password")
+        if not base_url or not password:
+            raise ValueError("Pi-hole config must include base_url and password")
         self._logger.info(
             "pihole_backup_start | job_id=%s target_id=%s target_slug=%s base_url=%s artifact=%s",
             context.job_id,
@@ -68,28 +75,52 @@ class PiHolePlugin(BackupPlugin):
             artifact_path,
         )
 
-        # Pi-hole v6 Teleporter endpoint: GET /api/teleporter
+        # Endpoints
+        auth_url = f"{base_url}/api/auth"
         teleporter_url = f"{base_url}/api/teleporter"
-        # Primary auth (v6): X-API-Key header
-        headers_primary = {
-            "X-API-Key": str(token),
-            "Accept": "application/zip, application/octet-stream",
-        }
-        # Secondary auth retry (some setups): Authorization: Bearer <token>
-        headers_retry = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/zip, application/octet-stream",
-        }
 
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             try:
+                # 1) Authenticate (password only)
                 self._logger.info(
-                    "pihole_backup_request | job_id=%s target_id=%s url=%s auth=header:X-API-Key",
+                    "pihole_auth_request | job_id=%s target_id=%s url=%s",
+                    context.job_id,
+                    context.target_id,
+                    auth_url,
+                )
+                auth_resp = await client.post(
+                    auth_url,
+                    json={"password": str(password)},
+                    headers={"Accept": "application/json"},
+                )
+                self._logger.info(
+                    "pihole_auth_response | job_id=%s target_id=%s status=%s",
+                    context.job_id,
+                    context.target_id,
+                    auth_resp.status_code,
+                )
+                auth_resp.raise_for_status()
+                auth_data = auth_resp.json()
+                session = auth_data.get("session") or {}
+                csrf_token = session.get("csrf")
+                if not csrf_token or session.get("valid") is not True:
+                    raise RuntimeError("Pi-hole auth did not return a valid session")
+
+                # 2) Teleporter download with CSRF header and session cookie
+                self._logger.info(
+                    "pihole_backup_request | job_id=%s target_id=%s url=%s auth=session",
                     context.job_id,
                     context.target_id,
                     teleporter_url,
                 )
-                resp = await client.get(teleporter_url, headers=headers_primary)
+                resp = await client.get(
+                    teleporter_url,
+                    headers={
+                        "X-CSRF-TOKEN": str(csrf_token),
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Accept": "application/zip, application/octet-stream",
+                    },
+                )
                 self._logger.info(
                     "pihole_backup_response | job_id=%s target_id=%s status=%s bytes=%s",
                     context.job_id,
@@ -97,22 +128,6 @@ class PiHolePlugin(BackupPlugin):
                     resp.status_code,
                     len(resp.content or b""),
                 )
-                if resp.status_code == 401:
-                    # Retry with Bearer auth for instances expecting that format
-                    self._logger.info(
-                        "pihole_backup_retry | job_id=%s target_id=%s url=%s auth=Authorization:Bearer",
-                        context.job_id,
-                        context.target_id,
-                        teleporter_url,
-                    )
-                    resp = await client.get(teleporter_url, headers=headers_retry)
-                    self._logger.info(
-                        "pihole_backup_response | job_id=%s target_id=%s status=%s bytes=%s",
-                        context.job_id,
-                        context.target_id,
-                        resp.status_code,
-                        len(resp.content or b""),
-                    )
                 resp.raise_for_status()
                 content = resp.content
             except httpx.HTTPError as exc:

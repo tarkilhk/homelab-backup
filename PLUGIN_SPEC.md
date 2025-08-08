@@ -32,10 +32,13 @@ Each plugin ships a `schema.json` used by the UI to render forms.
 Minimal example:
 ```json
 { "type": "object", "required": ["base_url","token"], "properties": {
-  "base_url": {"type":"string","format":"uri"},
-  "token": {"type":"string"}
+  "base_url": {"type":"string","format":"uri", "default": "http://service.local"},
+  "token": {"type":"string", "default": "your token"}
 }}
 ```
+
+Notes:
+- The optional `default` on each property is used by the UI as an input placeholder (hint). It is not automatically saved unless the user types a value. Keep secrets out of defaults; use descriptive hints like "your token".
 
 ## Conventions
 - Write to: `/backups/<targetSlug>/<YYYY-MM-DD>/...`.
