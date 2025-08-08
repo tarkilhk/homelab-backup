@@ -1,10 +1,11 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
-  "required": ["base_url", "token"],
+  "required": ["base_url", "password"],
   "properties": {
-    "base_url": {"type": "string", "format": "uri"},
-    "token": {"type": "string"}
+    "base_url": {"type": "string", "format": "uri", "default": "http://pihole.local"},
+    "login": {"type": "string", "description": "login", "default": "admin"},
+    "password": {"type": "string", "default": "your password"}
   },
   "additionalProperties": false
 }
