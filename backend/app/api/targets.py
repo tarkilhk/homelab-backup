@@ -172,14 +172,14 @@ async def test_target_connectivity(target_id: int, db: Session = Depends(get_ses
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Target has no plugin configured")
 
     try:
-        cfg = json.loads(target.plugin_config_json or "{}")
-    except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid plugin_config_json: {exc}")
-
-    try:
         plugin = get_plugin(target.plugin_name)
     except KeyError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown plugin for target")
+
+    try:
+        cfg = json.loads(target.plugin_config_json or "{}")
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid plugin_config_json: {exc}")
 
     try:
         ok = await plugin.test(cfg)
