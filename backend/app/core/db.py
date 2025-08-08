@@ -2,7 +2,7 @@
 
 from typing import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker, declarative_base
 
 # SQLite database URL
@@ -32,12 +32,27 @@ def get_session() -> Generator[Session, None, None]:
 
 
 def init_db() -> None:
-    """Initialize database tables."""
+    """Initialize database tables.
+
+    Safety principle: NEVER drop tables automatically in application code.
+    This function only attempts to create missing tables.
+    """
     # Import models to ensure they are registered with Base
     from app.models import Target, Job, Run  # noqa: F401
-    
+
+    # Only create missing tables; do not drop/alter existing schema here
     Base.metadata.create_all(bind=engine)
-    print("Database tables created successfully")
+    print("Database tables ensured (create if missing)")
+
+
+def drop_all_tables() -> None:  # pragma: no cover - utility, run manually only
+    """Dangerous helper to drop all tables.
+
+    Not called anywhere by the application. Use only during development or
+    via explicit operator action.
+    """
+    Base.metadata.drop_all(bind=engine)
+    print("All database tables dropped.")
 
 
 def bootstrap_db() -> None:

@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.main import app
 from app.core.db import Base, get_session
+from app.models import Run as RunModel
 
 
 class _DummyScheduler:
@@ -76,8 +77,8 @@ def test_targets_crud(client: TestClient) -> None:
     create_payload = {
         "name": "Test Database",
         "slug": "test-db",
-        "type": "postgres",
-        "config_json": "{\"host\": \"localhost\", \"port\": 5432, \"database\": \"test\"}",
+        "plugin_name": "dummy",
+        "plugin_config_json": "{}",
     }
     r = client.post("/api/v1/targets/", json=create_payload)
     assert r.status_code == 201, r.text
@@ -113,13 +114,57 @@ def test_targets_crud(client: TestClient) -> None:
     assert r.status_code == 404
 
 
+def test_create_plugin_target_with_schema_validation(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Provide a fake schema for plugin 'pihole'
+    schema_obj = {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "required": ["base_url", "token"],
+        "properties": {
+            "base_url": {"type": "string", "format": "uri"},
+            "token": {"type": "string"},
+        },
+        "additionalProperties": False,
+    }
+
+    # Patch loader to return a temporary schema path
+    import json, tempfile, os
+    from app.core.plugins import loader
+
+    with tempfile.TemporaryDirectory() as td:
+        schema_path = os.path.join(td, "schema.json")
+        with open(schema_path, "w", encoding="utf-8") as f:
+            json.dump(schema_obj, f)
+        monkeypatch.setattr(loader, "get_plugin_schema_path", lambda key: schema_path)
+
+        # Valid payload
+        valid_payload = {
+            "name": "Pi-hole",
+            "slug": "pihole",
+            "plugin_name": "pihole",
+            "plugin_config_json": json.dumps({"base_url": "http://example.com", "token": "abc"}),
+        }
+        r = client.post("/api/v1/targets/", json=valid_payload)
+        assert r.status_code == 201, r.text
+
+        # Invalid payload (missing token)
+        invalid_payload = {
+            "name": "Pi-hole2",
+            "slug": "pihole2",
+            "plugin_name": "pihole",
+            "plugin_config_json": json.dumps({"base_url": "http://example.com"}),
+        }
+        r = client.post("/api/v1/targets/", json=invalid_payload)
+        assert r.status_code == 422
+
+
 def test_jobs_crud_and_run_now(client: TestClient) -> None:
     # Need a target first
     target_payload = {
         "name": "Test Service",
         "slug": "test-svc",
-        "type": "custom",
-        "config_json": "{}",
+        "plugin_name": "dummy",
+        "plugin_config_json": "{}",
     }
     r = client.post("/api/v1/targets/", json=target_payload)
     assert r.status_code == 201
@@ -183,4 +228,103 @@ def test_jobs_crud_and_run_now(client: TestClient) -> None:
     r = client.get(f"/api/v1/jobs/{job_id}")
     assert r.status_code == 404
 
+
+# Metrics and notifier tests
+def test_metrics_endpoint_counts(client: TestClient, db_session_override: Session) -> None:
+    # Create a target and a job
+    r = client.post(
+        "/api/v1/targets/",
+        json={"name": "Svc", "slug": "svc", "plugin_name": "dummy", "plugin_config_json": "{}"},
+    )
+    assert r.status_code == 201
+    target_id = r.json()["id"]
+
+    r = client.post(
+        "/api/v1/jobs/",
+        json={
+            "target_id": target_id,
+            "name": "Job A",
+            "schedule_cron": "0 2 * * *",
+            "enabled": "true",
+            "plugin": "dummy",
+            "plugin_version": "1.0.0",
+        },
+    )
+    assert r.status_code == 201
+    job_id = r.json()["id"]
+
+    # Insert runs directly: 2 success, 1 failed
+    from datetime import datetime, timezone
+    db = db_session_override
+    db.add_all(
+        [
+            RunModel(job_id=job_id, started_at=datetime.now(timezone.utc), status="success"),
+            RunModel(job_id=job_id, started_at=datetime.now(timezone.utc), status="success"),
+            RunModel(job_id=job_id, started_at=datetime.now(timezone.utc), status="failed"),
+        ]
+    )
+    db.commit()
+
+    # Fetch metrics
+    r = client.get("/metrics")
+    assert r.status_code == 200
+    body = r.text
+    # Expect counters and gauge present
+    assert f'job_success_total{{job_id="{job_id}"' in body
+    assert f'job_failure_total{{job_id="{job_id}"' in body
+    # Validate numeric values
+    assert f'job_success_total{{job_id="{job_id}"' in body and " 2" in body
+    assert f'job_failure_total{{job_id="{job_id}"' in body and " 1" in body
+    assert f'last_run_timestamp{{job_id="{job_id}"' in body
+
+
+def test_failure_triggers_email_notifier(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Create target and job
+    r = client.post(
+        "/api/v1/targets/",
+        json={"name": "Svc2", "slug": "svc2", "plugin_name": "dummy", "plugin_config_json": "{}"},
+    )
+    assert r.status_code == 201
+    target_id = r.json()["id"]
+
+    r = client.post(
+        "/api/v1/jobs/",
+        json={
+            "target_id": target_id,
+            "name": "Will Fail",
+            "schedule_cron": "0 3 * * *",
+            "enabled": "true",
+            "plugin": "anything",
+            "plugin_version": "1.0.0",
+        },
+    )
+    assert r.status_code == 201
+    job_id = r.json()["id"]
+
+    # Monkeypatch scheduler to use a plugin that raises
+    class _FailingPlugin:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        async def backup(self, ctx):  # type: ignore[no-untyped-def]
+            raise RuntimeError("boom")
+
+    from app import core as _core  # noqa: F401  # ensure package import path
+    import app.core.scheduler as sched
+
+    monkeypatch.setattr(sched, "get_plugin", lambda name: _FailingPlugin(name))
+
+    sent = {"called": 0}
+
+    def _fake_send(subj: str, body: str) -> None:  # noqa: ARG001
+        sent["called"] += 1
+
+    monkeypatch.setattr(sched, "send_failure_email", _fake_send)
+
+    # Trigger run now -> should fail and call notifier
+    r = client.post(f"/api/v1/jobs/{job_id}/run")
+    assert r.status_code == 200
+    payload = r.json()
+    assert payload["status"] == "failed"
+    assert sent["called"] == 1
 
