@@ -16,6 +16,14 @@
     --muted: 210 40% 96.1%;
     --muted-foreground: 215.4 16.3% 46.9%;
     --border: 214.3 31.8% 91.4%;
+    --accent: 262 83% 58%;
+  }
+  [data-theme="dark"] {
+    --background: 224 71% 4%;
+    --foreground: 213 31% 91%;
+    --muted: 223 47% 11%;
+    --muted-foreground: 215.4 16.3% 56.9%;
+    --border: 216 34% 17%;
   }
   * { @apply border-border; }
   html, body, #root { height: 100%; }
@@ -26,4 +34,10 @@
   .container-app {
     @apply max-w-6xl mx-auto px-4 py-6;
   }
+  .btn-primary {
+    background-image: linear-gradient(135deg, hsl(var(--accent)) 0%, hsl(var(--accent) / 0.7) 100%);
+    color: white;
+  }
+  .text-accent { color: hsl(var(--accent)); }
+  .ring-accent { --tw-ring-color: hsl(var(--accent)); }
 }
