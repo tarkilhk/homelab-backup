@@ -29,8 +29,6 @@ def create_job(payload: JobCreate, db: Session = Depends(get_session)) -> JobMod
         name=payload.name,
         schedule_cron=payload.schedule_cron,
         enabled=payload.enabled,
-        plugin=payload.plugin,
-        plugin_version=payload.plugin_version,
     )
     db.add(job)
     db.commit()

@@ -78,8 +78,6 @@ class JobBase(BaseModel):
     name: str = Field(..., description="Human-readable name for the job")
     schedule_cron: str = Field(..., description="Cron expression for job scheduling")
     enabled: str = Field(default="true", description="Whether the job is enabled ('true'/'false')")
-    plugin: str = Field(..., description="Plugin name to use for this job")
-    plugin_version: str = Field(..., description="Version of the plugin to use")
 
 
 class JobCreate(JobBase):
@@ -94,8 +92,6 @@ class JobUpdate(BaseModel):
     name: Optional[str] = Field(None, description="Human-readable name for the job")
     schedule_cron: Optional[str] = Field(None, description="Cron expression for job scheduling")
     enabled: Optional[str] = Field(None, description="Whether the job is enabled")
-    plugin: Optional[str] = Field(None, description="Plugin name to use for this job")
-    plugin_version: Optional[str] = Field(None, description="Version of the plugin to use")
 
 
 class Job(JobBase):

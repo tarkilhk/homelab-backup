@@ -15,7 +15,7 @@
 
 ## DB (SQLite)
 - `targets(id, name, slug, type, config_json, created_at, updated_at)`
-- `jobs(id, target_id, name, schedule_cron, enabled, plugin, plugin_version, created_at, updated_at)`
+- `jobs(id, target_id, name, schedule_cron, enabled, plugin, created_at, updated_at)`
 - `runs(id, job_id, started_at, finished_at, status, message, artifact_path, artifact_bytes, sha256, logs_text)`
 
 ## Security
