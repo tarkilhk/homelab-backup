@@ -1,0 +1,24 @@
+rules:
+  - match: "backend/**/*.py"
+    style: "pep8"
+    enforce_type_hints: true
+    max_line_length: 100
+    no_wildcard_imports: true
+    docstrings_required: true
+    prefer_async: true
+  - match: "backend/tests/**/*.py"
+    style: "pytest"
+    require_test_names: true
+tasks:
+  - description: "Add backup plugin"
+    steps:
+      - Create `backend/app/plugins/<name>/plugin.py`
+      - Add `schema.json`
+      - Export in loader registry
+      - Write unit tests with mocks
+  - description: "Add API endpoint"
+    steps:
+      - Define Pydantic schema in `schemas/`
+      - Implement router in `api/`
+      - Service logic in `services/`
+      - Tests in `tests/api/`

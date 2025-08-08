@@ -1,0 +1,17 @@
+rules:
+  - match: "frontend/src/**/*.tsx"
+    style: "prettier"
+    enforce_strict_mode: true
+    react_hooks: enforce
+    prefer_function_components: true
+  - match: "frontend/src/**/*.ts"
+    style: "typescript-strict"
+    enforce_type_hints: true
+    max_line_length: 100
+tasks:
+  - description: "Add page"
+    steps:
+      - Create route in `src/pages/`
+      - Fetch via `src/api/client`
+      - Use shadcn/ui for form/table
+      - Add vitest test
