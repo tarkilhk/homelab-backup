@@ -26,6 +26,36 @@ export type PluginInfo = {
   version?: string
 }
 
+export type Job = {
+  id: number
+  target_id: number
+  name: string
+  schedule_cron: string
+  enabled: string
+  plugin: string
+  plugin_version: string
+  created_at: string
+  updated_at: string
+}
+
+export type JobCreate = {
+  target_id: number
+  name: string
+  schedule_cron: string
+  enabled?: string
+  plugin: string
+  plugin_version: string
+}
+
+export type JobUpdate = Partial<{
+  target_id: number
+  name: string
+  schedule_cron: string
+  enabled: string
+  plugin: string
+  plugin_version: string
+}>
+
 const API_BASE = '/api/v1'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -55,6 +85,7 @@ export type TargetUpdate = Partial<{
 
 export const api = {
   listTargets: () => request<Target[]>('/targets/'),
+  getTarget: (id: number) => request<Target>(`/targets/${id}`),
   createTarget: (payload: TargetCreatePlugin) =>
     request<Target>('/targets/', { method: 'POST', body: JSON.stringify(payload) }),
   updateTarget: (id: number, payload: TargetUpdate) =>
@@ -63,6 +94,13 @@ export const api = {
   listRuns: () => request<Run[]>('/runs/'),
   listPlugins: () => request<PluginInfo[]>('/plugins/'),
   getPluginSchema: (key: string) => request<Record<string, unknown>>(`/plugins/${key}/schema`),
+  // Jobs
+  listJobs: () => request<Job[]>('/jobs/'),
+  createJob: (payload: JobCreate) => request<Job>('/jobs/', { method: 'POST', body: JSON.stringify(payload) }),
+  getJob: (id: number) => request<Job>(`/jobs/${id}`),
+  updateJob: (id: number, payload: JobUpdate) => request<Job>(`/jobs/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteJob: (id: number) => request<void>(`/jobs/${id}`, { method: 'DELETE' }),
+  runJobNow: (id: number) => request<Run>(`/jobs/${id}/run`, { method: 'POST' }),
 }
 
 
