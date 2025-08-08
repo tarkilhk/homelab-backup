@@ -19,3 +19,6 @@ frontend/
 4. Jobs page: cron picker (daily/weekly/custom) + Run Now.
 5. Runs page: history with status, logs, artifact links.
 6. Basic toasts/errors, loading states.
+
+## Routes
+- `/targets/:id/schedule` — Create a scheduled Job for a specific Target. Form captures: job name, cron, plugin, plugin version, enabled. Submits to `POST /api/v1/jobs/`.
