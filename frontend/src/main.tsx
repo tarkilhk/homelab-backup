@@ -9,7 +9,7 @@ import { initThemeFromStorage } from './lib/theme'
 import DashboardPage from './pages/Dashboard.tsx'
 import TargetsPage from './pages/Targets.tsx'
 import RunsPage from './pages/Runs.tsx'
-import TargetSchedulePage from './pages/TargetSchedule.tsx'
+import JobsPage from './pages/Jobs.tsx'
 
 initThemeFromStorage()
 
@@ -20,7 +20,8 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <DashboardPage /> },
       { path: 'targets', element: <TargetsPage /> },
-      { path: 'targets/:id/schedule', element: <TargetSchedulePage /> },
+      { path: 'targets/:id/jobs', element: <JobsPage /> },
+      { path: 'jobs', element: <JobsPage /> },
       { path: 'runs', element: <RunsPage /> },
       { path: 'options', element: <OptionsPage /> },
     ],
