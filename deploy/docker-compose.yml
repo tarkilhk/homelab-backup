@@ -6,9 +6,11 @@ services:
       - .env
     environment:
       - TZ=${TZ}
-      - DB_FOLDER=./db
+      - DB_FOLDER=/app/db
+      - LOG_LEVEL=DEBUG
     volumes:
       - ${BACKUP_ROOT_HOST}:/backups
+      - /home/dev/projects/homelab-backup/db:/app/db
       - /etc/localtime:/etc/localtime:ro
     ports:
       - "8080:8080"

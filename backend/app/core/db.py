@@ -22,8 +22,13 @@ DEFAULT_DB_FOLDER = "./db_default"
 logger = logging.getLogger(__name__)
 
 requested_dir = Path(os.getenv("DB_FOLDER", DEFAULT_DB_FOLDER)).expanduser()
-logger.info("DB_FOLDER env: %s | default: %s", os.getenv("DB_FOLDER"), DEFAULT_DB_FOLDER)
-logger.info("Requested DB directory: %s", requested_dir)
+logger.info(
+    "DB path init | DB_FOLDER_env=%s default_folder=%s requested_dir=%s cwd=%s",
+    os.getenv("DB_FOLDER"),
+    DEFAULT_DB_FOLDER,
+    requested_dir,
+    Path.cwd(),
+)
 
 def _ensure_dir(path: Path) -> tuple[bool, str]:
     try:
@@ -39,7 +44,7 @@ db_dir = requested_dir
 ok, reason = _ensure_dir(db_dir)
 if not ok:
     logger.warning(
-        "Cannot use DB_FOLDER '%s': %s. Falling back to '%s'",
+        "DB dir unusable | requested=%s reason=%s -> falling back to default=%s",
         db_dir,
         reason,
         DEFAULT_DB_FOLDER,
@@ -49,7 +54,7 @@ if not ok:
     if not ok2:
         # As a last resort, use current working directory
         logger.warning(
-            "Fallback folder '%s' also unusable: %s. Using CWD '%s'",
+            "Default folder unusable | default=%s reason=%s -> using cwd=%s",
             DEFAULT_DB_FOLDER,
             reason2,
             Path.cwd(),
@@ -57,7 +62,7 @@ if not ok:
         db_dir = Path.cwd()
         _ensure_dir(db_dir)
 
-logger.info("Using DB directory: %s", db_dir)
+logger.info("DB path resolved | using_dir=%s", db_dir)
 
 db_file = db_dir / DEFAULT_DB_FILENAME
 logger.info("DB file path: %s", db_file)
@@ -69,7 +74,7 @@ logger.info("SQLite URL: %s", SQLITE_URL)
 engine = create_engine(
     SQLITE_URL,
     connect_args={"check_same_thread": False},  # Required for SQLite
-    echo=True,  # Set to False in production
+    echo=True,  # Set to False in production (kept True for diagnosing persistence)
 )
 
 # Create session factory
@@ -98,8 +103,9 @@ def init_db() -> None:
     from app.models import Target, Job, Run  # noqa: F401
 
     # Only create missing tables; do not drop/alter existing schema here
+    logger.info("init_db: creating tables if missing")
     Base.metadata.create_all(bind=engine)
-    logger.info("Database tables ensured (create if missing)")
+    logger.info("init_db: ensured tables exist")
 
 
 def drop_all_tables() -> None:  # pragma: no cover - utility, run manually only
