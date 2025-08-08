@@ -119,10 +119,11 @@ def test_create_plugin_target_with_schema_validation(client: TestClient, monkeyp
     schema_obj = {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "type": "object",
-        "required": ["base_url", "token"],
+        "required": ["base_url", "password"],
         "properties": {
             "base_url": {"type": "string", "format": "uri"},
-            "token": {"type": "string"},
+            "login": {"type": "string"},
+            "password": {"type": "string"},
         },
         "additionalProperties": False,
     }
@@ -142,7 +143,7 @@ def test_create_plugin_target_with_schema_validation(client: TestClient, monkeyp
             "name": "Pi-hole",
             "slug": "pihole",
             "plugin_name": "pihole",
-            "plugin_config_json": json.dumps({"base_url": "http://example.com", "token": "abc"}),
+            "plugin_config_json": json.dumps({"base_url": "http://example.com", "password": "abc"}),
         }
         r = client.post("/api/v1/targets/", json=valid_payload)
         assert r.status_code == 201, r.text
