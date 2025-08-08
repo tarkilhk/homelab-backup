@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { STORAGE_KEYS, type ThemeMode, applyAccent, applyTheme } from '../lib/theme'
+import { HexColorPicker } from 'react-colorful'
 
 export default function OptionsPage() {
   const [theme, setTheme] = useState<ThemeMode>('system')
   const [accentHex, setAccentHex] = useState<string>('#7c3aed')
-  const inputRef = useRef<HTMLInputElement | null>(null)
+  const [showPicker, setShowPicker] = useState<boolean>(false)
 
   const palette = useMemo(() => (
     [
@@ -76,20 +77,18 @@ export default function OptionsPage() {
           </div>
           <button
             className="h-8 rounded-md px-3 border hover:bg-muted"
-            onClick={() => inputRef.current?.click()}
+            onClick={() => setShowPicker((v) => !v)}
           >
-            Custom…
+            {showPicker ? 'Close' : 'Custom…'}
           </button>
-          <input
-            ref={inputRef}
-            aria-label="Custom accent color"
-            type="color"
-            value={accentHex}
-            onChange={(e) => saveAccent(e.target.value)}
-            className="hidden"
-          />
           <div className="text-sm text-muted-foreground">Used for buttons and gradients</div>
         </div>
+        {showPicker && (
+          <div className="mt-4 w-full max-w-xs">
+            <HexColorPicker color={accentHex} onChange={saveAccent} />
+            <div className="mt-2 text-xs text-muted-foreground">Selected: {accentHex}</div>
+          </div>
+        )}
       </section>
     </div>
   )
