@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
+import logging
 from sqlalchemy.orm import Session
 
 from app.core.db import get_session
@@ -13,6 +14,7 @@ from app.schemas import Job, JobCreate, JobUpdate, Run
 
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("/", response_model=List[Job])
@@ -76,10 +78,18 @@ def delete_job(job_id: int, db: Session = Depends(get_session)) -> None:
 @router.post("/{job_id}/run", response_model=Run)
 def run_job_now(job_id: int, db: Session = Depends(get_session)) -> RunModel:
     """Trigger a manual run for a job using the same logic as the scheduler."""
+    logger.info("run_job_now called | job_id=%s", job_id)
     job = db.get(JobModel, job_id)
     if job is None:
+        logger.warning("run_job_now missing | job_id=%s", job_id)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
-
-    return run_job_immediately(db, job_id=job.id, triggered_by="manual_api")
+    run = run_job_immediately(db, job_id=job.id, triggered_by="manual_api")
+    logger.info(
+        "run_job_now dispatched | job_id=%s run_id=%s status=%s",
+        job.id,
+        getattr(run, "id", None),
+        getattr(run, "status", None),
+    )
+    return run
 
 
