@@ -1,6 +1,6 @@
 """SQLAlchemy models for the homelab backup system."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
@@ -19,8 +19,8 @@ class Target(Base):
     slug = Column(String(100), nullable=False, unique=True, index=True)
     type = Column(String(50), nullable=False, index=True)
     config_json = Column(Text, nullable=False)  # JSON configuration
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     
     # Relationships
     jobs = relationship("Job", back_populates="target", cascade="all, delete-orphan")
@@ -42,8 +42,8 @@ class Job(Base):
     enabled = Column(String(10), nullable=False, default="true")  # "true"/"false" string
     plugin = Column(String(100), nullable=False, index=True)
     plugin_version = Column(String(50), nullable=False)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     
     # Relationships
     target = relationship("Target", back_populates="jobs")
@@ -61,7 +61,7 @@ class Run(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     job_id = Column(Integer, ForeignKey("jobs.id"), nullable=False, index=True)
-    started_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    started_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     finished_at = Column(DateTime, nullable=True)
     status = Column(String(20), nullable=False, index=True)  # "running", "success", "failed"
     message = Column(Text, nullable=True)  # Error message or success message

@@ -1,6 +1,6 @@
 """Pydantic schemas for the homelab backup system."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
@@ -30,10 +30,14 @@ class TargetUpdate(BaseModel):
     config_json: Optional[str] = Field(None, description="JSON configuration for the target")
 
 
-class Target(TargetBase):
+class Target(BaseModel):
     """Schema for Target responses."""
     
     id: int = Field(..., description="Unique identifier")
+    name: str
+    slug: str
+    type: str
+    config_json: str
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
     
@@ -98,12 +102,13 @@ class RunBase(BaseModel):
 class RunCreate(RunBase):
     """Schema for creating a new Run."""
     
-    started_at: datetime = Field(default_factory=datetime.utcnow, description="Start timestamp")
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Start timestamp")
 
 
 class RunUpdate(BaseModel):
     """Schema for updating a Run."""
     
+    job_id: Optional[int] = Field(None, description="ID of the associated job")
     status: Optional[str] = Field(None, description="Status of the run")
     finished_at: Optional[datetime] = Field(None, description="Completion timestamp")
     message: Optional[str] = Field(None, description="Error message or success message")

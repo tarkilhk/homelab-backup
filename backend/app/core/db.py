@@ -3,8 +3,7 @@
 from typing import Generator
 
 from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, sessionmaker, declarative_base
 
 # SQLite database URL
 DATABASE_URL = "sqlite:///./homelab_backup.db"
@@ -34,4 +33,26 @@ def get_session() -> Generator[Session, None, None]:
 
 def init_db() -> None:
     """Initialize database tables."""
+    # Import models to ensure they are registered with Base
+    from app.models import Target, Job, Run  # noqa: F401
+    
     Base.metadata.create_all(bind=engine)
+    print("Database tables created successfully")
+
+
+def bootstrap_db() -> None:
+    """Bootstrap database with initial data if needed."""
+    from sqlalchemy.orm import Session
+    
+    db = SessionLocal()
+    try:
+        # Check if we have any targets
+        from app.models import Target
+        
+        target_count = db.query(Target).count()
+        if target_count == 0:
+            print("Database is empty. Ready for initial data.")
+        else:
+            print(f"Database contains {target_count} targets.")
+    finally:
+        db.close()
