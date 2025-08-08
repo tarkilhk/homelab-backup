@@ -88,6 +88,14 @@ export const api = {
   updateTarget: (id: number, payload: TargetUpdate) =>
     request<Target>(`/targets/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteTarget: (id: number) => request<void>(`/targets/${id}`, { method: 'DELETE' }),
+  // Connectivity tests
+  testPlugin: (key: string, config: Record<string, unknown>) =>
+    request<{ ok: boolean; error?: string }>(`/plugins/${encodeURIComponent(key)}/test`, {
+      method: 'POST',
+      body: JSON.stringify(config ?? {}),
+    }),
+  testTarget: (id: number) =>
+    request<{ ok: boolean; error?: string }>(`/targets/${id}/test`, { method: 'POST' }),
   listRuns: (params?: { status?: string; start_date?: string; end_date?: string; target_id?: number }) => {
     const search = new URLSearchParams()
     if (params?.status) search.set('status', params.status)

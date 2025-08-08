@@ -2,7 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, type Target, type PluginInfo } from '../api/client'
 import { useEffect, useState } from 'react'
 import { Button } from '../components/ui/button'
-import { Trash2, Pencil, Calendar } from 'lucide-react'
+import { Trash2, Pencil, Calendar, Check, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
 
 export default function TargetsPage() {
@@ -99,6 +99,35 @@ export default function TargetsPage() {
     mutationFn: (id: number) => api.deleteTarget(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['targets'] })
+    },
+  })
+
+  // Test status and error message for connectivity test
+  const [testError, setTestError] = useState<string>('')
+  const [testState, setTestState] = useState<'idle' | 'success' | 'error'>('idle')
+  const testPluginMut = useMutation({
+    mutationFn: async () => {
+      if (!form.plugin_name) throw new Error('Pick a plugin first')
+      const cfg = schema ? (config ?? {}) : (() => {
+        try { return JSON.parse(form.plugin_config_json || '{}') } catch { return {} }
+      })()
+      return await api.testPlugin(form.plugin_name, cfg)
+    },
+    onSuccess: (res: { ok: boolean; error?: string }) => {
+      if (res.ok) {
+        setTestError('')
+        setTestState('success')
+      } else {
+        setTestError(res.error || 'Test failed')
+        setTestState('error')
+      }
+      // Revert visual after a short delay
+      setTimeout(() => setTestState('idle'), 1300)
+    },
+    onError: () => {
+      setTestError('Test failed')
+      setTestState('error')
+      setTimeout(() => setTestState('idle'), 1300)
     },
   })
 
@@ -217,6 +246,53 @@ export default function TargetsPage() {
             <Button type="submit" disabled={createMut.isPending || updateMut.isPending}>
               {editingId ? (updateMut.isPending ? 'Saving...' : 'Save') : (createMut.isPending ? 'Creating...' : 'Create')}
             </Button>
+            {/* Test connectivity (before saving target) */}
+            <Button
+              type="button"
+              variant="outline"
+              disabled={testPluginMut.isPending || !form.plugin_name}
+              onClick={async () => {
+                try {
+                  await testPluginMut.mutateAsync()
+                } catch {
+                  // error handled in onError
+                }
+              }}
+            >
+              {testPluginMut.isPending ? (
+                'Testing…'
+              ) : (
+                <span className="relative inline-flex items-center justify-center w-12">
+                  {/* Idle label */}
+                  <span
+                    className={
+                      `absolute transition-all duration-200 ease-out ` +
+                      `${testState === 'idle' ? 'opacity-100 scale-100' : 'opacity-0 scale-75'}`
+                    }
+                  >
+                    Test
+                  </span>
+                  {/* Success icon */}
+                  <Check
+                    className={
+                      `absolute h-4 w-4 text-green-600 transition-all duration-200 ease-out ` +
+                      `${testState === 'success' ? 'opacity-100 scale-100' : 'opacity-0 scale-75'}`
+                    }
+                  />
+                  {/* Error icon */}
+                  <X
+                    className={
+                      `absolute h-4 w-4 text-red-600 transition-all duration-200 ease-out ` +
+                      `${testState === 'error' ? 'opacity-100 scale-100' : 'opacity-0 scale-75'}`
+                    }
+                  />
+                </span>
+              )}
+            </Button>
+            {/* Right-aligned message area */}
+            <span className="ml-auto text-sm min-h-5 text-right">
+              {testError ? <span className="text-red-600">{testError}</span> : null}
+            </span>
             {editingId && (
               <Button
                 type="button"

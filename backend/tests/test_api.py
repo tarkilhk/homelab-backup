@@ -159,6 +159,98 @@ def test_create_plugin_target_with_schema_validation(client: TestClient, monkeyp
         assert r.status_code == 422
 
 
+def test_plugins_test_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Validate /plugins/{key}/test returns ok true/false and handles errors/404s."""
+    # Monkeypatch the endpoint-local get_plugin symbol
+    class _DummyPlugin:
+        def __init__(self, name: str) -> None:
+            self.name = name
+        async def test(self, cfg):  # type: ignore[no-untyped-def]
+            return True
+
+    import app.api.plugins as plugins_api
+
+    monkeypatch.setattr(plugins_api, "get_plugin", lambda key: _DummyPlugin(key))
+
+    # ok true
+    r = client.post("/api/v1/plugins/dummy/test", json={"k": 1})
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+    # ok false
+    class _FalsePlugin(_DummyPlugin):
+        async def test(self, cfg):  # type: ignore[no-untyped-def]
+            return False
+
+    monkeypatch.setattr(plugins_api, "get_plugin", lambda key: _FalsePlugin(key))
+    r = client.post("/api/v1/plugins/dummy/test", json={})
+    assert r.status_code == 200
+    assert r.json()["ok"] is False
+
+    # raises -> ok false + error
+    class _RaisingPlugin(_DummyPlugin):
+        async def test(self, cfg):  # type: ignore[no-untyped-def]
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(plugins_api, "get_plugin", lambda key: _RaisingPlugin(key))
+    r = client.post("/api/v1/plugins/dummy/test", json={})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False and "error" in body
+
+    # unknown plugin -> 404
+    monkeypatch.setattr(plugins_api, "get_plugin", lambda key: (_ for _ in ()).throw(KeyError("nope")))
+    r = client.post("/api/v1/plugins/unknown/test", json={})
+    assert r.status_code == 404
+
+
+def test_targets_test_endpoint(client: TestClient, db_session_override: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Validate /targets/{id}/test behavior including JSON errors and unknowns."""
+    # Create a target
+    r = client.post(
+        "/api/v1/targets/",
+        json={"name": "T1", "slug": "t1", "plugin_name": "dummy", "plugin_config_json": "{\"a\":1}"},
+    )
+    assert r.status_code == 201
+    tid = r.json()["id"]
+
+    # Monkeypatch endpoint-local get_plugin
+    import app.api.targets as targets_api
+
+    class _DummyPlugin:
+        def __init__(self, name: str) -> None:
+            self.name = name
+        async def test(self, cfg):  # type: ignore[no-untyped-def]
+            return cfg.get("a") == 1
+
+    monkeypatch.setattr(targets_api, "get_plugin", lambda key: _DummyPlugin(key))
+
+    # ok true
+    r = client.post(f"/api/v1/targets/{tid}/test")
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+
+    # Update target to make test false
+    r = client.put(f"/api/v1/targets/{tid}", json={"plugin_config_json": "{\"a\":2}"})
+    assert r.status_code == 200
+
+    r = client.post(f"/api/v1/targets/{tid}/test")
+    assert r.status_code == 200
+    assert r.json()["ok"] is False
+
+    # Invalid JSON -> 400
+    r = client.put(f"/api/v1/targets/{tid}", json={"plugin_config_json": "{BAD JSON"})
+    assert r.status_code == 200
+    r = client.post(f"/api/v1/targets/{tid}/test")
+    assert r.status_code == 400
+
+    # Unknown plugin on target -> 404
+    r = client.put(f"/api/v1/targets/{tid}", json={"plugin_name": "missing"})
+    assert r.status_code == 200
+    monkeypatch.setattr(targets_api, "get_plugin", lambda key: (_ for _ in ()).throw(KeyError("nope")))
+    r = client.post(f"/api/v1/targets/{tid}/test")
+    assert r.status_code == 404
+
 def test_jobs_crud_and_run_now(client: TestClient) -> None:
     # Need a target first
     target_payload = {

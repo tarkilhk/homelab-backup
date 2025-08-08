@@ -42,9 +42,52 @@ class PiHolePlugin(BackupPlugin):
     async def test(self, config: Dict[str, Any]) -> bool:
         """Connectivity test using provided configuration.
 
-        Dummy implementation: reuse validate_config to check for required fields.
+        Attempt real authentication against Pi-hole v6 API:
+        - POST {base_url}/api/auth with JSON {"password": ...}
+        - Expect a JSON body containing a valid session and CSRF token
+        Returns True on success, False otherwise.
         """
-        return await self.validate_config(config)
+        # Basic shape check first
+        if not await self.validate_config(config):
+            return False
+
+        base_url = str(config.get("base_url", "")).rstrip("/")
+        # Login retained for UX parity; Pi-hole v6 uses password-only auth
+        password = config.get("password")
+
+        auth_url = f"{base_url}/api/auth"
+
+        try:
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                resp = await client.post(
+                    auth_url,
+                    json={"password": str(password)},
+                    headers={"Accept": "application/json"},
+                )
+                # Non-2xx means auth failed or endpoint not reachable
+                if resp.status_code // 100 != 2:
+                    self._logger.warning(
+                        "pihole_test_auth_non_2xx | url=%s status=%s", auth_url, resp.status_code
+                    )
+                    return False
+                data: Dict[str, Any] = resp.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            # HTTP/network/JSON errors -> treat as failed auth
+            self._logger.warning("pihole_test_auth_error | url=%s error=%s", auth_url, exc)
+            return False
+
+        # Accept either the documented v6 shape or be lenient if fields change slightly
+        session = data.get("session") if isinstance(data, dict) else None
+        if isinstance(session, dict):
+            valid = session.get("valid") is True
+            csrf_present = bool(session.get("csrf"))
+            return bool(valid and csrf_present)
+
+        # Fallback: if API returns another explicit success flag
+        if isinstance(data, dict) and data.get("success") is True:
+            return True
+
+        return False
 
     async def backup(self, context: BackupContext) -> Dict[str, Any]:
         # Determine directories following convention: /backups/<targetSlug>/<YYYY-MM-DD>/
