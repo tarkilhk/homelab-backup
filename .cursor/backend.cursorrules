@@ -1,4 +1,44 @@
-rules:
+# Backend (Python)
+- files: ["backend/**/*.py"]
+  system:
+    - "Follow PEP8; max line length 100"
+    - "Type hints required; no wildcard imports"
+    - "Prefer async FastAPI endpoints where practical"
+    - "Docstrings on public functions/classes"
+    - "Use Python logging, never print()"
+    - "Configure a module-level logger via logging.getLogger(__name__)"
+    - "Use lazy logging params (logger.info('msg %s', var)) not f-strings"
+    - "Do not log secrets or PII; scrub tokens/passwords"
+    - "Timestamps must be timezone-aware UTC"
+    - "SQLite location is driven by DB_FOLDER env; default to ./db; avoid DATABASE_URL"
+    - "Only create tables on startup via an init_db() routine; never auto-drop tables"
+    - "Do not call Base.metadata.drop_all() in application runtime"
+    - "Gate SQLAlchemy engine echo with an env flag (e.g., LOG_SQL_ECHO/DEBUG); default False"
+    - "Backend must listen on port 8080 to match compose; do not change ports arbitrarily"
+    - "Avoid blocking I/O inside async routes; offload to threadpool when necessary"
+  instructions:
+    - "Create a central logger in backend/app/core/logging.py and initialize it from app/main.py"
+    - "Emit structured context using the 'extra' dict when useful (e.g., job_id, run_id)"
+    - "For long-running tasks, log start, success, and failure with durations"
+    - "When adding features that can be tested, also add/update pytest tests"
+    - "If a route, service, or plugin is changed, create/modify corresponding tests under backend/tests"
+    - "Ensure database init is performed once on startup (init_db) and never drops tables"
+    - "Metrics/collectors: build HistogramMetricFamily/GaugeMetricFamily/CounterMetricFamily fresh in collect(); maintain bucket counts in collector state and reset in clear_cnts() (do not use prometheus_client.Histogram in custom collectors)"
+    - "Commit the .vscode folder with test/run settings to ensure consistent local/CI behavior"
+    - "Respect compose-defined ports; backend should bind 0.0.0.0:8080 unless overridden by env"
+  tests:
+    - framework: pytest
+    - location: backend/tests
+    - rule: "Every new route/service/plugin must include at least one happy-path test and one failure-path test"
+    - rule: "Write tests first with mocked I/O and dependencies before implementing the method (TDD)"
+  disallow:
+    - pattern: "print("
+      message: "Use the logging library instead of print()."
+    - pattern: "Base.metadata.drop_all("
+      message: "Never drop tables from application code; run manually only when explicitly permitted."
+    - pattern: "logger.warn("
+      message: "Use logger.warning() instead of deprecated logger.warn()."
+  rules:
   - match: "backend/**/*.py"
     style: "pep8"
     enforce_type_hints: true
@@ -9,16 +49,25 @@ rules:
   - match: "backend/tests/**/*.py"
     style: "pytest"
     require_test_names: true
-tasks:
-  - description: "Add backup plugin"
+  tasks:
+  - task: "Add/modify backend feature"
     steps:
-      - Create `backend/app/plugins/<name>/plugin.py`
-      - Add `schema.json`
-      - Export in loader registry
-      - Write unit tests with mocks
-  - description: "Add API endpoint"
+      - "Update or add Pydantic schemas and SQLAlchemy models if needed"
+      - "Add/modify implementation (router/service/plugin)"
+      - "Add tests in backend/tests covering success and failure paths"
+      - "Ensure logs at start/end and on exceptions; no secrets in logs"
+      - "Run pytest and fix failures"
+
+  - task: "Add/modify backup plugin"
     steps:
-      - Define Pydantic schema in `schemas/`
-      - Implement router in `api/`
-      - Service logic in `services/`
-      - Tests in `tests/api/`
+      - "Implement feature in backend/app/plugins/<name>/plugin.py"
+      - "Add/adjust schema.json for config"
+      - "Add tests in backend/tests/plugins/test_<name>.py (mock network/FS)"
+      - "Log artifact path and duration; mask credentials in any error logs"
+
+  - task: "Add/modify metrics collector"
+    steps:
+      - "Implement collector under backend/app/plugins/<name>/metrics.py"
+      - "Track bucket counts/sums/totals in instance vars; reset in clear_cnts()"
+      - "Create HistogramMetricFamily/GaugeMetricFamily/CounterMetricFamily inside collect()"
+      - "Add tests validating bucket math and that no accumulation occurs across scrapes"
