@@ -48,21 +48,13 @@ describe('RunsPage', () => {
     const startInput = (await screen.findByLabelText('Start date')) as HTMLInputElement
     const endInput = (await screen.findByLabelText('End date')) as HTMLInputElement
 
-    console.log('initial start value:', startInput.value)
-    console.log('initial end value:', endInput.value)
-
-    // Simulate a date selection (many browsers inject a time; we ignore it and default)
-    fireEvent.change(startInput, { target: { value: '2024-01-02T12:34' } })
-    fireEvent.change(endInput, { target: { value: '2024-01-03T12:34' } })
-
-    console.log('after change start value:', startInput.value)
-    console.log('after change end value:', endInput.value)
+    // With date-only inputs, values are YYYY-MM-DD
+    fireEvent.change(startInput, { target: { value: '2024-01-02' } })
+    fireEvent.change(endInput, { target: { value: '2024-01-03' } })
 
     await waitFor(() => {
-      console.log('asserting start value:', startInput.value)
-      console.log('asserting end value:', endInput.value)
-      expect(startInput.value).toBe('2024-01-02T00:00')
-      expect(endInput.value).toBe('2024-01-03T23:59')
+      expect(startInput.value).toBe('2024-01-02')
+      expect(endInput.value).toBe('2024-01-03')
     })
   })
 })
