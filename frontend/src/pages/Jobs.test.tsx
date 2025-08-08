@@ -130,6 +130,8 @@ describe('JobsPage', () => {
     const cronInput = (await screen.findByLabelText('Cron')) as HTMLInputElement
     fireEvent.change(cronInput, { target: { value: '0 2 * * *' } })
     await waitFor(() => expect((screen.getByLabelText('Job Name') as HTMLInputElement).value).toBe('Daily Pi-hole Backup'))
+    // Human readable label should show
+    await screen.findByText(/Every day at/i)
     fireEvent.submit((await screen.findByText('Create Job')).closest('form')!)
     await waitFor(() => expect(fetch).toHaveBeenCalled())
   })

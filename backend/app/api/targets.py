@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_session
 from app.models import Target as TargetModel
-from app.core.plugins.loader import get_plugin_schema_path, get_plugin
+from app.core.plugins.loader import get_plugin
+from app.core.plugins import loader
 from app.schemas import Target, TargetCreate, TargetUpdate
 import logging
 
@@ -41,7 +42,8 @@ def create_target(payload: TargetCreate, db: Session = Depends(get_session)) -> 
 
     # Validate plugin config against plugin's JSON schema if provided
     if payload.plugin_name and payload.plugin_config_json:
-        schema_path = get_plugin_schema_path(payload.plugin_name)
+        # Use module reference so tests can monkeypatch loader.get_plugin_schema_path
+        schema_path = loader.get_plugin_schema_path(payload.plugin_name)
         logger.debug("plugin schema path resolved | plugin=%s path=%s", payload.plugin_name, schema_path)
         if schema_path:
             with open(schema_path, "r", encoding="utf-8") as f:

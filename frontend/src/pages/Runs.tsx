@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api, type RunWithJob, type Target } from '../api/client'
+import { formatLocalDateTime } from '../lib/dates'
 
 export default function RunsPage() {
   const [status, setStatus] = useState<string>('')
@@ -139,8 +140,8 @@ export default function RunsPage() {
                       {r.status}
                     </span>
                   </td>
-                  <td className="px-4 py-2">{new Date(r.started_at).toLocaleString()}</td>
-                  <td className="px-4 py-2">{r.finished_at ? new Date(r.finished_at).toLocaleString() : '—'}</td>
+                  <td className="px-4 py-2">{formatLocalDateTime(r.started_at)}</td>
+                  <td className="px-4 py-2">{r.finished_at ? formatLocalDateTime(r.finished_at) : '—'}</td>
                   <td className="px-4 py-2">
                     {r.artifact_path ? (
                       <span title={r.artifact_path}>Artifact</span>
