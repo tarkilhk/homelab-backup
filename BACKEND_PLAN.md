@@ -15,7 +15,7 @@ backend/
   tests/
 
 ## Steps
-1. Bootstrap FastAPI + healthz.
+1. Bootstrap FastAPI + health.
 2. Add SQLite models and Pydantic schemas; CRUD for targets/jobs/runs.
 3. Add APScheduler with cron support; Asia/Singapore TZ.
 4. Implement plugin loader; wire a Pi-hole plugin (skeleton) and `Run now`.
