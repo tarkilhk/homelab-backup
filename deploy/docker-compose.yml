@@ -1,8 +1,7 @@
-version: "3.9"
 services:
   backend:
     build: ../backend
-    image: homelab/backup-backend:0.1.0
+    image: homelab/backup-backend:latest
     env_file:
       - .env
     environment:
@@ -11,14 +10,14 @@ services:
       - ${BACKUP_ROOT_HOST}:/backups
       - /etc/localtime:/etc/localtime:ro
     ports:
-      - "127.0.0.1:8085:8080"
+      - "8080:8080"
     restart: unless-stopped
 
   frontend:
     build: ../frontend
-    image: homelab/backup-frontend:0.1.0
-    environment:
-      - API_BASE=http://backend:8080/api
+    image: homelab/backup-frontend:latest
+    depends_on:
+      - backend
     ports:
-      - "127.0.0.1:8086:80"
+      - "8081:80"
     restart: unless-stopped
