@@ -57,7 +57,10 @@ app.add_middleware(
 # Include routers
 from app.api import health, targets, jobs, runs
 
-app.include_router(health.router, prefix="/api/v1")
+# Mount health endpoints unversioned for infra probes (/health, /ready)
+app.include_router(health.router)
+
+# Mount application APIs under versioned prefix
 app.include_router(targets.router, prefix="/api/v1")
 app.include_router(jobs.router, prefix="/api/v1")
 app.include_router(runs.router, prefix="/api/v1")
@@ -69,10 +72,7 @@ async def root() -> RedirectResponse:
     return RedirectResponse(url="/api/docs")
 
 
-@app.get("/health")
-async def health() -> dict[str, str]:
-    """Health check endpoint."""
-    return {"status": "ok"}
+# Readiness is provided via health router as /ready
 
 
 if __name__ == "__main__":
