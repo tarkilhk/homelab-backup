@@ -44,7 +44,7 @@ export default function DashboardPage() {
   return (
     <div className="space-y-6">
       <div className="relative overflow-hidden rounded-2xl p-6 border surface-card">
-        <h1 className="text-3xl font-extrabold tracking-tight">Dashboard</h1>
+        <h1 className="text-2xl font-semibold">Dashboard</h1>
         <p className="text-sm text-muted-foreground">Overview of your homelab backups.</p>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
