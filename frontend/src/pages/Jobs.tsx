@@ -1,11 +1,12 @@
-import { useParams, Link, useLocation } from 'react-router-dom'
+import { useParams, useLocation } from 'react-router-dom'
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type JobCreate, type Job, type Target } from '../api/client'
 import { formatLocalDateTime } from '../lib/dates'
 import { Button } from '../components/ui/button'
-import { Trash2, Pencil, Play, Check, X } from 'lucide-react'
+import { Trash2, Pencil, Play, Check, X, Plus } from 'lucide-react'
 import AppCard from '../components/ui/AppCard'
+import IconButton from '../components/IconButton'
 
 export default function JobsPage() {
   const location = useLocation() as unknown as { state?: { openJobId?: number } }
@@ -47,6 +48,8 @@ export default function JobsPage() {
 
   // Edit/Delete state (edit happens via the top form)
   const [editingId, setEditingId] = useState<number | null>(null)
+  // Controls visibility of the create/edit card; hidden by default
+  const [showEditor, setShowEditor] = useState<boolean>(false)
 
   // Transient per-job status after clicking Run Now: success/error for 2s
   const [runStatusByJobId, setRunStatusByJobId] = useState<
@@ -247,6 +250,7 @@ export default function JobsPage() {
         setForm({ name: '', schedule_cron: '', enabled: 'true' })
         setSelectedTargetId('')
       }
+      setShowEditor(false)
     },
   })
 
@@ -256,6 +260,7 @@ export default function JobsPage() {
     onSuccess: () => {
       setEditingId(null)
       qc.invalidateQueries({ queryKey: ['jobs'] })
+      setShowEditor(false)
     },
   })
 
@@ -276,6 +281,7 @@ export default function JobsPage() {
       if (!Number.isFinite(targetId as number)) {
         setSelectedTargetId(j.target_id)
       }
+      setShowEditor(true)
     }
   }, [preselectJobId, jobs, targetId])
 
@@ -299,10 +305,22 @@ export default function JobsPage() {
               : 'Pick a target and create a job.'}
           </p>
         </div>
-        <Link to="/targets" className="text-sm underline">Back to Targets</Link>
+        <IconButton
+          variant="accent"
+          aria-label="Add Job"
+          onClick={() => {
+            setEditingId(null)
+            setForm({ name: '', schedule_cron: '', enabled: 'true' })
+            setSelectedTargetId('')
+            setShowEditor(true)
+          }}
+        >
+          <Plus className="h-4 w-4" aria-hidden="true" /> Add Job
+        </IconButton>
       </div>
 
-      <AppCard title={editingId ? 'Update Job' : (Number.isFinite(targetId as number) ? (target ? target.name : 'Target') : 'New Job')}>
+      {(showEditor || editingId !== null) && (
+        <AppCard title={editingId ? 'Update Job' : (Number.isFinite(targetId as number) ? (target ? target.name : 'Target') : 'New Job')}>
         <form
           className="grid gap-4 sm:grid-cols-2"
           onSubmit={(e) => {
@@ -415,29 +433,29 @@ export default function JobsPage() {
             <Button type="submit" disabled={createMut.isPending || updateMut.isPending}>
               {editingId ? (updateMut.isPending ? 'Saving…' : 'Save') : (createMut.isPending ? 'Creating…' : 'Create Job')}
             </Button>
-            {editingId && (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setEditingId(null)
-                  if (Number.isFinite(targetId as number) && target) {
-                    setForm({ name: `${target.name} Backup`, schedule_cron: '0 2 * * *', enabled: 'true' })
-                  } else {
-                    setForm({ name: '', schedule_cron: '', enabled: 'true' })
-                    setSelectedTargetId('')
-                  }
-                }}
-              >
-                Cancel
-              </Button>
-            )}
+            <Button
+              type="button"
+              variant="cancel"
+              onClick={() => {
+                setEditingId(null)
+                if (Number.isFinite(targetId as number) && target) {
+                  setForm({ name: `${target.name} Backup`, schedule_cron: '0 2 * * *', enabled: 'true' })
+                } else {
+                  setForm({ name: '', schedule_cron: '', enabled: 'true' })
+                  setSelectedTargetId('')
+                }
+                setShowEditor(false)
+              }}
+            >
+              Cancel
+            </Button>
             {(createMut.error || updateMut.error) && (
               <span className="text-sm text-red-600">{String(createMut.error || updateMut.error)}</span>
             )}
           </div>
         </form>
-      </AppCard>
+        </AppCard>
+      )}
 
       {/* Jobs table */}
       <AppCard title="Existing Jobs" className="overflow-x-auto">
@@ -513,6 +531,7 @@ export default function JobsPage() {
                             if (!Number.isFinite(targetId as number)) {
                               setSelectedTargetId(j.target_id)
                             }
+                            setShowEditor(true)
                           }}
                         >
                           <Pencil className="h-4 w-4" />

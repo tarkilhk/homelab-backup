@@ -20,4 +20,4 @@ Starter repository layout for building a pluggable backup orchestrator for homel
 4. Open the UI and add services/jobs.
 
 ## License
-Apache-2.0 (see LICENSE).
+GPL-3.0-or-later (see LICENSE).

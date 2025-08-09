@@ -109,7 +109,8 @@ export default function RunsPage() {
             </select>
           </div>
           <button
-            className="ml-auto text-xs underline text-[hsl(var(--accent))]"
+            className="ml-auto text-sm font-medium underline underline-offset-2 text-[hsl(var(--accent))] rounded px-2 py-1 hover:bg-[hsl(var(--accent)/.12)] cursor-pointer"
+            title="Clear filters"
             onClick={() => { setStatus(''); setStartDate(''); setEndDate(''); setTargetId('') }}
           >
             Clear filters

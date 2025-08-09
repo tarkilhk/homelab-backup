@@ -24,6 +24,9 @@ export default function TargetsPage() {
     plugin_config_json: '{}',
   })
 
+  // Controls visibility of the create/edit card. Defaults to hidden.
+  const [showEditor, setShowEditor] = useState<boolean>(false)
+
   // Schema-driven config state
   const [schema, setSchema] = useState<Record<string, any> | null>(null)
   const [config, setConfig] = useState<Record<string, any>>({})
@@ -83,6 +86,7 @@ export default function TargetsPage() {
       setSchema(null)
       setConfig({})
       qc.invalidateQueries({ queryKey: ['targets'] })
+      setShowEditor(false)
     },
   })
 
@@ -94,6 +98,7 @@ export default function TargetsPage() {
     onSuccess: () => {
       setEditingId(null)
       qc.invalidateQueries({ queryKey: ['targets'] })
+      setShowEditor(false)
     },
   })
 
@@ -140,12 +145,23 @@ export default function TargetsPage() {
           <h1 className="text-2xl font-semibold">Targets</h1>
           <p className="text-sm text-muted-foreground">List and create backup targets.</p>
         </div>
-        <IconButton variant="accent" aria-label="Add Target">
+        <IconButton
+          variant="accent"
+          aria-label="Add Target"
+          onClick={() => {
+            setEditingId(null)
+            setForm({ name: '', plugin_name: '', plugin_config_json: '{}' })
+            setSchema(null)
+            setConfig({})
+            setShowEditor(true)
+          }}
+        >
           <Plus className="h-4 w-4" aria-hidden="true" /> Add Target
         </IconButton>
       </div>
 
-      <AppCard title={editingId ? 'Edit Target' : 'Create Target'} description="Configure a plugin and its options">
+      {(showEditor || editingId !== null) && (
+        <AppCard title={editingId ? 'Edit Target' : 'Create Target'} description="Configure a plugin and its options">
           <form
           className="grid gap-4 sm:grid-cols-2"
           onSubmit={(e) => {
@@ -295,30 +311,31 @@ export default function TargetsPage() {
                 </span>
               )}
             </Button>
+            {/* Cancel next to Test */}
+            <Button
+              type="button"
+              variant="cancel"
+              onClick={() => {
+                setEditingId(null)
+                setForm({ name: '', plugin_name: '', plugin_config_json: '{}' })
+                setSchema(null)
+                setConfig({})
+                setShowEditor(false)
+              }}
+            >
+              Cancel
+            </Button>
             {/* Right-aligned message area */}
             <span className="ml-auto text-sm min-h-5 text-right">
               {testError ? <span className="text-red-600">{testError}</span> : null}
             </span>
-            {editingId && (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setEditingId(null)
-                  setForm({ name: '', plugin_name: '', plugin_config_json: '{}' })
-                  setSchema(null)
-                  setConfig({})
-                }}
-              >
-                Cancel
-              </Button>
-            )}
             {(createMut.error || updateMut.error) && (
               <span className="ml-3 text-sm text-red-600">{String(createMut.error || updateMut.error)}</span>
             )}
           </div>
         </form>
-      </AppCard>
+        </AppCard>
+      )}
 
       <AppCard title="Existing Targets" className="overflow-x-auto">
         {isLoading ? (
@@ -362,6 +379,7 @@ export default function TargetsPage() {
                           } catch {
                             setConfig({})
                           }
+                          setShowEditor(true)
                         }}
                       >
                         <Pencil className="h-4 w-4" />
