@@ -6,7 +6,10 @@ from typing import AsyncGenerator
 from fastapi import FastAPI
 import logging
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, FileResponse, Response
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+import base64
 
 from app.core.db import init_db, bootstrap_db, SessionLocal
 from app.core.logging import setup_logging
@@ -50,6 +53,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Mount backend static dir for assets like favicon
+_static_dir = Path(__file__).resolve().parent / "static"
+if _static_dir.exists():
+    app.mount("/static", StaticFiles(directory=_static_dir), name="static")
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -90,8 +98,36 @@ async def custom_swagger_ui_html():
     return get_swagger_ui_html(
         openapi_url=app.openapi_url,
         title=f"{app.title} — Docs",
-        swagger_favicon_url="/favicon.ico",
+        swagger_favicon_url="/static/favicon.ico",
     )
+
+# Serve /favicon.ico for Swagger and other clients
+@app.get("/favicon.ico", include_in_schema=False)
+async def serve_favicon():
+    # Prefer dev path (monorepo), then packaged static path
+    candidates = [
+        Path(__file__).resolve().parents[2] / "frontend" / "public" / "favicon.ico",
+        Path(__file__).resolve().parent / "static" / "favicon.ico",
+    ]
+    for p in candidates:
+        if p.exists():
+            return FileResponse(p, media_type="image/x-icon")
+    # Tiny 16x16 fallback ICO (green square) encoded inline
+    fallback_b64 = (
+        "AAABAAEAEBAAAAEAIABoBAAAFgAAACgAAAAQAAAAIAAAAAEAGAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        "AAAAAAAAAAAAAAAAAP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A"
+        "////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD/"
+        "//8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP//"
+        "/wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////AP///wD///8A////"
+        "AP///wD///8A////AP///wD///8A"
+    )
+    try:
+        data = base64.b64decode(fallback_b64)
+    except Exception:
+        data = b""  # should not happen
+    return Response(content=data, media_type="image/x-icon")
 
 # Readiness is provided via health router as /ready
 
