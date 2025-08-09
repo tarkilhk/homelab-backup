@@ -9,8 +9,9 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_session
 from app.core.scheduler import run_job_immediately
+from zoneinfo import ZoneInfo
 from app.models import Job as JobModel, Run as RunModel
-from app.schemas import Job, JobCreate, JobUpdate, Run
+from app.schemas import Job, JobCreate, JobUpdate, Run, UpcomingJob
 
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -21,6 +22,46 @@ logger = logging.getLogger(__name__)
 def list_jobs(db: Session = Depends(get_session)) -> List[JobModel]:
     """List all jobs."""
     return db.query(JobModel).all()
+
+
+# NOTE: Define static paths before dynamic `/{job_id}` to avoid path conflicts
+@router.get("/upcoming", response_model=list[UpcomingJob])
+def upcoming_jobs(db: Session = Depends(get_session)) -> list[UpcomingJob]:
+    """Return next scheduled run time for enabled jobs using their cron.
+
+    This approach computes the next fire time directly from each job's
+    cron expression, independent of whether APScheduler has already
+    scheduled it in-memory. This ensures newly-created jobs are visible
+    immediately without requiring an app restart.
+    """
+    from apscheduler.triggers.cron import CronTrigger  # local import to keep module import order simple
+
+    tz = ZoneInfo("Asia/Singapore")
+    now = datetime.now(tz)
+
+    rows = db.query(JobModel).filter(JobModel.enabled == "true").all()
+    results: list[UpcomingJob] = []
+    for job in rows:
+        try:
+            trigger = CronTrigger.from_crontab(job.schedule_cron, timezone=tz)
+            # Next occurrence at/after now
+            next_time = trigger.get_next_fire_time(previous_fire_time=None, now=now)
+            if next_time is None:
+                continue
+            results.append(
+                UpcomingJob(
+                    job_id=job.id,
+                    name=job.name,
+                    target_id=job.target_id,
+                    next_run_at=next_time,
+                )
+            )
+        except Exception:
+            # Invalid cron — skip
+            continue
+
+    results.sort(key=lambda r: r.next_run_at)
+    return results[:10]
 
 
 @router.post("/", response_model=Job, status_code=status.HTTP_201_CREATED)

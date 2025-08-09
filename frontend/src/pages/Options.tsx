@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
-import { STORAGE_KEYS, type ThemeMode, applyAccent, applyTheme } from '../lib/theme'
+import { STORAGE_KEYS, type ThemeMode, applyAccent, applyTheme, getStoredAccent, setStoredAccent, getResolvedTheme } from '../lib/theme'
 import { HexColorPicker } from 'react-colorful'
+import AppCard from '../components/ui/AppCard'
+import { cn } from '../lib/cn'
 
 export default function OptionsPage() {
   const [theme, setTheme] = useState<ThemeMode>('system')
-  const [accentHex, setAccentHex] = useState<string>('#7c3aed')
+  const [accentLightHex, setAccentLightHex] = useState<string>('#7c3aed')
+  const [accentDarkHex, setAccentDarkHex] = useState<string>('#7c3aed')
+  const [accentEditingTheme, setAccentEditingTheme] = useState<'light' | 'dark'>(() => getResolvedTheme())
   const [showPicker, setShowPicker] = useState<boolean>(false)
 
   const palette = useMemo(() => (
@@ -20,9 +24,13 @@ export default function OptionsPage() {
 
   useEffect(() => {
     const t = (localStorage.getItem(STORAGE_KEYS.theme) as ThemeMode | null) ?? 'system'
-    const a = localStorage.getItem(STORAGE_KEYS.accent) ?? '#7c3aed'
+    const light = getStoredAccent('light')
+    const dark = getStoredAccent('dark')
     setTheme(t)
-    setAccentHex(a)
+    setAccentLightHex(light)
+    setAccentDarkHex(dark)
+    // Apply the resolved theme's accent (applyTheme already does this, but ensure on mount)
+    applyAccent(getResolvedTheme(t) === 'light' ? light : dark)
   }, [])
 
   const saveTheme = (next: ThemeMode) => {
@@ -31,65 +39,115 @@ export default function OptionsPage() {
     applyTheme(next)
   }
 
-  const saveAccent = (nextHex: string) => {
-    setAccentHex(nextHex)
-    localStorage.setItem(STORAGE_KEYS.accent, nextHex)
-    applyAccent(nextHex)
+  const saveAccent = (nextHex: string, forTheme: 'light' | 'dark') => {
+    if (forTheme === 'light') setAccentLightHex(nextHex)
+    else setAccentDarkHex(nextHex)
+    setStoredAccent(forTheme, nextHex, theme)
   }
 
   return (
-    <div className="space-y-8">
-      <h1 className="text-2xl font-semibold">Options</h1>
+    <div className="space-y-6">
+      {/* Hero header to match Dashboard */}
+      <div className="relative overflow-hidden rounded-2xl p-6 border surface-card">
+        <h1 className="text-3xl font-extrabold tracking-tight">Options</h1>
+        <p className="text-sm text-muted-foreground">Personalize your experience.</p>
+      </div>
 
-      <section className="space-y-3">
-        <h2 className="text-lg font-medium">Theme</h2>
-        <div className="flex gap-3 items-center">
-          <label className="flex items-center gap-2 text-sm">
-            <input type="radio" name="theme" value="light" checked={theme === 'light'} onChange={() => saveTheme('light')} />
-            Light
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="radio" name="theme" value="dark" checked={theme === 'dark'} onChange={() => saveTheme('dark')} />
-            Dark
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="radio" name="theme" value="system" checked={theme === 'system'} onChange={() => saveTheme('system')} />
-            System
-          </label>
-        </div>
-      </section>
-
-      <section className="space-y-3">
-        <h2 className="text-lg font-medium">Accent color</h2>
-        <div className="flex items-center gap-3">
-          <div className="flex gap-2">
-            {palette.map((c) => (
-              <button
-                key={c.hex}
-                aria-label={c.name}
-                title={c.name}
-                className="h-8 w-8 rounded-full ring-2 ring-transparent data-[active=true]:ring-foreground cursor-pointer"
-                style={{ background: c.hex }}
-                data-active={accentHex.toLowerCase() === c.hex.toLowerCase()}
-                onClick={() => saveAccent(c.hex)}
-              />
+      <div className="grid gap-6 lg:grid-cols-2">
+        {/* Theme */}
+        <AppCard title="Theme" description="Choose how the app looks">
+          <div className="grid grid-cols-3 gap-3 max-w-md">
+            {(['light','dark','system'] as ThemeMode[]).map((m) => (
+              <label key={m} className="block">
+                <input
+                  type="radio"
+                  name="theme"
+                  className="sr-only"
+                  checked={theme === m}
+                  onChange={() => saveTheme(m)}
+                />
+                <div
+                  className={cn(
+                    'rounded-xl border px-4 py-3 text-sm font-medium text-center cursor-pointer select-none',
+                    'hover:bg-[hsl(var(--accent)/.08)]',
+                    theme === m && 'ring-2 ring-accent bg-[hsl(var(--accent)/.10)]'
+                  )}
+                  aria-pressed={theme === m}
+                >
+                  {m.charAt(0).toUpperCase() + m.slice(1)}
+                </div>
+              </label>
             ))}
           </div>
-          <button
-            className="h-8 rounded-md px-3 border hover:bg-muted"
-            onClick={() => setShowPicker((v) => !v)}
-          >
-            {showPicker ? 'Close' : 'Custom…'}
-          </button>
-          <div className="text-sm text-muted-foreground">Used for buttons and gradients</div>
-        </div>
-        {showPicker && (
-          <div className="mt-4 w-full max-w-xs">
-            <HexColorPicker color={accentHex} onChange={saveAccent} />
-            <div className="mt-2 text-xs text-muted-foreground">Selected: {accentHex}</div>
+        </AppCard>
+
+        {/* Accent */}
+        <AppCard
+          title="Accent color"
+          description="Used for buttons and badges"
+          headerRight={
+            <div className="inline-flex items-center gap-2">
+              <span className="rounded-full border border-[hsl(var(--accent)/.35)] bg-[hsl(var(--accent)/.12)] text-[hsl(var(--accent))] px-2 py-0.5 text-xs">Preview</span>
+              <button className="btn-primary rounded-md px-3 py-1 text-xs shadow">Primary</button>
+            </div>
+          }
+        >
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="inline-flex rounded-md border overflow-hidden">
+              {(['light','dark'] as const).map((tKey) => (
+                <button
+                  key={tKey}
+                  type="button"
+                  onClick={() => setAccentEditingTheme(tKey)}
+                  className={cn(
+                    'px-3 py-1.5 text-xs font-medium',
+                    accentEditingTheme === tKey ? 'bg-[hsl(var(--accent)/.12)] text-foreground' : 'bg-background text-muted-foreground'
+                  )}
+                  aria-pressed={accentEditingTheme === tKey}
+                >
+                  {tKey === 'light' ? 'Light accent' : 'Dark accent'}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              {palette.map((c) => (
+                <button
+                  key={c.hex}
+                  aria-label={c.name}
+                  title={c.name}
+                  className="h-9 w-9 rounded-full ring-2 ring-transparent data-[active=true]:ring-foreground cursor-pointer shadow-sm"
+                  style={{ background: c.hex }}
+                  data-active={(accentEditingTheme === 'light' ? accentLightHex : accentDarkHex).toLowerCase() === c.hex.toLowerCase()}
+                  onClick={() => saveAccent(c.hex, accentEditingTheme)}
+                />
+              ))}
+            </div>
+            <button
+              className="h-9 rounded-md px-3 border hover:bg-muted"
+              onClick={() => setShowPicker((v) => !v)}
+            >
+              {showPicker ? 'Close' : 'Custom…'}
+            </button>
           </div>
-        )}
-      </section>
+          {showPicker && (
+            <div className="mt-4 grid gap-2 sm:grid-cols-[auto_1fr] items-start">
+              <HexColorPicker
+                color={accentEditingTheme === 'light' ? accentLightHex : accentDarkHex}
+                onChange={(hex) => saveAccent(hex, accentEditingTheme)}
+              />
+              <div className="sm:ml-4">
+                <div className="text-xs text-muted-foreground">
+                  Selected ({accentEditingTheme}): {accentEditingTheme === 'light' ? accentLightHex : accentDarkHex}
+                </div>
+                <div className="mt-2 inline-flex items-center gap-2">
+                  <span className="rounded-full border border-[hsl(var(--accent)/.35)] bg-[hsl(var(--accent)/.12)] text-[hsl(var(--accent))] px-2 py-0.5 text-xs">Preview</span>
+                  <button className="btn-primary rounded-md px-3 py-1 text-xs shadow">Primary</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </AppCard>
+      </div>
     </div>
   )
 }

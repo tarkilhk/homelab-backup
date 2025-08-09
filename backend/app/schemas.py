@@ -169,3 +169,15 @@ class RunWithJob(Run):
     """Schema for Run with related Job."""
     
     job: Job = Field(..., description="Associated job")
+
+
+# Dashboard/supporting schemas
+class UpcomingJob(BaseModel):
+    """Lightweight schema representing the next scheduled run for a job."""
+
+    job_id: int = Field(..., description="Job ID")
+    name: str = Field(..., description="Job name")
+    target_id: int = Field(..., description="Associated target ID")
+    next_run_at: datetime = Field(..., description="Next scheduled run time")
+    
+    model_config = ConfigDict(from_attributes=True)

@@ -2,7 +2,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, type Target, type PluginInfo } from '../api/client'
 import { useEffect, useState } from 'react'
 import { Button } from '../components/ui/button'
-import { Trash2, Pencil, Calendar, Check, X } from 'lucide-react'
+import { Trash2, Pencil, Calendar, Check, X, Plus } from 'lucide-react'
+import AppCard from '../components/ui/AppCard'
+import IconButton from '../components/IconButton'
 import { Link } from 'react-router-dom'
 
 export default function TargetsPage() {
@@ -133,15 +135,19 @@ export default function TargetsPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold">Targets</h1>
-        <p className="text-sm text-gray-600">List and create backup targets.</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold">Targets</h1>
+          <p className="text-sm text-muted-foreground">List and create backup targets.</p>
+        </div>
+        <IconButton variant="accent" aria-label="Add Target">
+          <Plus className="h-4 w-4" aria-hidden="true" /> Add Target
+        </IconButton>
       </div>
 
-      <section className="rounded-md border">
-        <div className="p-4 border-b font-medium">Create Target</div>
+      <AppCard title={editingId ? 'Edit Target' : 'Create Target'} description="Configure a plugin and its options">
           <form
-          className="p-4 grid gap-4 sm:grid-cols-2"
+          className="grid gap-4 sm:grid-cols-2"
           onSubmit={(e) => {
             e.preventDefault()
             const payload = {
@@ -312,16 +318,15 @@ export default function TargetsPage() {
             )}
           </div>
         </form>
-      </section>
+      </AppCard>
 
-      <section className="rounded-md border overflow-x-auto">
-        <div className="p-4 border-b font-medium">Existing Targets</div>
+      <AppCard title="Existing Targets" className="overflow-x-auto">
         {isLoading ? (
           <div className="p-4 text-sm text-gray-600">Loading...</div>
         ) : error ? (
           <div className="p-4 text-sm text-red-600">{String(error)}</div>
         ) : (
-          <table className="min-w-full text-sm">
+           <table className="min-w-full text-sm">
             <thead className="bg-muted/50 text-left">
               <tr>
                 <th className="px-4 py-2">Name</th>
@@ -385,7 +390,7 @@ export default function TargetsPage() {
             </tbody>
           </table>
         )}
-      </section>
+      </AppCard>
     </div>
   )
 }
