@@ -114,6 +114,8 @@ export const api = {
   updateJob: (id: number, payload: JobUpdate) => request<Job>(`/jobs/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteJob: (id: number) => request<void>(`/jobs/${id}`, { method: 'DELETE' }),
   runJobNow: (id: number) => request<Run>(`/jobs/${id}/run`, { method: 'POST' }),
+  // Dashboard helpers
+  upcomingJobs: () => request<Array<{ job_id: number; name: string; target_id: number; next_run_at: string }>>('/jobs/upcoming'),
 }
 
 

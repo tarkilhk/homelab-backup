@@ -1,12 +1,15 @@
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useLocation } from 'react-router-dom'
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type JobCreate, type Job, type Target } from '../api/client'
 import { formatLocalDateTime } from '../lib/dates'
 import { Button } from '../components/ui/button'
 import { Trash2, Pencil, Play, Check, X } from 'lucide-react'
+import AppCard from '../components/ui/AppCard'
 
 export default function JobsPage() {
+  const location = useLocation() as unknown as { state?: { openJobId?: number } }
+  const preselectJobId = location?.state?.openJobId
   const { id } = useParams()
   const qc = useQueryClient()
   const targetId = useMemo(() => (id !== undefined ? Number(id) : null), [id])
@@ -263,6 +266,19 @@ export default function JobsPage() {
     },
   })
 
+  // If navigated with openJobId, preload the edit form with that job
+  useEffect(() => {
+    if (!preselectJobId || !Array.isArray(jobs)) return
+    const j = (jobs as Job[]).find((it) => it.id === preselectJobId)
+    if (j) {
+      setEditingId(j.id)
+      setForm({ name: j.name, schedule_cron: j.schedule_cron, enabled: j.enabled })
+      if (!Number.isFinite(targetId as number)) {
+        setSelectedTargetId(j.target_id)
+      }
+    }
+  }, [preselectJobId, jobs, targetId])
+
   // Trigger a manual run for a job
   const runNowMut = useMutation({
     mutationFn: (id: number) => api.runJobNow(id),
@@ -277,7 +293,7 @@ export default function JobsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Jobs</h1>
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-muted-foreground">
             {Number.isFinite(targetId as number)
               ? 'Create a job for this target.'
               : 'Pick a target and create a job.'}
@@ -286,14 +302,9 @@ export default function JobsPage() {
         <Link to="/targets" className="text-sm underline">Back to Targets</Link>
       </div>
 
-      <section className="rounded-md border">
-        <div className="p-4 border-b font-medium">
-          {Number.isFinite(targetId as number)
-            ? (target ? target.name : 'Target')
-            : 'New Job'}
-        </div>
+      <AppCard title={editingId ? 'Update Job' : (Number.isFinite(targetId as number) ? (target ? target.name : 'Target') : 'New Job')}>
         <form
-          className="p-4 grid gap-4 sm:grid-cols-2"
+          className="grid gap-4 sm:grid-cols-2"
           onSubmit={(e) => {
             e.preventDefault()
             if (editingId) {
@@ -426,12 +437,11 @@ export default function JobsPage() {
             )}
           </div>
         </form>
-      </section>
+      </AppCard>
 
       {/* Jobs table */}
-      <section className="rounded-md border">
-        <div className="p-4 border-b font-medium">Existing Jobs</div>
-        <div className="p-4 space-y-3 overflow-x-auto">
+      <AppCard title="Existing Jobs" className="overflow-x-auto">
+        <div className="space-y-3">
           {/* Filters */}
           <div className="grid gap-3 md:grid-cols-3">
             <div className="grid gap-1">
@@ -472,7 +482,7 @@ export default function JobsPage() {
             </div>
           </div>
 
-          <table className="w-full text-sm">
+           <table className="w-full text-sm">
             <thead>
               <tr className="text-left">
                 <th className="px-4 py-2 w-[30%]">Name</th>
@@ -570,7 +580,7 @@ export default function JobsPage() {
             </tbody>
           </table>
         </div>
-      </section>
+      </AppCard>
     </div>
   )
 }

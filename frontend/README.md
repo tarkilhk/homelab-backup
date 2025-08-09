@@ -1,3 +1,19 @@
+## Theming
+
+This UI uses CSS variables mapped to Tailwind tokens. Dark theme is defaulted via `data-theme="dark"` when system prefers dark.
+
+- Tokens are defined in `src/styles/theme.css`:
+  - `--bg, --card, --muted, --muted-foreground, --foreground, --border, --ring`
+  - `--accent, --accent-foreground, --accent-soft`
+
+Tailwind v4 reads these via `@theme` in `src/index.css` so utilities like `bg-background`, `text-foreground`, `border-border`, and `text-[hsl(var(--accent))]` work.
+
+### Changing the accent
+
+Use the Settings → Accent color selector. It writes a hex string to localStorage and updates `--accent` at runtime.
+
+Programmatically, you can call `applyAccent('#14b8a6')` from `src/lib/theme.ts`.
+
 # React + TypeScript + Vite
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.

@@ -1,33 +1,33 @@
 @import "tailwindcss";
+@import "./styles/theme.css";
 
 /* Map CSS variables to Tailwind v4 design tokens so utilities like border-border work */
 @theme {
-  --color-background: hsl(var(--background));
+  --color-background: hsl(var(--bg));
   --color-foreground: hsl(var(--foreground));
   --color-muted: hsl(var(--muted));
   --color-muted-foreground: hsl(var(--muted-foreground));
   --color-border: hsl(var(--border));
+  --color-accent: hsl(var(--accent));
 }
 
 @layer base {
-  :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --border: 214.3 31.8% 91.4%;
-    --accent: 262 83% 58%;
-  }
-  [data-theme="dark"] {
-    --background: 224 71% 4%;
-    --foreground: 213 31% 91%;
-    --muted: 223 47% 11%;
-    --muted-foreground: 215.4 16.3% 56.9%;
-    --border: 216 34% 17%;
-  }
   * { @apply border-border; }
   html, body, #root { height: 100%; }
   body { @apply bg-background text-foreground; }
+  /* When the theme attribute changes, let the accent smoothly adapt */
+  :root, [data-theme] {
+    transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
+  }
+  /* Global card surface effect */
+  .surface-card {
+    /* Fallback-friendly mix: background with a ~30% accent tint + soft radial glows */
+    background:
+      radial-gradient(1200px 500px at -10% -10%, hsl(var(--accent) / var(--card-glow-1)), transparent 45%),
+      radial-gradient(900px 400px at 110% 110%, hsl(var(--accent) / var(--card-glow-2)), transparent 40%),
+      linear-gradient(0deg, hsl(var(--accent) / var(--card-overlay-alpha)), hsl(var(--accent) / var(--card-overlay-alpha))),
+      hsl(var(--bg));
+  }
 }
 
 @layer utilities {
@@ -66,4 +66,32 @@
   }
   .text-accent { color: hsl(var(--accent)); }
   .ring-accent { --tw-ring-color: hsl(var(--accent)); }
+
+  /* Sidebar styles */
+  .sidebar-active {
+    background-color: hsl(var(--accent) / 0.12);
+  }
+  /* Stronger selected bg with subtle left-to-right gradient */
+  .sidebar-selected {
+    background-image: linear-gradient(90deg, hsl(var(--accent) / 0.20), hsl(var(--accent) / 0.08));
+  }
+  /* Lighter hover for non-active */
+  .sidebar-hover:hover {
+    background-color: hsl(var(--accent) / 0.08);
+  }
+
+  /* Subtle gradient background for the left sidebar */
+  .sidebar-surface {
+    background:
+      /* very soft accent glow in the top-left */
+      radial-gradient(800px 400px at -10% -10%, hsl(var(--accent) / 0.12), transparent 60%),
+      /* faint balancing glow bottom-right */
+      radial-gradient(600px 400px at 120% 120%, hsl(var(--accent) / 0.06), transparent 55%),
+      /* gentle top-to-bottom tint that fades into app background */
+      linear-gradient(
+        180deg,
+        color-mix(in oklab, hsl(var(--bg)) 86%, hsl(var(--accent)) 14%),
+        hsl(var(--bg))
+      );
+  }
 }

@@ -1,0 +1,41 @@
+/* Design tokens as CSS variables; dark by default via data-theme attr */
+@layer base {
+  :root {
+    --bg: 0 0% 100%;
+    --card: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --border: 214.3 31.8% 91.4%;
+    --ring: 215 20% 65%;
+    /* Accent (default teal). Can be changed in Options */
+    --accent: 174 60% 45%;
+    --accent-foreground: 0 0% 100%;
+    --accent-soft: 174 60% 45% / 0.12;
+    /* Card surface mixes background (70%) with accent (30%) */
+    --card-surface: color-mix(in oklab, hsl(var(--bg)) 70%, hsl(var(--accent)) 30%);
+    /* Adaptive alphas for overlays and glows (light theme defaults) */
+    --card-overlay-alpha: 0.16;
+    --card-glow-1: 0.12;
+    --card-glow-2: 0.08;
+  }
+
+  [data-theme="dark"] {
+    --bg: 224 71% 4%;
+    /* Make cards stand out more from the app background */
+    --card: 224 71% 10%;
+    --foreground: 213 31% 91%;
+    --muted: 223 47% 11%;
+    --muted-foreground: 215.4 16.3% 65.9%;
+    --border: 216 34% 17%;
+    --ring: 216 34% 24%;
+    /* Keep same mixing rule so it responds to accent changes */
+    --card-surface: color-mix(in oklab, hsl(var(--bg)) 70%, hsl(var(--accent)) 30%);
+    /* In dark theme, clamp toward background by reducing overlay/glow alphas to avoid too-bright cards */
+    --card-overlay-alpha: 0.10; /* was 0.16 for light */
+    --card-glow-1: 0.10;       /* top-left glow */
+    --card-glow-2: 0.06;       /* bottom-right glow */
+  }
+}
+
+

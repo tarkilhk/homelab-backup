@@ -1,9 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { api, type RunWithJob, type Target } from '../api/client'
 import { formatLocalDateTime } from '../lib/dates'
+import { useLocation } from 'react-router-dom'
 
 export default function RunsPage() {
+  const location = useLocation() as unknown as { state?: { openRunId?: number } }
+  const openRunId = location?.state?.openRunId
   const [status, setStatus] = useState<string>('')
   const [startDate, setStartDate] = useState<string>('')
   const [endDate, setEndDate] = useState<string>('')
@@ -38,7 +41,12 @@ export default function RunsPage() {
     items.sort((a, b) => new Date(b.started_at).getTime() - new Date(a.started_at).getTime())
     return items.slice(0, 20)
   }, [data])
-
+  // If navigated here with an openRunId (from dashboard), auto-open details
+  useEffect(() => {
+    if (!openRunId) return
+    const found = (data ?? []).find((r) => r.id === openRunId) || runs.find((r) => r.id === openRunId)
+    if (found) setDetailsRun(found)
+  }, [openRunId, data, runs])
 
   // We now use simple date-only inputs. Normalization to start/end of day
   // happens right before sending the API request (see queryFn below).
@@ -47,7 +55,7 @@ export default function RunsPage() {
     <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-semibold">Runs</h1>
-        <p className="text-sm text-gray-600">Last 20 runs.</p>
+        <p className="text-sm text-muted-foreground">Last 20 runs.</p>
       </div>
 
       <section className="rounded-md border overflow-x-auto">
@@ -109,7 +117,7 @@ export default function RunsPage() {
         </div>
         <table className="min-w-full text-sm">
           <thead className="bg-muted/50 text-left">
-            <tr>
+               <tr>
               <th className="px-4 py-2">ID</th>
               <th className="px-4 py-2">Job</th>
               <th className="px-4 py-2">Target</th>
