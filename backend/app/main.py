@@ -44,7 +44,7 @@ app = FastAPI(
     title="Homelab Backup API",
     description="Backup system with plugin architecture",
     version="0.1.0",
-    docs_url="/api/docs",
+    docs_url=None,
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
     lifespan=lifespan,
@@ -80,6 +80,18 @@ async def root() -> RedirectResponse:
     """Redirect root to Swagger UI."""
     return RedirectResponse(url="/api/docs")
 
+
+# Custom Swagger UI with favicon pointing to /favicon.ico (served by the frontend/public)
+from fastapi.openapi.docs import get_swagger_ui_html  # noqa: E402
+
+
+@app.get("/api/docs", include_in_schema=False)
+async def custom_swagger_ui_html():
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title=f"{app.title} — Docs",
+        swagger_favicon_url="/favicon.ico",
+    )
 
 # Readiness is provided via health router as /ready
 
