@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, within, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createMemoryRouter, RouterProvider } from 'react-router-dom'
-import DashboardPage from './Dashboard'
+import DashboardPage from '../Dashboard'
 
 // Simplify framer-motion in tests and strip animation props
 vi.mock('framer-motion', () => {
@@ -18,7 +18,7 @@ vi.mock('framer-motion', () => {
 })
 
 // Mock API client used by the page
-vi.mock('../api/client', () => {
+vi.mock('../../api/client', () => {
   return {
     api: {
       listTargets: vi.fn(),
@@ -30,7 +30,7 @@ vi.mock('../api/client', () => {
 })
 
 // Import the mocked api to configure behaviors per test
-import { api } from '../api/client'
+import { api } from '../../api/client'
 
 function renderWithClient(ui: React.ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })

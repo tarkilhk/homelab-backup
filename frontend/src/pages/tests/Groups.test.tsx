@@ -3,8 +3,8 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createMemoryRouter, RouterProvider } from 'react-router-dom'
-import GroupsPage from './Groups'
-import { ConfirmProvider } from '../components/ConfirmProvider'
+import GroupsPage from '../Groups'
+import { ConfirmProvider } from '../../components/ConfirmProvider'
 
 async function defaultFetchStub(url: string, init?: RequestInit) {
   const u = url.toString()
