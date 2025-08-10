@@ -337,7 +337,7 @@ export default function TargetsPage() {
         </AppCard>
       )}
 
-      <AppCard title="Existing Targets" className="overflow-x-auto">
+      <AppCard title="Existing Targets" className="overflow-x-auto ring-0 hover:ring-0 focus-within:ring-0">
         {isLoading ? (
           <div className="p-4 text-sm text-gray-600">Loading...</div>
         ) : error ? (

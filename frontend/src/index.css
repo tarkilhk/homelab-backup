@@ -15,6 +15,11 @@
   * { @apply border-border; }
   html, body, #root { height: 100%; }
   body { @apply bg-background text-foreground; }
+  /* Ensure all interactive buttons show pointer cursor (hand) */
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    @apply cursor-pointer;
+  }
   /* When the theme attribute changes, let the accent smoothly adapt */
   :root, [data-theme] {
     transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
