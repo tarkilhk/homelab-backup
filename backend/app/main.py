@@ -3,10 +3,10 @@
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 import logging
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, FileResponse, Response
+from fastapi.responses import RedirectResponse, FileResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import base64
@@ -14,6 +14,7 @@ import base64
 from app.core.db import init_db, bootstrap_db, SessionLocal
 from app.core.logging import setup_logging
 from app.core.scheduler import get_scheduler, schedule_jobs_on_startup
+from sqlalchemy.exc import IntegrityError
 
 
 @asynccontextmanager
@@ -134,6 +135,12 @@ async def serve_favicon():
 
 # Readiness is provided via health router as /ready
 
+
+# Global exception handlers
+@app.exception_handler(IntegrityError)
+async def handle_integrity_error(_request: Request, exc: IntegrityError) -> JSONResponse:
+    # Standardize DB integrity errors as 409 with readable message
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 if __name__ == "__main__":
     import uvicorn

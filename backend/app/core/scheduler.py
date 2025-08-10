@@ -11,6 +11,8 @@ Responsibilities:
 from __future__ import annotations
 
 import json
+import os
+import hashlib
 import logging
 from datetime import datetime, timezone
 import traceback
@@ -24,6 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
 from app.models import Job as JobModel, Run as RunModel, Target as TargetModel
+from app.domain.enums import RunStatus, TargetRunStatus
 from app.core.plugins.base import BackupContext
 from app.core.plugins.loader import get_plugin
 from app.core.notifier import send_failure_email
@@ -112,7 +115,7 @@ def _create_run(db: Session, job: JobModel, triggered_by: str) -> RunModel:
     run = RunModel(
         job_id=job.id,
         started_at=started_at,
-        status="running",
+        status=RunStatus.RUNNING.value,
         message=f"Run started (triggered_by={triggered_by})",
         logs_text=f"Run started at {started_at.isoformat()} (triggered_by={triggered_by})",
     )
@@ -139,7 +142,7 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
         run_id=run.id,
         target_id=target_id,
         started_at=started_at,
-        status="running",
+        status=TargetRunStatus.RUNNING.value,
         message="Target run started",
         logs_text=f"Target run started at {started_at.isoformat()}",
     )
@@ -203,9 +206,27 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
 
         finished_at = datetime.now(timezone.utc)
         target_run.finished_at = finished_at
-        target_run.status = "success"
+        target_run.status = TargetRunStatus.SUCCESS.value
         target_run.message = "Run completed successfully"
         target_run.artifact_path = artifact_path
+        # Populate artifact size and sha256 if file exists
+        try:
+            if artifact_path and os.path.exists(artifact_path):
+                try:
+                    target_run.artifact_bytes = int(os.path.getsize(artifact_path))
+                except Exception:
+                    target_run.artifact_bytes = None
+                try:
+                    sha256 = hashlib.sha256()
+                    with open(artifact_path, "rb") as fobj:
+                        for chunk in iter(lambda: fobj.read(1024 * 1024), b""):
+                            sha256.update(chunk)
+                    target_run.sha256 = sha256.hexdigest()
+                except Exception:
+                    target_run.sha256 = None
+        except Exception:
+            # Best-effort only; never fail run because of metadata
+            pass
         target_run.logs_text = (target_run.logs_text or "") + f"\nCompleted at {finished_at.isoformat()}"
         db.add(target_run)
         db.commit()
@@ -219,14 +240,15 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
             plugin=plugin_key,
             artifact_path=artifact_path,
         )
-        return {"target_id": target_id, "status": "success", "error": None, "artifact_path": artifact_path}
+        return {"target_id": target_id, "status": TargetRunStatus.SUCCESS.value, "error": None, "artifact_path": artifact_path}
     except KeyError:
         finished_at = datetime.now(timezone.utc)
         artifact_path = f"/backups/job-{job.id}-{int(finished_at.timestamp())}.dummy"
         target_run.finished_at = finished_at
-        target_run.status = "success"
+        target_run.status = TargetRunStatus.SUCCESS.value
         target_run.message = "Run completed successfully (dummy)"
         target_run.artifact_path = artifact_path
+        # Dummy artifacts are not real files; leave metadata unset
         target_run.logs_text = (target_run.logs_text or "") + f"\nCompleted at {finished_at.isoformat()}"
         db.add(target_run)
         db.commit()
@@ -239,11 +261,11 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
             plugin="<missing>",
             artifact_path=artifact_path,
         )
-        return {"target_id": target_id, "status": "success", "error": None, "artifact_path": artifact_path}
+        return {"target_id": target_id, "status": TargetRunStatus.SUCCESS.value, "error": None, "artifact_path": artifact_path}
     except Exception as exc:
         finished_at = datetime.now(timezone.utc)
         target_run.finished_at = finished_at
-        target_run.status = "failed"
+        target_run.status = TargetRunStatus.FAILED.value
         target_run.message = f"Run failed: {exc}"
         target_run.logs_text = (target_run.logs_text or "") + f"\nFailed at {finished_at.isoformat()} with error: {exc}"
         db.add(target_run)
@@ -274,7 +296,7 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
             traceback=tb,
         )
         logger.exception("Target run failed | job_id=%s run_id=%s target_id=%s", job.id, run.id, target_id)
-        return {"target_id": target_id, "status": "failed", "error": str(exc)}
+        return {"target_id": target_id, "status": TargetRunStatus.FAILED.value, "error": str(exc)}
 def _perform_run(db: Session, job: JobModel, triggered_by: str) -> RunModel:
     """Create a Run row, execute the job's plugin, and finalize status.
 
@@ -286,7 +308,7 @@ def _perform_run(db: Session, job: JobModel, triggered_by: str) -> RunModel:
     run = RunModel(
         job_id=job.id,
         started_at=started_at,
-        status="running",
+        status=RunStatus.RUNNING.value,
         message=f"Run started (triggered_by={triggered_by})",
         logs_text=f"Run started at {started_at.isoformat()} (triggered_by={triggered_by})",
     )
@@ -369,9 +391,8 @@ def _perform_run(db: Session, job: JobModel, triggered_by: str) -> RunModel:
 
         finished_at = datetime.now(timezone.utc)
         run.finished_at = finished_at
-        run.status = "success"
+        run.status = RunStatus.SUCCESS.value
         run.message = "Run completed successfully"
-        run.artifact_path = artifact_path
         run.logs_text = (run.logs_text or "") + f"\nCompleted at {finished_at.isoformat()}"
 
         _log_event(
@@ -379,16 +400,14 @@ def _perform_run(db: Session, job: JobModel, triggered_by: str) -> RunModel:
             job_id=job.id,
             run_id=run.id,
             plugin=plugin_key,
-            artifact_path=artifact_path,
         )
     except KeyError:
         # Unknown plugin — keep legacy dummy success behavior to satisfy tests.
         finished_at = datetime.now(timezone.utc)
         artifact_path = f"/backups/job-{job.id}-{int(finished_at.timestamp())}.dummy"
         run.finished_at = finished_at
-        run.status = "success"
+        run.status = RunStatus.SUCCESS.value
         run.message = "Run completed successfully (dummy)"
-        run.artifact_path = artifact_path
         run.logs_text = (run.logs_text or "") + f"\nCompleted at {finished_at.isoformat()}"
 
         _log_event(
@@ -396,12 +415,11 @@ def _perform_run(db: Session, job: JobModel, triggered_by: str) -> RunModel:
             job_id=job.id,
             run_id=run.id,
             plugin="<missing>",
-            artifact_path=artifact_path,
         )
     except Exception as exc:  # Catch-all failures → mark failed
         finished_at = datetime.now(timezone.utc)
         run.finished_at = finished_at
-        run.status = "failed"
+        run.status = RunStatus.FAILED.value
         run.message = f"Run failed: {exc}"
         run.logs_text = (run.logs_text or "") + f"\nFailed at {finished_at.isoformat()} with error: {exc}"
 
@@ -443,17 +461,16 @@ def _perform_run(db: Session, job: JobModel, triggered_by: str) -> RunModel:
     except Exception:
         duration_sec = None
 
-    _log_event(
-        "run_finished",
-        job_id=job.id,
-        run_id=run.id,
-        triggered_by=triggered_by,
-        finished_at=run.finished_at,
-        status=run.status,
-        artifact_path=run.artifact_path,
-        duration_sec=duration_sec,
-        message=run.message,
-    )
+        _log_event(
+            "run_finished",
+            job_id=job.id,
+            run_id=run.id,
+            triggered_by=triggered_by,
+            finished_at=run.finished_at,
+            status=run.status,
+            duration_sec=duration_sec,
+            message=run.message,
+        )
 
     return run
 
@@ -479,31 +496,39 @@ def run_job_immediately(db: Session, job_id: int, triggered_by: str = "manual") 
     # Aggregate status to parent run
     try:
         run.finished_at = datetime.now(timezone.utc)
-        any_fail = any(r.get("status") == "failed" for r in results)
-        run.status = "failed" if any_fail else "success"
-        first_ok = next((r for r in results if r.get("status") == "success" and r.get("artifact_path")), None)
-        if first_ok:
-            run.artifact_path = first_ok.get("artifact_path")  # type: ignore[assignment]
+        total = len(results)
+        success_count = sum(1 for r in results if r.get("status") == TargetRunStatus.SUCCESS.value)
+        fail_count = sum(1 for r in results if r.get("status") == TargetRunStatus.FAILED.value)
+        any_fail = fail_count > 0
+        any_success = success_count > 0
+        run.status = (
+            RunStatus.PARTIAL.value if (any_fail and any_success) else (RunStatus.FAILED.value if any_fail else RunStatus.SUCCESS.value)
+        )
+        if run.status == RunStatus.SUCCESS.value:
+            run.message = f"Completed successfully for {success_count}/{total} targets"
+        elif run.status == RunStatus.PARTIAL.value:
+            run.message = f"Partial: {success_count} succeeded, {fail_count} failed (of {total})"
+        else:
+            run.message = f"Failed: {fail_count}/{total} targets failed"
         db.add(run)
         db.commit()
         db.refresh(run)
     except Exception:
         pass
-    _log_event(
-        "run_finished",
-        job_id=job.id,
-        run_id=run.id,
-        triggered_by=triggered_by,
-        finished_at=run.finished_at,
-        status=run.status,
-        artifact_path=run.artifact_path,
-        duration_sec=(
-            (run.finished_at - run.started_at).total_seconds()
-            if run.started_at and run.finished_at
-            else None
-        ),
-        message=run.message,
-    )
+        _log_event(
+            "run_finished",
+            job_id=job.id,
+            run_id=run.id,
+            triggered_by=triggered_by,
+            finished_at=run.finished_at,
+            status=run.status,
+            duration_sec=(
+                (run.finished_at - run.started_at).total_seconds()
+                if run.started_at and run.finished_at
+                else None
+            ),
+            message=run.message,
+        )
     _log_event("manual_run_complete", job_id=job.id, run_id=run.id, status=run.status)
     return run
 
@@ -540,11 +565,20 @@ def scheduled_tick_with_session(db: Session, job_id: int) -> dict:
     results = summary.get("results", [])
     try:
         run.finished_at = datetime.now(timezone.utc)
-        any_fail = any(r.get("status") == "failed" for r in results)
-        run.status = "failed" if any_fail else "success"
-        first_ok = next((r for r in results if r.get("status") == "success" and r.get("artifact_path")), None)
-        if first_ok:
-            run.artifact_path = first_ok.get("artifact_path")  # type: ignore[assignment]
+        total = len(results)
+        success_count = sum(1 for r in results if r.get("status") == TargetRunStatus.SUCCESS.value)
+        fail_count = sum(1 for r in results if r.get("status") == TargetRunStatus.FAILED.value)
+        any_fail = fail_count > 0
+        any_success = success_count > 0
+        run.status = (
+            RunStatus.PARTIAL.value if (any_fail and any_success) else (RunStatus.FAILED.value if any_fail else RunStatus.SUCCESS.value)
+        )
+        if run.status == RunStatus.SUCCESS.value:
+            run.message = f"Completed successfully for {success_count}/{total} targets"
+        elif run.status == RunStatus.PARTIAL.value:
+            run.message = f"Partial: {success_count} succeeded, {fail_count} failed (of {total})"
+        else:
+            run.message = f"Failed: {fail_count}/{total} targets failed"
         db.add(run)
         db.commit()
         db.refresh(run)
@@ -562,7 +596,6 @@ def scheduled_tick_with_session(db: Session, job_id: int) -> dict:
             triggered_by="scheduler",
             finished_at=run.finished_at,
             status=run.status,
-            artifact_path=run.artifact_path,
             duration_sec=duration_sec,
             message=run.message,
         )

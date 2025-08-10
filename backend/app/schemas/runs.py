@@ -4,17 +4,15 @@ from typing import Optional, List
 from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field, ConfigDict
+from app.domain.enums import RunStatus
 
 
 class RunBase(BaseModel):
     """Base schema for Run model."""
 
     job_id: int = Field(..., description="ID of the associated job")
-    status: str = Field(..., description="Status of the run ('running', 'success', 'failed')")
+    status: RunStatus = Field(..., description="Status of the run")
     message: Optional[str] = Field(None, description="Error message or success message")
-    artifact_path: Optional[str] = Field(None, description="Path to backup artifact")
-    artifact_bytes: Optional[int] = Field(None, description="Size of artifact in bytes")
-    sha256: Optional[str] = Field(None, description="SHA256 hash of the artifact")
     logs_text: Optional[str] = Field(None, description="Log output from the backup process")
 
 
@@ -28,12 +26,9 @@ class RunUpdate(BaseModel):
     """Schema for updating a Run."""
 
     job_id: Optional[int] = Field(None, description="ID of the associated job")
-    status: Optional[str] = Field(None, description="Status of the run")
+    status: Optional[RunStatus] = Field(None, description="Status of the run")
     finished_at: Optional[datetime] = Field(None, description="Completion timestamp")
     message: Optional[str] = Field(None, description="Error message or success message")
-    artifact_path: Optional[str] = Field(None, description="Path to backup artifact")
-    artifact_bytes: Optional[int] = Field(None, description="Size of artifact in bytes")
-    sha256: Optional[str] = Field(None, description="SHA256 hash of the artifact")
     logs_text: Optional[str] = Field(None, description="Log output from the backup process")
 
 

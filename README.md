@@ -72,7 +72,7 @@ The system supports adding new plugins to back up different services. See `ADDIN
 - `backend/`: FastAPI app, APScheduler, SQLite via SQLAlchemy
 - `frontend/`: React + Vite UI
 - `deploy/`: `docker-compose.yml` for local/NAS deployment
-- `db/` and `db_default/`: local database folders (mapped in compose)
+- `db/`: local database folders (mapped in compose)
 
 ## License
 GPL-3.0-or-later (see `LICENSE`).

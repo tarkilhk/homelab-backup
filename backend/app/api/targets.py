@@ -27,6 +27,7 @@ router = APIRouter(prefix="/targets", tags=["targets"])
 
 @router.get("/", response_model=List[Target])
 def list_targets(db: Session = Depends(get_session)) -> List[TargetModel]:
+    # Service will compute derived fields: has_schedule, schedule_names
     svc = TargetService(db)
     return svc.list()
 
@@ -59,8 +60,10 @@ def update_target(target_id: int, payload: TargetUpdate, db: Session = Depends(g
     update_data = payload.model_dump(exclude_unset=True)
     try:
         return svc.update(target_id, **update_data)
-    except KeyError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target not found")
+    except KeyError as exc:
+        if str(exc).strip("'") == "target_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target not found")
+        raise
 
 
 @router.delete("/{target_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -68,8 +71,10 @@ def delete_target(target_id: int, db: Session = Depends(get_session)) -> None:
     svc = TargetService(db)
     try:
         svc.delete(target_id)
-    except KeyError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target not found")
+    except KeyError as exc:
+        if str(exc).strip("'") == "target_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target not found")
+        raise
     return None
 
 
@@ -84,6 +89,16 @@ async def test_target_connectivity(target_id: int, db: Session = Depends(get_ses
         raise HTTPException(status_code=code, detail="Unknown plugin for target" if str(exc) == "plugin_not_found" else "Target not found")
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@router.get("/{target_id}/schedules", response_model=List[str])
+def list_target_schedules(target_id: int, db: Session = Depends(get_session)) -> List[str]:
+    # Ensure target exists
+    target = db.get(TargetModel, target_id)
+    if target is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target not found")
+    svc = TargetService(db)
+    return svc.list_enabled_job_names_for_target(target_id)
 
 
 @router.get("/{target_id}/tags", response_model=List[TargetTagWithOrigin])

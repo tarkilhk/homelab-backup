@@ -20,8 +20,10 @@ export default function AppCard({ title, description, className, headerRight, on
       transition={{ duration: 0.18, ease: 'easeOut' }}
       whileHover={isInteractive ? { y: -2 } : undefined}
       className={cn(
-        'rounded-2xl border surface-card shadow-[0_6px_20px_rgba(0,0,0,.35)] ring-0 focus-within:ring-2 ring-[hsl(var(--accent))] transition-shadow',
-        isInteractive && 'hover:ring-2',
+        // Only show accent rings for interactive cards. Non-clickable cards
+        // should not display a focus-within ring when inner inputs are focused.
+        'rounded-2xl border surface-card shadow-[0_6px_20px_rgba(0,0,0,.35)] transition-shadow',
+        isInteractive && 'ring-0 hover:ring-2 ring-[hsl(var(--accent))]',
         className
       )}
     >

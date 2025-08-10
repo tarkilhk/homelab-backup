@@ -34,7 +34,23 @@ class JobService:
 
     # CRUD
     def list(self) -> List[JobModel]:
-        return list(self.db.query(JobModel).all())
+        """List jobs excluding internal archive sentinels.
+
+        We identify archive sentinels as jobs we create during deletion to keep
+        historical runs: enabled == False, cron == "0 0 1 1 *", and name in
+        {"N/A"}.
+        """
+        q = (
+            self.db.query(JobModel)
+            .filter(
+                ~(
+                    JobModel.enabled.is_(False)
+                    & (JobModel.schedule_cron == "0 0 1 1 *")
+                    & (JobModel.name.in_(["N/A"]))
+                )
+            )
+        )
+        return list(q.all())
 
     def get(self, job_id: int) -> Optional[JobModel]:
         return self.db.get(JobModel, job_id)
@@ -87,7 +103,8 @@ class JobService:
         job = self.db.get(JobModel, job_id)
         if job is None:
             raise KeyError("job_not_found")
-        # Preserve historical runs by reassigning them to an archived sentinel job
+        # Preserve historical runs by reassigning them to a sentinel job under a
+        # dedicated hidden 'archived' tag. Create it lazily if missing.
         archived_tag = self.db.query(TagModel).filter(TagModel.slug == "archived").first()
         if archived_tag is None:
             archived_tag = TagModel(display_name="Archived")
@@ -96,14 +113,27 @@ class JobService:
             self.db.refresh(archived_tag)
         sentinel = (
             self.db.query(JobModel)
-            .filter(JobModel.tag_id == archived_tag.id, JobModel.name == "Archived Job")
+            .filter(
+                JobModel.tag_id == archived_tag.id,
+                JobModel.enabled.is_(False),
+                JobModel.schedule_cron == "0 0 1 1 *",
+                JobModel.name.in_(["N/A"]),
+            )
             .first()
         )
         if sentinel is None:
-            sentinel = JobModel(tag_id=archived_tag.id, name="Archived Job", schedule_cron="0 0 1 1 *", enabled=False)
+            # Create a new sentinel with the preferred display name
+            sentinel = JobModel(tag_id=archived_tag.id, name="N/A", schedule_cron="0 0 1 1 *", enabled=False)
             self.db.add(sentinel)
             self.db.commit()
             self.db.refresh(sentinel)
+        else:
+            # Migrate older sentinel name to the new display value for consistency
+            if sentinel.name != "N/A":
+                sentinel.name = "N/A"
+                self.db.add(sentinel)
+                self.db.commit()
+                self.db.refresh(sentinel)
         # Reassign runs to sentinel before deleting the job
         self.db.query(RunModel).filter(RunModel.job_id == job.id).update({RunModel.job_id: sentinel.id}, synchronize_session="fetch")
         self.db.commit()

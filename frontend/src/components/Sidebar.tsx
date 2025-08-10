@@ -1,6 +1,6 @@
-import { Link, NavLink } from 'react-router-dom'
+import { Link, NavLink, useLocation } from 'react-router-dom'
 import { cn } from '../lib/cn'
-import { Home, Target, ListChecks, Timer, Settings } from 'lucide-react'
+import { Home, Target, ListChecks, Timer, Settings, FolderTree } from 'lucide-react'
 import logoUrl from '../assets/homelab-backup-logo.png'
 
 type Item = { to: string; label: string; icon: React.ComponentType<any> }
@@ -16,6 +16,8 @@ const groups: { header: string; items: Item[] }[] = [
     header: 'Features',
     items: [
       { to: '/targets', label: 'Targets', icon: Target },
+      { to: '/groups', label: 'Groups', icon: FolderTree },
+      // { to: '/tags', label: 'Tags', icon: Tags },
       { to: '/jobs', label: 'Jobs', icon: ListChecks },
       { to: '/runs', label: 'Runs', icon: Timer },
     ],
@@ -29,6 +31,7 @@ const groups: { header: string; items: Item[] }[] = [
 ]
 
 export default function Sidebar() {
+  const { pathname } = useLocation()
   return (
     <div className="h-full flex flex-col">
       {/* Brand */}
@@ -55,11 +58,17 @@ export default function Sidebar() {
                 <li key={it.to}>
                   <NavLink
                     to={it.to}
-                    end={it.to === '/'}
-                    className={({ isActive }) => cn(
-                      'group flex items-center gap-3 rounded-md px-3 py-2.5 text-[15px] font-medium transition-colors',
-                      'sidebar-hover',
-                      isActive && 'sidebar-selected border-l-2 border-[hsl(var(--accent))]')}
+                    end
+                    className={({ isActive }) => {
+                      // Treat target-scoped jobs route as active for the Jobs menu item
+                      const alsoActive = it.to === '/jobs' && /^\/targets\/\d+\/jobs\/?$/.test(pathname)
+                      const active = isActive || alsoActive
+                      return cn(
+                        'group flex items-center gap-3 rounded-md px-3 py-2.5 text-[15px] font-medium transition-colors',
+                        'sidebar-hover',
+                        active && 'sidebar-selected border-l-2 border-[hsl(var(--accent))]'
+                      )
+                    }}
                   >
                     <it.icon className="h-4 w-4 text-[hsl(var(--accent))]" aria-hidden="true" />
                     <span>{it.label}</span>

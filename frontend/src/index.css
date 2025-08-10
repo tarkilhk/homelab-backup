@@ -99,4 +99,37 @@
         hsl(var(--bg))
       );
   }
+
+  /* The default OS selection color inside <select multiple> looks out of place.
+     Normalize option selection to use our theme accent with accessible contrast. */
+  select[multiple] {
+    /* Ensure background inherits from theme, not OS */
+    background-color: hsl(var(--bg));
+    color: hsl(var(--foreground));
+    /* Remove native styling so our colors are used consistently */
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+  }
+  select[multiple] option { 
+    background-color: hsl(var(--bg));
+  }
+  select[multiple] option:checked {
+    background-color: hsl(var(--accent) / 0.22) !important;
+    color: hsl(var(--accent-foreground)) !important;
+  }
+  /* Improve focus outline to align with theme */
+  select[multiple]:focus {
+    outline: 2px solid hsl(var(--accent));
+    outline-offset: 2px;
+  }
+  /* Some engines reapply native highlight when focused; force theme color */
+  select[multiple]:focus option:checked {
+    background-color: hsl(var(--accent) / 0.22) !important;
+    color: hsl(var(--accent-foreground)) !important;
+  }
+  /* Hover feedback */
+  select[multiple] option:hover { 
+    background-color: hsl(var(--accent) / 0.10) !important;
+  }
 }

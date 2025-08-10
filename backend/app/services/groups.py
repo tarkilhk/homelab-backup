@@ -23,6 +23,26 @@ class GroupService:
     def create(self, name: str, description: Optional[str] = None) -> Group:
         g = Group(name=name, description=description)
         self.db.add(g)
+        self.db.flush()  # assign group id
+
+        # Auto-tag: create or reuse Tag with slugified name of group
+        slug_str = slugify(name)
+        tag = self.db.query(Tag).filter(Tag.slug == slug_str).one_or_none()
+        if tag is None:
+            tag = Tag(display_name=name)
+            self.db.add(tag)
+            self.db.flush()
+
+        # Link GroupTag idempotently
+        exists = (
+            self.db.query(GroupTag.id)
+            .filter(GroupTag.group_id == g.id, GroupTag.tag_id == tag.id)
+            .first()
+            is not None
+        )
+        if not exists:
+            self.db.add(GroupTag(group_id=g.id, tag_id=tag.id))
+
         self.db.commit()
         self.db.refresh(g)
         return g
@@ -49,12 +69,30 @@ class GroupService:
         g = self.db.get(Group, group_id)
         if g is None:
             return False
-        # Block delete if group has targets
-        has_targets = self.db.query(Target.id).filter(Target.group_id == group_id).first() is not None
-        if has_targets:
-            raise IntegrityError("Cannot delete non-empty group", params=None, orig=None)  # type: ignore[arg-type]
+        # Detach all targets from this group
+        targets: list[Target] = self.db.query(Target).filter(Target.group_id == group_id).all()
+        for tgt in targets:
+            tgt.group_id = None
+        self.db.flush()
+        # Explicitly remove GROUP-origin TargetTag rows contributed by this group
+        self.db.query(TargetTag).filter(
+            TargetTag.origin == "GROUP", TargetTag.source_group_id == group_id
+        ).delete(synchronize_session="fetch")
+        # Capture the group's auto-tag id (slug of group name) for cleanup after delete
+        auto_tag = self.db.query(Tag).filter(Tag.slug == slugify(g.name)).one_or_none()
+
+        # Deleting the group will cascade delete `group_tags` and any TargetTag rows for this group
         self.db.delete(g)
         self.db.commit()
+
+        # Best-effort: delete the associated tag if it exists and is not referenced by jobs or target auto-tags
+        if auto_tag is not None:
+            from sqlalchemy.exc import IntegrityError
+            try:
+                self.db.delete(auto_tag)
+                self.db.commit()
+            except IntegrityError:
+                self.db.rollback()
         return True
 
     # Tag management

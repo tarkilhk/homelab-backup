@@ -32,6 +32,8 @@ logger.info(
 
 def _ensure_dir(path: Path) -> tuple[bool, str]:
     try:
+        if not path.exists():
+            logger.warning("DB dir does not exist: %s. Attempting to create and fall back to default", path)
         path.mkdir(parents=True, exist_ok=True)
         if not os.access(path, os.W_OK):
             return False, "directory not writable"

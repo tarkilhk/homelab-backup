@@ -58,8 +58,13 @@ def update_job(job_id: int, payload: JobUpdate, db: Session = Depends(get_sessio
     update_data = payload.model_dump(exclude_unset=True)
     try:
         return svc.update(job_id, **update_data)
-    except KeyError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    except KeyError as exc:
+        key = str(exc).strip("'")
+        if key == "job_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+        if key == "tag_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
+        raise
 
 
 @router.delete("/{job_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -67,8 +72,10 @@ def delete_job(job_id: int, db: Session = Depends(get_session)) -> None:
     svc = JobService(db)
     try:
         svc.delete(job_id)
-    except KeyError:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    except KeyError as exc:
+        if str(exc).strip("'") == "job_not_found":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+        raise
     return None
 
 
