@@ -21,6 +21,7 @@ class RunService:
         start_dt: Optional[datetime] = None,
         end_dt: Optional[datetime] = None,
         target_id: Optional[int] = None,
+        tag_id: Optional[int] = None,
     ) -> List[RunModel]:
         query = (
             self.db.query(RunModel)
@@ -39,6 +40,8 @@ class RunService:
                 query.join(TargetTagModel, TargetTagModel.tag_id == JobModel.tag_id)
                 .filter(TargetTagModel.target_id == target_id)
             )
+        if tag_id:
+            query = query.filter(JobModel.tag_id == tag_id)
         query = query.order_by(RunModel.started_at.desc())
         return list(query.all())
 

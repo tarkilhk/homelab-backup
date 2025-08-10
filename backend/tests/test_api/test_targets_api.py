@@ -91,3 +91,40 @@ def test_targets_test_endpoint(client: TestClient, monkeypatch) -> None:
     assert r.status_code == 404
 
 
+def test_targets_has_schedule_computed(client: TestClient) -> None:
+    # Create a target T1
+    r = client.post(
+        "/api/v1/targets/",
+        json={"name": "T1", "plugin_name": "dummy", "plugin_config_json": "{}"},
+    )
+    assert r.status_code == 201
+    t1 = r.json()
+
+    # Initially no jobs -> schedules endpoint returns empty list
+    r = client.get(f"/api/v1/targets/{t1['id']}/schedules")
+    assert r.status_code == 200
+    assert r.json() == []
+
+    # Create a DIRECT tag attachment and a job for that tag
+    r = client.post("/api/v1/targets/%d/tags" % t1["id"], json={"tag_names": ["backup"]})
+    assert r.status_code == 200
+
+    # Fetch created tag id via API (black-box test)
+    r = client.get("/api/v1/tags/")
+    assert r.status_code == 200
+    tag_list = r.json()
+    tag = next(t for t in tag_list if t["slug"] == "backup")
+
+    # Create an enabled job for that tag
+    r = client.post(
+        "/api/v1/jobs/",
+        json={"tag_id": tag["id"], "name": "Nightly", "schedule_cron": "* * * * *", "enabled": True},
+    )
+    assert r.status_code == 201, r.text
+
+    # List schedules via dedicated endpoint -> includes job name
+    r = client.get(f"/api/v1/targets/{t1['id']}/schedules")
+    assert r.status_code == 200
+    assert r.json() == ["Nightly"]
+
+

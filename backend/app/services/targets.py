@@ -7,7 +7,7 @@ import logging
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from app.models import Group, Tag, Target, TargetTag, slugify
+from app.models import Group, Tag, Target, TargetTag, Job, slugify
 from app.core.plugins import loader as plugins_loader
 
 
@@ -26,7 +26,20 @@ class TargetService:
         self.db = db
 
     def list(self) -> List[Target]:
+        # Return plain targets; schedule data is provided by a separate endpoint
         return list(self.db.query(Target).all())
+
+    def list_enabled_job_names_for_target(self, target_id: int) -> list[str]:
+        """Return names of enabled jobs that apply to this target via tags."""
+        rows: list[tuple[str]] = (
+            self.db.query(Job.name)
+            .join(TargetTag, TargetTag.tag_id == Job.tag_id)
+            .filter(TargetTag.target_id == target_id, Job.enabled.is_(True))
+            .all()
+        )
+        # Deduplicate while preserving order alphabetically for determinism
+        names = sorted({name for (name,) in rows})
+        return names
 
     def get(self, target_id: int) -> Optional[Target]:
         return self.db.get(Target, target_id)

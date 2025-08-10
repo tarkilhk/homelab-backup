@@ -63,8 +63,10 @@ def delete_group(group_id: int, db: Session = Depends(get_session)) -> Response:
     svc = GroupService(db)
     try:
         ok = svc.delete(group_id)
-    except Exception:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Cannot delete non-empty group")
+    except Exception as exc:
+        # Let IntegrityError bubble to global handler, but ensure message clarity otherwise
+        msg = str(exc) or "Cannot delete non-empty group"
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=msg)
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     return Response(status_code=status.HTTP_204_NO_CONTENT)

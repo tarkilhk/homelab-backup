@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.models import TargetTag
+from app.models import TargetTag, Target, Tag, GroupTag, slugify
 from app.services import GroupService, TargetService
 
 
@@ -19,7 +19,7 @@ def test_group_add_remove_tags_propagates(db):
     norms = sorted([t.slug for t in tags])
     assert norms == ["db", "prod"]
 
-    # Both targets should have GROUP-origin rows for each tag
+    # Both targets should have GROUP-origin rows for the group's auto-tag plus each added tag
     for tgt in (a, b):
         rows = (
             db.query(TargetTag)
@@ -30,7 +30,7 @@ def test_group_add_remove_tags_propagates(db):
             )
             .all()
         )
-        assert len(rows) == 2
+        assert len(rows) == 3
 
     # Removing one tag de-propagates
     gsvc.remove_tags(g.id, ["prod"])  # by normalized name
@@ -44,8 +44,8 @@ def test_group_add_remove_tags_propagates(db):
             )
             .all()
         )
-        # Only "db" remains
-        assert len(rows) == 1
+        # Group auto-tag + "db" remain
+        assert len(rows) == 2
 
 
 def test_group_add_remove_targets_moves_and_adjusts_group_origin(db):
@@ -75,4 +75,79 @@ def test_group_add_remove_targets_moves_and_adjusts_group_origin(db):
     rows = db.query(TargetTag).filter(TargetTag.target_id == tgt.id, TargetTag.origin == "GROUP").all()
     assert rows == []
 
+
+
+def test_delete_group_detaches_targets_and_cleans_group_origin_tags(db):
+    gsvc = GroupService(db)
+    tsvc = TargetService(db)
+    # Setup: group with two targets and two tags propagated (plus the group's auto-tag)
+    g = gsvc.create("G")
+    t1 = tsvc.create(name="T1", plugin_name="p", plugin_config_json="{}")
+    t2 = tsvc.create(name="T2", plugin_name="p", plugin_config_json="{}")
+    gsvc.add_targets(g.id, [t1.id, t2.id])
+    gsvc.add_tags(g.id, ["prod", "db"])  # two tags + group's auto-tag -> 6 GROUP-origin rows
+
+    assert (
+        db.query(TargetTag)
+        .filter(TargetTag.origin == "GROUP", TargetTag.source_group_id == g.id)
+        .count()
+        == 6
+    )
+
+    # Delete the non-empty group
+    ok = gsvc.delete(g.id)
+    assert ok is True
+
+    # Group is gone; targets are detached
+    assert gsvc.get(g.id) is None
+    t1_db = db.get(Target, t1.id)
+    t2_db = db.get(Target, t2.id)
+    assert t1_db is not None and t1_db.group_id is None
+    assert t2_db is not None and t2_db.group_id is None
+
+    # All GROUP-origin rows referencing the deleted group are removed
+    assert (
+        db.query(TargetTag)
+        .filter(TargetTag.origin == "GROUP", TargetTag.source_group_id == g.id)
+        .count()
+        == 0
+    )
+
+
+def test_group_create_creates_auto_tag_and_links(db):
+    gsvc = GroupService(db)
+    g = gsvc.create("Ops Team")
+
+    expected_slug = slugify("Ops Team")
+    tag = db.query(Tag).filter(Tag.slug == expected_slug).one_or_none()
+    assert tag is not None
+    assert tag.display_name == "Ops Team"
+
+    link = (
+        db.query(GroupTag)
+        .filter(GroupTag.group_id == g.id, GroupTag.tag_id == tag.id)
+        .one_or_none()
+    )
+    assert link is not None
+
+
+def test_group_create_reuses_existing_tag_by_slug(db):
+    # Pre-create tag that matches the group's slugified name
+    t = Tag(display_name="Eng Team")
+    db.add(t)
+    db.commit()
+    db.refresh(t)
+
+    gsvc = GroupService(db)
+    g = gsvc.create("Eng Team")
+
+    # Tag reused; link exists
+    reused = db.query(Tag).filter(Tag.slug == slugify("Eng Team")).one_or_none()
+    assert reused is not None and reused.id == t.id
+    link = (
+        db.query(GroupTag)
+        .filter(GroupTag.group_id == g.id, GroupTag.tag_id == t.id)
+        .one_or_none()
+    )
+    assert link is not None
 

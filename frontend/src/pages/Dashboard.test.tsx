@@ -3,6 +3,7 @@ import '@testing-library/jest-dom/vitest'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, within, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { createMemoryRouter, RouterProvider } from 'react-router-dom'
 import DashboardPage from './Dashboard'
 
 // Simplify framer-motion in tests and strip animation props
@@ -33,7 +34,17 @@ import { api } from '../api/client'
 
 function renderWithClient(ui: React.ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>)
+  const router = createMemoryRouter([
+    { path: '/', element: ui },
+    { path: '/targets', element: <div>Targets</div> },
+    { path: '/jobs', element: <div>Jobs</div> },
+    { path: '/runs', element: <div>Runs</div> },
+  ], { initialEntries: ['/'] })
+  return render(
+    <QueryClientProvider client={client}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>
+  )
 }
 
 describe('DashboardPage', () => {
@@ -45,26 +56,26 @@ describe('DashboardPage', () => {
     // Arrange API mocks
     ;(api.listTargets as any).mockResolvedValue([{ id: 1, name: 'T1', slug: 't1', created_at: '', updated_at: '' }])
     ;(api.listJobs as any).mockResolvedValue([
-      { id: 10, target_id: 1, name: 'Job A', schedule_cron: '* * * * *', enabled: 'true', created_at: '', updated_at: '' },
+      { id: 10, tag_id: 101, name: 'Job A', schedule_cron: '* * * * *', enabled: true, created_at: '', updated_at: '' },
     ])
     ;(api.listRuns as any).mockImplementation((params?: any) => {
       if (params && params.start_date) {
         // Last 24h stats: 2 runs, 1 success
         return Promise.resolve([
-          { id: 1, job_id: 10, status: 'success', started_at: new Date().toISOString(), finished_at: new Date().toISOString(), job: { id: 10, target_id: 1, name: 'Job A', schedule_cron: '* * * * *', enabled: 'true', created_at: '', updated_at: '' } },
-          { id: 2, job_id: 10, status: 'failed', started_at: new Date().toISOString(), finished_at: new Date().toISOString(), job: { id: 10, target_id: 1, name: 'Job A', schedule_cron: '* * * * *', enabled: 'true', created_at: '', updated_at: '' } },
+          { id: 1, job_id: 10, status: 'success', started_at: new Date().toISOString(), finished_at: new Date().toISOString(), job: { id: 10, tag_id: 101, name: 'Job A', schedule_cron: '* * * * *', enabled: true, created_at: '', updated_at: '' } },
+          { id: 2, job_id: 10, status: 'failed', started_at: new Date().toISOString(), finished_at: new Date().toISOString(), job: { id: 10, tag_id: 101, name: 'Job A', schedule_cron: '* * * * *', enabled: true, created_at: '', updated_at: '' } },
         ])
       }
       // Recent runs list (3 items)
       return Promise.resolve([
-        { id: 3, job_id: 10, status: 'success', started_at: new Date().toISOString(), finished_at: new Date().toISOString(), job: { id: 10, target_id: 1, name: 'Job A', schedule_cron: '* * * * *', enabled: 'true', created_at: '', updated_at: '' } },
-        { id: 4, job_id: 10, status: 'failed', started_at: new Date().toISOString(), finished_at: new Date().toISOString(), job: { id: 10, target_id: 1, name: 'Job B', schedule_cron: '* * * * *', enabled: 'true', created_at: '', updated_at: '' } },
-        { id: 5, job_id: 10, status: 'running', started_at: new Date().toISOString(), finished_at: null, job: { id: 10, target_id: 1, name: 'Job C', schedule_cron: '* * * * *', enabled: 'true', created_at: '', updated_at: '' } },
+        { id: 3, job_id: 10, status: 'success', started_at: new Date().toISOString(), finished_at: new Date().toISOString(), job: { id: 10, tag_id: 101, name: 'Job A', schedule_cron: '* * * * *', enabled: true, created_at: '', updated_at: '' } },
+        { id: 4, job_id: 10, status: 'failed', started_at: new Date().toISOString(), finished_at: new Date().toISOString(), job: { id: 10, tag_id: 101, name: 'Job B', schedule_cron: '* * * * *', enabled: true, created_at: '', updated_at: '' } },
+        { id: 5, job_id: 10, status: 'running', started_at: new Date().toISOString(), finished_at: null, job: { id: 10, tag_id: 101, name: 'Job C', schedule_cron: '* * * * *', enabled: true, created_at: '', updated_at: '' } },
       ])
     })
     ;(api.upcomingJobs as any).mockResolvedValue([
-      { job_id: 10, name: 'Backup Daily', target_id: 1, next_run_at: new Date(Date.now() + 60_000).toISOString() },
-      { job_id: 11, name: 'Backup Weekly', target_id: 1, next_run_at: new Date(Date.now() + 120_000).toISOString() },
+      { job_id: 10, name: 'Backup Daily', next_run_at: new Date(Date.now() + 60_000).toISOString() },
+      { job_id: 11, name: 'Backup Weekly', next_run_at: new Date(Date.now() + 120_000).toISOString() },
     ])
 
     renderWithClient(<DashboardPage />)

@@ -16,7 +16,7 @@ def test_target_create_creates_auto_tag_and_optional_group_propagation(db):
     # Has AUTO
     auto = db.query(TargetTag).filter(TargetTag.target_id == tgt.id, TargetTag.origin == "AUTO").one_or_none()
     assert auto is not None
-    # Has GROUP for A and B
+    # Has GROUP for group's auto-tag plus A and B
     group_rows = (
         db.query(TargetTag)
         .filter(
@@ -26,7 +26,7 @@ def test_target_create_creates_auto_tag_and_optional_group_propagation(db):
         )
         .all()
     )
-    assert len(group_rows) == 2
+    assert len(group_rows) == 3
 
 
 def test_target_rename_updates_auto_tag_and_detects_collision(db):

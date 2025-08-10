@@ -59,6 +59,7 @@ class Target(BaseModel):
     slug: str
     plugin_name: Optional[str] = None
     plugin_config_json: Optional[str] = None
+    group_id: Optional[int] = None
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(
         ..., description="Last update timestamp"

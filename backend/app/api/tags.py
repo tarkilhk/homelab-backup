@@ -11,6 +11,7 @@ from app.core.db import get_session
 from app.models import Tag as TagModel, Target as TargetModel, TargetTag as TargetTagModel
 from app.schemas import Tag as TagSchema
 from app.schemas import TagTargetAttachment
+from app.schemas import TagCreate
 from app.services import TagService
 
 
@@ -21,6 +22,13 @@ router = APIRouter(prefix="/tags", tags=["tags"])
 def list_tags(db: Session = Depends(get_session)) -> List[TagModel]:
     svc = TagService(db)
     return svc.list()
+
+
+@router.post("/", response_model=TagSchema, status_code=status.HTTP_201_CREATED)
+def create_tag(payload: TagCreate, db: Session = Depends(get_session)) -> TagModel:
+    svc = TagService(db)
+    tag = svc.create(payload.name)
+    return tag
 
 
 @router.get("/{tag_id}", response_model=TagSchema)

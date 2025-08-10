@@ -39,6 +39,7 @@ def list_runs(
         None, description="Filter runs with started_at <= this ISO timestamp"
     ),
     target_id: Optional[int] = Query(None, description="Filter by target ID"),
+    tag_id: Optional[int] = Query(None, description="Filter by tag ID"),
 ) -> List[RunModel]:
     """List runs with optional filters. Jobs are eager-loaded for display.
 
@@ -48,7 +49,7 @@ def list_runs(
     svc = RunService(db)
     start_dt = _parse_datetime(start_date)
     end_dt = _parse_datetime(end_date)
-    return svc.list(status=status, start_dt=start_dt, end_dt=end_dt, target_id=target_id)
+    return svc.list(status=status, start_dt=start_dt, end_dt=end_dt, target_id=target_id, tag_id=tag_id)
 
 
 @router.get("/{run_id}", response_model=RunWithJob)

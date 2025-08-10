@@ -36,9 +36,6 @@ def test_run_model(db) -> None:
         job_id=job.id,
         status="success",
         message="Backup completed successfully",
-        artifact_path="/backups/test-db-2024-01-01.sql",
-        artifact_bytes=1024000,
-        sha256="a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
         logs_text="Starting backup...\nBackup completed successfully",
     )
 
@@ -50,9 +47,10 @@ def test_run_model(db) -> None:
     assert run.job_id == job.id
     assert run.status == "success"
     assert run.message == "Backup completed successfully"
-    assert run.artifact_path == "/backups/test-db-2024-01-01.sql"
-    assert run.artifact_bytes == 1024000
-    assert run.sha256 == "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456"
+    # Parent Run no longer carries artifact metadata; artifacts live on TargetRun
+    assert getattr(run, "artifact_path") is None
+    assert getattr(run, "artifact_bytes") is None
+    assert getattr(run, "sha256") is None
     assert run.logs_text == "Starting backup...\nBackup completed successfully"
     assert run.started_at is not None
     assert run.finished_at is None

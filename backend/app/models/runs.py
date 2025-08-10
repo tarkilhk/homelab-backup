@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
+from app.domain.enums import RunStatus
 from sqlalchemy.orm import relationship
 
 from app.core.db import Base
@@ -16,11 +17,8 @@ class Run(Base):
     job_id = Column(Integer, ForeignKey("jobs.id"), nullable=False, index=True)
     started_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     finished_at = Column(DateTime, nullable=True)
-    status = Column(String(20), nullable=False, index=True)  # "running", "success", "failed"
+    status = Column(String(20), nullable=False, index=True)  # values in RunStatus
     message = Column(Text, nullable=True)  # Error message or success message
-    artifact_path = Column(String(500), nullable=True)  # Path to backup artifact
-    artifact_bytes = Column(Integer, nullable=True)  # Size in bytes
-    sha256 = Column(String(64), nullable=True)  # SHA256 hash of artifact
     logs_text = Column(Text, nullable=True)  # Log output from the backup process
 
     # Relationships

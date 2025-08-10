@@ -13,7 +13,7 @@ class TagService:
 
     Rules:
     - Create: trim+lower into Tag.slug via model validator; display_name preserved.
-    - Delete: block if tag is an auto-tag (exists in TargetTag with origin='AUTO') or used by any Job.
+    - Delete: block only if tag is used by any Job.
     - Get/List: simple queries.
     """
 
@@ -41,7 +41,10 @@ class TagService:
         return tag
 
     def get(self, tag_id: int) -> Optional[Tag]:
-        return self.db.get(Tag, tag_id)
+        tag = self.db.get(Tag, tag_id)
+        if tag is not None and (tag.slug or "").lower() == "archived":
+            return None
+        return tag
 
     def list(self) -> List[Tag]:
         # Ensure auto-tags are created for existing targets missing them (idempotent)
@@ -75,7 +78,9 @@ class TagService:
                     )
                 )
         self.db.commit()
-        return list(self.db.query(Tag).order_by(Tag.slug.asc()).all())
+        # Hide internal archived tag from all listings
+        q = self.db.query(Tag).filter(Tag.slug != "archived").order_by(Tag.slug.asc())
+        return list(q.all())
 
     def delete(self, tag_id: int) -> bool:
         tag = self.db.get(Tag, tag_id)
@@ -86,16 +91,6 @@ class TagService:
         in_jobs = self.db.query(Job.id).filter(Job.tag_id == tag_id).first() is not None
         if in_jobs:
             raise IntegrityError("Tag used by jobs", params=None, orig=None)  # type: ignore[arg-type]
-
-        # Block if auto-tag
-        auto_exists = (
-            self.db.query(TargetTag.id)
-            .filter(TargetTag.tag_id == tag_id, TargetTag.origin == "AUTO")
-            .first()
-            is not None
-        )
-        if auto_exists:
-            raise IntegrityError("Cannot delete auto-tag", params=None, orig=None)  # type: ignore[arg-type]
 
         self.db.delete(tag)
         self.db.commit()
