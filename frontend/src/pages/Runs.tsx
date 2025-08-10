@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api, type RunWithJob, type Target } from '../api/client'
 import { formatLocalDateTime } from '../lib/dates'
 import { useLocation } from 'react-router-dom'
+import AppCard from '../components/ui/AppCard'
 
 export default function RunsPage() {
   const location = useLocation() as unknown as { state?: { openRunId?: number } }
@@ -54,68 +55,77 @@ export default function RunsPage() {
   return (
     <div className="space-y-4">
       <div>
-        <h1 className="text-2xl font-semibold">Runs</h1>
-        <p className="text-sm text-muted-foreground">Last 20 runs.</p>
+        <h1 className="text-2xl font-semibold">Past Runs</h1>
       </div>
 
-      <section className="rounded-md border overflow-x-auto">
-        <div className="p-3 bg-muted/30 border-b flex flex-wrap gap-3 items-end">
-          <div>
-            <label className="block text-xs text-gray-600" htmlFor="runs-status-filter">Status</label>
-            <select
-              id="runs-status-filter"
-              className="border rounded px-2 py-1 bg-background"
-              value={status}
-              onChange={(e) => setStatus(e.target.value)}
+      <AppCard
+        title=""
+        description=""
+        className="overflow-x-auto"
+        headerRight={(
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="grid gap-1">
+              <span className="text-xs text-gray-600">Status</span>
+              <select
+                id="runs-status-filter"
+                className="border rounded px-3 py-2 bg-background"
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
+                aria-label="Status"
+              >
+                <option value="">All</option>
+                <option value="running">running</option>
+                <option value="success">success</option>
+                <option value="failed">failed</option>
+              </select>
+            </label>
+            <label className="grid gap-1">
+              <span className="text-xs text-gray-600">Start date</span>
+              <input
+                id="runs-start-date"
+                type="date"
+                className="border rounded px-3 py-2 bg-background"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                aria-label="Start date"
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-xs text-gray-600">End date</span>
+              <input
+                id="runs-end-date"
+                type="date"
+                className="border rounded px-3 py-2 bg-background"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                aria-label="End date"
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-xs text-gray-600">Target</span>
+              <select
+                id="runs-target-filter"
+                className="border rounded px-3 py-2 bg-background min-w-[12rem]"
+                value={targetId}
+                onChange={(e) => setTargetId(e.target.value ? Number(e.target.value) : '')}
+                aria-label="Target"
+              >
+                <option value="">All</option>
+                {(targets ?? ([] as Target[])).map((t) => (
+                  <option key={t.id} value={t.id}>{t.name}</option>
+                ))}
+              </select>
+            </label>
+            <button
+              className="text-sm font-medium underline underline-offset-2 text-[hsl(var(--accent))] rounded px-2 py-1 hover:bg-[hsl(var(--accent)/.12)] cursor-pointer"
+              title="Clear filters"
+              onClick={() => { setStatus(''); setStartDate(''); setEndDate(''); setTargetId('') }}
             >
-              <option value="">All</option>
-              <option value="running">running</option>
-              <option value="success">success</option>
-              <option value="failed">failed</option>
-            </select>
+              Clear filters
+            </button>
           </div>
-          <div>
-            <label className="block text-xs text-gray-600" htmlFor="runs-start-date">Start date</label>
-            <input
-              id="runs-start-date"
-              type="date"
-              className="border rounded px-2 py-1 bg-background"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-600" htmlFor="runs-end-date">End date</label>
-            <input
-              id="runs-end-date"
-              type="date"
-              className="border rounded px-2 py-1 bg-background"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-600" htmlFor="runs-target-filter">Target</label>
-            <select
-              id="runs-target-filter"
-              className="border rounded px-2 py-1 bg-background min-w-[12rem]"
-              value={targetId}
-              onChange={(e) => setTargetId(e.target.value ? Number(e.target.value) : '')}
-            >
-              <option value="">All</option>
-              {(targets ?? ([] as Target[])).map((t) => (
-                <option key={t.id} value={t.id}>{t.name}</option>
-              ))}
-            </select>
-          </div>
-          <button
-            className="ml-auto text-sm font-medium underline underline-offset-2 text-[hsl(var(--accent))] rounded px-2 py-1 hover:bg-[hsl(var(--accent)/.12)] cursor-pointer"
-            title="Clear filters"
-            onClick={() => { setStatus(''); setStartDate(''); setEndDate(''); setTargetId('') }}
-          >
-            Clear filters
-          </button>
-        </div>
+        )}
+      >
         <table className="min-w-full text-sm">
           <thead className="bg-muted/50 text-left">
                <tr>
@@ -171,7 +181,7 @@ export default function RunsPage() {
             )}
           </tbody>
         </table>
-      </section>
+      </AppCard>
 
       {detailsRun && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center" onClick={() => setDetailsRun(null)}>

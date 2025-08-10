@@ -24,7 +24,7 @@ function wrapper(children: ReactNode) {
 describe('RunsPage', () => {
   it('renders runs table', async () => {
     render(wrapper(<RunsPage />))
-    await screen.findByText('Runs')
+    await screen.findByText('Past Runs')
     await screen.findByText('success')
   })
 
