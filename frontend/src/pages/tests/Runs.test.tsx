@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import RunsPage from './Runs'
+import RunsPage from '../Runs'
 import React, { type ReactNode } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 
