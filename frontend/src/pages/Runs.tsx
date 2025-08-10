@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, Fragment } from 'react'
-import { File as FileIcon, ChevronRight, ChevronDown, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react'
+import { ChevronRight, ChevronDown, CheckCircle2, AlertTriangle, XCircle, File } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { api, type RunWithJob, type TargetRun } from '../api/client'
 import { formatLocalDateTime } from '../lib/dates'
@@ -189,6 +189,15 @@ export default function RunsPage() {
         )}
       >
         <table className="min-w-full text-sm">
+          <colgroup>
+            <col style={{ width: '2.5rem' }} />
+            <col style={{ width: '28%' }} />
+            <col style={{ width: '12%' }} />
+            <col style={{ width: '10%' }} />
+            <col style={{ width: '18%' }} />
+            <col style={{ width: '18%' }} />
+            <col style={{ width: '12%' }} />
+          </colgroup>
           <thead className="bg-muted/50 text-left">
                <tr>
               <th className="px-4 py-2 w-10" aria-label="Expand" />
@@ -252,12 +261,7 @@ export default function RunsPage() {
                     </td>
                   </tr>
                   {expandedRunIds.has(r.id) && (
-                    <tr className="bg-muted/30 border-t">
-                      <td className="px-2 py-2" />
-                      <td className="px-4 py-2" colSpan={6}>
-                        <ExpandedTargetRuns runId={r.id} targetIdToName={targetIdToName} />
-                      </td>
-                    </tr>
+                    <ExpandedTargetRunRows runId={r.id} targetIdToName={targetIdToName} />
                   )}
                 </Fragment>
               ))
@@ -298,7 +302,7 @@ export default function RunsPage() {
   )
 }
 
-function ExpandedTargetRuns({ runId, targetIdToName }: { runId: number; targetIdToName: Map<number, string> }) {
+function ExpandedTargetRunRows({ runId, targetIdToName }: { runId: number; targetIdToName: Map<number, string> }) {
   const { data, isLoading, error } = useQuery({ queryKey: ['run', runId], queryFn: () => api.getRun(runId) })
   const items = data?.target_runs ?? []
   const [detailsTr, setDetailsTr] = useState<TargetRun | null>(null)
@@ -330,64 +334,70 @@ function ExpandedTargetRuns({ runId, targetIdToName }: { runId: number; targetId
     }
   }
 
-  if (isLoading) return <div className="text-xs text-gray-600">Loading target runs…</div>
-  if (error) return <div className="text-xs text-red-600">{String(error)}</div>
-  if (items.length === 0) return <div className="text-xs">No target runs.</div>
+  if (isLoading) {
+    return (
+      <tr className="bg-muted/30 border-t"><td className="px-2 py-2" /><td className="px-4 py-2" colSpan={6}><div className="text-xs text-gray-600">Loading target runs…</div></td></tr>
+    )
+  }
+  if (error) {
+    return (
+      <tr className="bg-muted/30 border-t"><td className="px-2 py-2" /><td className="px-4 py-2" colSpan={6}><div className="text-xs text-red-600">{String(error)}</div></td></tr>
+    )
+  }
+  if (items.length === 0) {
+    return (
+      <tr className="bg-muted/30 border-t"><td className="px-2 py-2" /><td className="px-4 py-2" colSpan={6}><div className="text-xs">No target runs.</div></td></tr>
+    )
+  }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="min-w-full text-xs">
-        <thead>
-          <tr className="text-left">
-            <th className="px-2 py-1">Target</th>
-            <th className="px-2 py-1">Status</th>
-            <th className="px-2 py-1">Started</th>
-            <th className="px-2 py-1">Finished</th>
-            <th className="px-2 py-1">Artifact</th>
-            <th className="px-2 py-1">Size</th>
-            <th className="px-2 py-1">SHA256</th>
-            <th className="px-2 py-1">Details</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((tr: TargetRun) => (
-            <tr key={tr.id} className="border-t">
-              <td className="px-2 py-1">{targetIdToName.get(tr.target_id) ?? tr.target_id}</td>
-              <td className="px-2 py-1">
-                {tr.status === 'success' && <CheckCircle2 className="h-4 w-4 text-green-600" aria-label="success" />}
-                {tr.status === 'failed' && <XCircle className="h-4 w-4 text-red-600" aria-label="failed" />}
-                {tr.status === 'partial' && <AlertTriangle className="h-4 w-4 text-amber-500" aria-label="partial" />}
-                {tr.status !== 'success' && tr.status !== 'failed' && tr.status !== 'partial' && (
-                  <AlertTriangle className="h-4 w-4 text-gray-500" aria-label={tr.status} />
-                )}
-              </td>
-              <td className="px-2 py-1">{formatShortDateTime(tr.started_at)}</td>
-              <td className="px-2 py-1">{formatShortDateTime(tr.finished_at)}</td>
-              <td className="px-2 py-1">{tr.artifact_path ? <span className="inline-flex items-center" aria-label="Artifact" title={tr.artifact_path ?? undefined}><FileIcon className="h-4 w-4 text-[hsl(var(--accent))]" /></span> : '—'}</td>
-              <td className="px-2 py-1">{tr.artifact_bytes ?? '—'}</td>
-              <td className="px-2 py-1">
-                {tr.sha256 ? (
-                  <button
-                    type="button"
-                    className="font-mono break-all cursor-pointer underline decoration-dotted"
-                    title="Click to copy SHA256"
-                    onClick={async () => {
-                      const ok = await copyTextToClipboard(tr.sha256 as string)
-                      setCopiedToast(ok ? 'sha256 copied to clipboard' : 'failed to copy sha256')
-                      window.setTimeout(() => setCopiedToast(null), 1400)
-                    }}
-                  >
-                    {tr.sha256}
-                  </button>
-                ) : '—'}
-              </td>
-              <td className="px-2 py-1">
-                <button className="underline text-[hsl(var(--accent))]" onClick={() => setDetailsTr(tr)}>View</button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <>
+      <tr className="bg-muted/50 text-left">
+        <td className="px-2 py-1" />
+        <td className="px-4 py-1" />
+        <td className="px-4 py-1 text-xs text-gray-600">Target</td>
+        <td className="px-4 py-1 text-xs text-gray-600">Status</td>
+        <td className="px-4 py-1 text-xs text-gray-600">Started</td>
+        <td className="px-4 py-1 text-xs text-gray-600">Finished</td>
+        <td className="px-4 py-1 text-xs text-gray-600">Artifact</td>
+      </tr>
+      {items.map((tr: TargetRun, idx: number) => (
+        <tr key={tr.id} className="bg-muted/30 border-t align-middle">
+          <td className="px-2 py-1" />
+          <td className="px-0 py-1 text-center">
+            <span className="inline-flex items-center justify-center rounded-md bg-[hsl(var(--accent))] text-white text-sm font-semibold px-2.5 py-0.5 shadow-sm min-w-[2.25rem]">
+              {idx + 1}/{items.length}
+            </span>
+          </td>
+          <td className="px-4 py-1">{targetIdToName.get(tr.target_id) ?? tr.target_id}</td>
+          <td className="px-4 py-1">
+            {tr.status === 'success' && <CheckCircle2 className="h-4 w-4 text-green-600" aria-label="success" />}
+            {tr.status === 'failed' && <XCircle className="h-4 w-4 text-red-600" aria-label="failed" />}
+            {tr.status === 'partial' && <AlertTriangle className="h-4 w-4 text-amber-500" aria-label="partial" />}
+            {tr.status !== 'success' && tr.status !== 'failed' && tr.status !== 'partial' && (
+              <AlertTriangle className="h-4 w-4 text-gray-500" aria-label={tr.status} />
+            )}
+          </td>
+          <td className="px-4 py-1">{formatShortDateTime(tr.started_at)}</td>
+          <td className="px-4 py-1">{formatShortDateTime(tr.finished_at)}</td>
+          <td className="px-4 py-1">
+            {tr.artifact_path ? (
+              <div className="flex items-start gap-2">
+                <span aria-label="Artifact" title={tr.artifact_path}>
+                  <File className="h-4 w-4" />
+                </span>
+                <div className="grid text-xs">
+                  <span>{tr.artifact_bytes ?? '—'}</span>
+                  <span className="font-mono break-all">{tr.sha256 ?? '—'}</span>
+                </div>
+                <button className="underline text-[hsl(var(--accent))] ml-auto" onClick={() => setDetailsTr(tr)}>View</button>
+              </div>
+            ) : (
+              '—'
+            )}
+          </td>
+        </tr>
+      ))}
 
       {detailsTr && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center" onClick={() => setDetailsTr(null)}>
@@ -409,7 +419,7 @@ function ExpandedTargetRuns({ runId, targetIdToName }: { runId: number; targetId
                   <span className="text-xs text-gray-700">{detailsTr.status}</span>
                 </div>
               </div>
-              <div>
+              <div className="md:col-span-2">
                 <div className="text-xs text-gray-600">Artifact</div>
                 <div className="text-xs break-all">{detailsTr.artifact_path ?? '—'}</div>
               </div>
@@ -417,7 +427,7 @@ function ExpandedTargetRuns({ runId, targetIdToName }: { runId: number; targetId
                 <div className="text-xs text-gray-600">Size (bytes)</div>
                 <div className="text-xs">{detailsTr.artifact_bytes ?? '—'}</div>
               </div>
-              <div>
+              <div className="md:col-span-2">
                 <div className="text-xs text-gray-600">SHA256</div>
                 <div className="text-xs break-all">
                   {detailsTr.sha256 ? (
@@ -465,7 +475,7 @@ function ExpandedTargetRuns({ runId, targetIdToName }: { runId: number; targetId
           {copiedToast}
         </div>
       )}
-    </div>
+    </>
   )
 }
 
