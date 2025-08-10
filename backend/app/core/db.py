@@ -100,7 +100,16 @@ def init_db() -> None:
     This function only attempts to create missing tables.
     """
     # Import models to ensure they are registered with Base
-    from app.models import Target, Job, Run  # noqa: F401
+    # Important: include all models so Base.metadata has the complete schema
+    from app.models import (
+        Target,
+        Job,
+        Run,
+        Group,
+        Tag,
+        GroupTag,
+        TargetTag,
+    )  # noqa: F401
 
     # Only create missing tables; do not drop/alter existing schema here
     logger.info("init_db: creating tables if missing")

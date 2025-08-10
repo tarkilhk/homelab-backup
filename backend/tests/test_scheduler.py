@@ -16,7 +16,7 @@ from app.core.scheduler import (
     _scheduled_job,  # type: ignore[attr-defined]
     run_job_immediately,
 )
-from app.models import Target, Job, Run
+from app.models import Target, Job, Run, Tag, TargetTag
 
 
 class DummyScheduler:
@@ -68,10 +68,19 @@ def _create_job(
     target_id: int,
     name: str,
     cron: str,
-    enabled: str = "true",
+    enabled: bool = True,
 ) -> Job:
+    # Create a tag and attach to the target so the scheduler can resolve targets by tag
+    tag = Tag(display_name=name)
+    db.add(tag)
+    db.commit()
+    db.refresh(tag)
+
+    db.add(TargetTag(target_id=target_id, tag_id=tag.id, origin="DIRECT"))
+    db.commit()
+
     job = Job(
-        target_id=target_id,
+        tag_id=tag.id,
         name=name,
         schedule_cron=cron,
         enabled=enabled,
@@ -85,9 +94,9 @@ def _create_job(
 def test_schedule_jobs_on_startup_filters_and_args(session: Session, caplog: pytest.LogCaptureFixture) -> None:
     target = _create_target(session)
 
-    enabled_valid = _create_job(session, target.id, "Daily", "*/5 * * * *", enabled="true")
-    enabled_invalid = _create_job(session, target.id, "Bad", "not a cron", enabled="true")
-    disabled = _create_job(session, target.id, "Disabled", "0 2 * * *", enabled="false")
+    enabled_valid = _create_job(session, target.id, "Daily", "*/5 * * * *", enabled=True)
+    enabled_invalid = _create_job(session, target.id, "Bad", "not a cron", enabled=True)
+    disabled = _create_job(session, target.id, "Disabled", "0 2 * * *", enabled=False)
 
     sched = DummyScheduler()
     caplog.set_level(logging.INFO, logger="app.core.scheduler")
@@ -122,7 +131,7 @@ def test_scheduled_job_creates_run_and_marks_success(
     monkeypatch.setattr(sched_mod, "SessionLocal", TestingSessionLocal, raising=True)
 
     target = _create_target(session)
-    job = _create_job(session, target.id, "Now", "* * * * *", enabled="true")
+    job = _create_job(session, target.id, "Now", "* * * * *", enabled=True)
 
     caplog.set_level(logging.INFO, logger="app.core.scheduler")
     _scheduled_job(job.id)
@@ -148,7 +157,7 @@ def test_scheduled_job_creates_run_and_marks_success(
 
 def test_run_job_immediately_shared_logic(session: Session, caplog: pytest.LogCaptureFixture) -> None:
     target = _create_target(session)
-    job = _create_job(session, target.id, "Manual", "0 0 * * *", enabled="true")
+    job = _create_job(session, target.id, "Manual", "0 0 * * *", enabled=True)
 
     caplog.set_level(logging.INFO, logger="app.core.scheduler")
     run = run_job_immediately(session, job.id, triggered_by="manual_test")
