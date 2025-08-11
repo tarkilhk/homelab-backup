@@ -48,9 +48,9 @@ def test_run_model(db) -> None:
     assert run.status == "success"
     assert run.message == "Backup completed successfully"
     # Parent Run no longer carries artifact metadata; artifacts live on TargetRun
-    assert getattr(run, "artifact_path") is None
-    assert getattr(run, "artifact_bytes") is None
-    assert getattr(run, "sha256") is None
+    assert getattr(run, "artifact_path", None) is None
+    assert getattr(run, "artifact_bytes", None) is None
+    assert getattr(run, "sha256", None) is None
     assert run.logs_text == "Starting backup...\nBackup completed successfully"
     assert run.started_at is not None
     assert run.finished_at is None
