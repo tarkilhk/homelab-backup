@@ -46,7 +46,14 @@ SMTP_PASS=
 SMTP_FROM=
 SMTP_TO=
 SMTP_STARTTLS=true
+
+# Frontend → Backend connection
+# The frontend proxies `/api/*` to this origin. For Compose, the default works.
+# Examples: http://backend:8080 (Compose service), http://192.168.1.50:8080, https://api.example.com
+BACKEND_ORIGIN=http://backend:8080
 ```
+
+Reminder: Within Docker Compose, services talk to each other via the service name and the container port. Set `BACKEND_ORIGIN` to `http://backend:8080` (service name + internal port), not to the host-mapped port (e.g., `http://backend:8086`). Using the host port from inside containers will lead to 502 errors from the frontend.
 
 Note: The compose file maps the SQLite database directory with a host bind mount. Update the left-hand side of the mapping to a persistent path on your host if needed (defaults to the repository's `db/` folder).
 
