@@ -19,9 +19,10 @@ class SonarrPlugin(BackupPlugin):
     backup endpoints with an API key for authentication.
 
     Correct API flow (Servarr family, including Sonarr v3):
-    - POST `/api/v3/system/backup` to trigger a new manual backup
+    - POST `/api/v3/command` with `{ "name": "Backup" }` to trigger a new manual backup
     - Poll GET `/api/v3/system/backup` to find the newly created backup entry
-    - GET `/api/v3/system/backup/{id}/download` to download the ZIP archive
+    - Prefer downloading via the `path` returned by the list API (e.g., `/backup/manual/<file>.zip`)
+      with `?apikey=` and redirects; fall back to `/api/v3/system/backup/{id}/download` if needed
     """
 
     backup_root = "/backups"
@@ -68,7 +69,7 @@ class SonarrPlugin(BackupPlugin):
             raise ValueError("Sonarr config must include base_url and api_key")
 
         list_url = f"{base_url}/api/v3/system/backup"
-        create_url = f"{base_url}/api/v3/system/backup"
+        command_url = f"{base_url}/api/v3/command"
 
         # Start time boundary to identify the new backup entry
         started_at_iso = datetime.now(timezone.utc).isoformat()
@@ -77,14 +78,18 @@ class SonarrPlugin(BackupPlugin):
             "sonarr_backup_trigger | job_id=%s target_id=%s url=%s artifact=%s",
             context.job_id,
             context.target_id,
-            create_url,
+            command_url,
             artifact_path,
         )
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
             # 1) Trigger a new manual backup
             try:
-                trigger_resp = await client.post(create_url, headers={"X-Api-Key": api_key})
+                trigger_resp = await client.post(
+                    command_url,
+                    headers={"X-Api-Key": api_key, "Content-Type": "application/json"},
+                    json={"name": "Backup"},
+                )
                 # Sonarr may return 201/202 on success
                 if trigger_resp.status_code // 100 not in (2, 3):
                     trigger_resp.raise_for_status()
@@ -111,6 +116,7 @@ class SonarrPlugin(BackupPlugin):
 
             # 2) Poll the backup list for the newly created entry
             backup_id: Optional[int] = None
+            backup_path: Optional[str] = None
             poll_deadline = asyncio.get_event_loop().time() + 60.0
             last_list_error: Optional[str] = None
 
@@ -157,6 +163,9 @@ class SonarrPlugin(BackupPlugin):
 
                     if candidate and isinstance(candidate.get("id"), int):
                         backup_id = int(candidate["id"])
+                        bp = candidate.get("path")
+                        if isinstance(bp, str) and bp:
+                            backup_path = bp
                         break
                 except (httpx.HTTPError, ValueError) as exc:
                     last_list_error = str(exc)
@@ -177,6 +186,39 @@ class SonarrPlugin(BackupPlugin):
                 raise RuntimeError(msg)
 
             # 3) Download the archive
+            # Prefer direct file path if provided by the list API (works better behind proxies)
+            if backup_path:
+                if backup_path.startswith("/"):
+                    fallback_url = f"{base_url}{backup_path}"
+                else:
+                    fallback_url = f"{base_url}/{backup_path}"
+                self._logger.info(
+                    "sonarr_backup_download_path | job_id=%s target_id=%s url=%s",
+                    context.job_id,
+                    context.target_id,
+                    fallback_url,
+                )
+                try:
+                    dl_path_resp = await client.get(
+                        fallback_url,
+                        headers={
+                            "X-Api-Key": api_key,
+                            "Accept": "application/zip, application/octet-stream",
+                        },
+                        params={"apikey": api_key},
+                    )
+                    if dl_path_resp.status_code == 200 and (dl_path_resp.content or b""):
+                        with open(artifact_path, "wb") as fp:
+                            fp.write(dl_path_resp.content)
+                        return {"artifact_path": artifact_path}
+                except httpx.HTTPError as exc:
+                    self._logger.warning(
+                        "sonarr_backup_download_path_error | job_id=%s target_id=%s error=%s",
+                        context.job_id,
+                        context.target_id,
+                        str(exc),
+                    )
+
             download_url = f"{base_url}/api/v3/system/backup/{backup_id}/download"
             self._logger.info(
                 "sonarr_backup_download | job_id=%s target_id=%s url=%s backup_id=%s",
@@ -192,8 +234,15 @@ class SonarrPlugin(BackupPlugin):
                         "X-Api-Key": api_key,
                         "Accept": "application/zip, application/octet-stream",
                     },
+                    params={"apikey": api_key},
                 )
-                dl_resp.raise_for_status()
+                # Some proxies may map this endpoint differently; don't raise yet, try fallback
+                status = dl_resp.status_code
+                content = dl_resp.content or b""
+                if status == 200 and content:
+                    with open(artifact_path, "wb") as fp:
+                        fp.write(content)
+                    return {"artifact_path": artifact_path}
             except httpx.HTTPError as exc:
                 self._logger.error(
                     "sonarr_backup_download_error | job_id=%s target_id=%s error=%s",
@@ -201,14 +250,63 @@ class SonarrPlugin(BackupPlugin):
                     context.target_id,
                     str(exc),
                 )
-                raise
+                # Continue to fallback path download
 
-            content = dl_resp.content
-            if not content:
-                raise RuntimeError("Sonarr backup download returned no content")
+            # Fallback: use the raw file path provided by list API (e.g., /backup/manual/<file>.zip)
+            fallback_url: Optional[str] = None
+            try:
+                # Re-query once to ensure we have the candidate with path
+                list_resp2 = await client.get(list_url, headers={"X-Api-Key": api_key})
+                list_resp2.raise_for_status()
+                items2: List[Dict[str, Any]] = list_resp2.json() or []
+                cand2: Optional[Dict[str, Any]] = next(
+                    (it for it in items2 if isinstance(it, dict) and it.get("id") == backup_id),
+                    None,
+                )
+                path_value = cand2.get("path") if isinstance(cand2, dict) else None
+                if isinstance(path_value, str) and path_value:
+                    if path_value.startswith("/"):
+                        fallback_url = f"{base_url}{path_value}"
+                    else:
+                        fallback_url = f"{base_url}/{path_value}"
+            except Exception:
+                fallback_url = None
 
+            if not fallback_url:
+                # No usable fallback path; raise the original error
+                raise RuntimeError(
+                    f"Sonarr backup download failed for id={backup_id} and no fallback path available"
+                )
+
+            self._logger.info(
+                "sonarr_backup_download_fallback | job_id=%s target_id=%s url=%s",
+                context.job_id,
+                context.target_id,
+                fallback_url,
+            )
+            try:
+                dl2_resp = await client.get(
+                    fallback_url,
+                    headers={
+                        "X-Api-Key": api_key,
+                        "Accept": "application/zip, application/octet-stream",
+                    },
+                    params={"apikey": api_key},
+                )
+                dl2_resp.raise_for_status()
+                content2 = dl2_resp.content or b""
+                if not content2:
+                    raise RuntimeError("Sonarr backup fallback download returned no content")
             with open(artifact_path, "wb") as fp:
-                fp.write(content)
+                    fp.write(content2)
+            except httpx.HTTPError as exc:
+                self._logger.error(
+                    "sonarr_backup_download_fallback_error | job_id=%s target_id=%s error=%s",
+                    context.job_id,
+                    context.target_id,
+                    str(exc),
+                )
+                raise
 
         return {"artifact_path": artifact_path}
 
