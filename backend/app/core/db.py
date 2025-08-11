@@ -1,10 +1,10 @@
 """Database configuration and session management.
 
-SQLite location is configured via a single environment variable:
-- `DB_FOLDER`: directory where the database file will be stored. The filename
-  is hardcoded to `homelab_backup.db`.
+SQLite location is fixed to the container path `/app/db`.
+The filename is hardcoded to `homelab_backup.db`.
 
-If `DB_FOLDER` is not set, the default folder `./db` is used.
+Mount whatever host directory you prefer to `/app/db` via Docker Compose.
+If `/app/db` is not accessible at runtime, the backend logs an error and stops.
 """
 
 from typing import Generator
@@ -12,23 +12,17 @@ from pathlib import Path
 import logging
 
 from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 import os
 from sqlalchemy.orm import Session, sessionmaker, declarative_base
 
-# Resolve DB location based on DB_FOLDER only (no DATABASE_URL support)
+# Resolve DB location (no DATABASE_URL support). Always use /app/db inside the container
 DEFAULT_DB_FILENAME = "homelab_backup.db"
-DEFAULT_DB_FOLDER = "./db_default"
+DB_DIR = Path("/app/db")
 
 logger = logging.getLogger(__name__)
 
-requested_dir = Path(os.getenv("DB_FOLDER", DEFAULT_DB_FOLDER)).expanduser()
-logger.info(
-    "DB path init | DB_FOLDER_env=%s default_folder=%s requested_dir=%s cwd=%s",
-    os.getenv("DB_FOLDER"),
-    DEFAULT_DB_FOLDER,
-    requested_dir,
-    Path.cwd(),
-)
+logger.info("DB path init | using fixed dir=/app/db cwd=%s", Path.cwd())
 
 def _ensure_dir(path: Path) -> tuple[bool, str]:
     try:
@@ -41,36 +35,11 @@ def _ensure_dir(path: Path) -> tuple[bool, str]:
     except Exception as exc:  # pragma: no cover - safety net
         return False, str(exc)
 
-# Try requested directory; if unusable, fall back to default relative folder
-db_dir = requested_dir
-ok, reason = _ensure_dir(db_dir)
-if not ok:
-    logger.warning(
-        "DB dir unusable | requested=%s reason=%s -> falling back to default=%s",
-        db_dir,
-        reason,
-        DEFAULT_DB_FOLDER,
-    )
-    db_dir = Path(DEFAULT_DB_FOLDER)
-    ok2, reason2 = _ensure_dir(db_dir)
-    if not ok2:
-        # As a last resort, use current working directory
-        logger.warning(
-            "Default folder unusable | default=%s reason=%s -> using cwd=%s",
-            DEFAULT_DB_FOLDER,
-            reason2,
-            Path.cwd(),
-        )
-        db_dir = Path.cwd()
-        _ensure_dir(db_dir)
-
-logger.info("DB path resolved | using_dir=%s", db_dir)
-
-db_file = db_dir / DEFAULT_DB_FILENAME
-logger.info("DB file path: %s", db_file)
-# `sqlite:///` + absolute path results in four slashes (sqlite:////...) which SQLAlchemy expects
-SQLITE_URL = f"sqlite:///{db_file.resolve()}"
-logger.info("SQLite URL: %s", SQLITE_URL)
+def _build_sqlite_url(db_dir: Path) -> str:
+    db_file = db_dir / DEFAULT_DB_FILENAME
+    logger.info("DB file path: %s", db_file)
+    # `sqlite:///` + absolute path results in four slashes (sqlite:////...) which SQLAlchemy expects
+    return f"sqlite:///{db_file.resolve()}"
 
 def _resolve_sql_echo() -> bool | str:
     """Resolve SQL echo flag from environment.
@@ -89,22 +58,48 @@ def _resolve_sql_echo() -> bool | str:
     return False
 
 
-# Create engine
-engine = create_engine(
-    SQLITE_URL,
-    connect_args={"check_same_thread": False},  # Required for SQLite
-    echo=_resolve_sql_echo(),
-)
-
-# Create session factory
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+_engine: Engine | None = None
+SessionLocal: sessionmaker | None = None
 
 # Create base class for models
 Base = declarative_base()
 
 
+def get_engine() -> Engine:
+    """Create the SQLAlchemy engine lazily.
+
+    Ensures `/app/db` exists and is writable. If not, logs an error and exits.
+    """
+    global _engine, SessionLocal
+    if _engine is not None:
+        return _engine
+
+    ok, reason = _ensure_dir(DB_DIR)
+    if not ok:
+        logger.error("Database directory '/app/db' is not usable: %s", reason)
+        raise SystemExit(1)
+
+    logger.info("DB path resolved | using_dir=%s", DB_DIR)
+    sqlite_url = _build_sqlite_url(DB_DIR)
+    logger.info("SQLite URL: %s", sqlite_url)
+
+    _engine = create_engine(
+        sqlite_url,
+        connect_args={"check_same_thread": False},  # Required for SQLite
+        echo=_resolve_sql_echo(),
+    )
+
+    # Bind a session factory
+    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
+    return _engine
+
+
 def get_session() -> Generator[Session, None, None]:
     """Get database session."""
+    # Ensure engine and session factory are initialized
+    if SessionLocal is None:
+        get_engine()
+        assert SessionLocal is not None
     db = SessionLocal()
     try:
         yield db
@@ -132,6 +127,7 @@ def init_db() -> None:
 
     # Only create missing tables; do not drop/alter existing schema here
     logger.info("init_db: creating tables if missing")
+    engine = get_engine()
     Base.metadata.create_all(bind=engine)
     logger.info("init_db: ensured tables exist")
 
@@ -142,7 +138,8 @@ def drop_all_tables() -> None:  # pragma: no cover - utility, run manually only
     Not called anywhere by the application. Use only during development or
     via explicit operator action.
     """
-    Base.metadata.drop_all(bind=engine)
+    eng = get_engine()
+    Base.metadata.drop_all(bind=eng)
     logger.warning("All database tables dropped.")
 
 
@@ -150,6 +147,9 @@ def bootstrap_db() -> None:
     """Bootstrap database with initial data if needed."""
     from sqlalchemy.orm import Session
     
+    if SessionLocal is None:
+        get_engine()
+        assert SessionLocal is not None
     db = SessionLocal()
     try:
         # Check if we have any targets

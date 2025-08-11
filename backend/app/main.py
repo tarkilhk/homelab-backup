@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import base64
 
-from app.core.db import init_db, bootstrap_db, SessionLocal
+from app.core.db import init_db, bootstrap_db, SessionLocal, get_session, get_engine
 from app.core.logging import setup_logging
 from app.core.scheduler import get_scheduler, schedule_jobs_on_startup
 from sqlalchemy.exc import IntegrityError
@@ -29,11 +29,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     
     scheduler = get_scheduler()
     # Schedule enabled jobs from DB before starting scheduler
-    db = SessionLocal()
-    try:
-        schedule_jobs_on_startup(scheduler, db)
-    finally:
-        db.close()
+    # Prefer FastAPI dependency override for DB if present (used by tests)
+    override = app.dependency_overrides.get(get_session)  # type: ignore[attr-defined]
+    if override is not None:
+        db = next(override())
+        try:
+            schedule_jobs_on_startup(scheduler, db)
+        finally:
+            db.close()
+    else:
+        # Ensure engine/session are initialized and use real DB
+        get_engine()
+        assert SessionLocal is not None
+        db = SessionLocal()
+        try:
+            schedule_jobs_on_startup(scheduler, db)
+        finally:
+            db.close()
     scheduler.start()
     logger.info("APScheduler started with Asia/Singapore timezone and jobs scheduled")
     
