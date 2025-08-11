@@ -31,10 +31,6 @@ The compose file references these tags. You can pin a specific tag by editing `d
 
 1) Create `deploy/.env` with your settings (or copy the sample first):
 
-```bash
-cp deploy/.env.sample deploy/.env
-```
-
 ```env
 TZ=Etc/UTC
 
