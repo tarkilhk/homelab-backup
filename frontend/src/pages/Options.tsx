@@ -70,6 +70,10 @@ export default function OptionsPage() {
 
   const customHex = accentEditingTheme === 'light' ? accentLightHex : accentDarkHex
   const isLockedByTheme = theme !== 'system'
+  const isCustomSelected = useMemo(() => {
+    const paletteHexes = palette.map((p) => p.hex.toLowerCase())
+    return !paletteHexes.includes(customHex.toLowerCase())
+  }, [palette, customHex])
 
   return (
     <div className="space-y-6">
@@ -142,37 +146,50 @@ export default function OptionsPage() {
               </div>
             )}
             <div className="flex gap-2">
-              {/* Custom/current swatch */}
-              <button
-                aria-label="Custom accent"
-                title="Custom"
-                className="h-9 w-9 rounded-full ring-2 ring-transparent data-[active=true]:ring-foreground cursor-pointer shadow-sm"
-                style={{ background: customHex }}
-                data-active
-                onClick={() => {
-                  // No-op: represents current; open picker for edits
-                  setShowPicker(true)
-                  setTempAccentHex(customHex)
-                }}
-              />
               {palette.map((c) => (
                 <button
                   key={c.hex}
                   aria-label={c.name}
                   title={c.name}
-                  className="h-9 w-9 rounded-full ring-2 ring-transparent data-[active=true]:ring-foreground cursor-pointer shadow-sm"
+                  className="h-9 w-9 rounded-full ring-2 ring-transparent cursor-pointer shadow-sm data-[active=true]:ring-foreground data-[active=true]:ring-offset-2 data-[active=true]:ring-offset-background"
                   style={{ background: c.hex }}
-                  data-active={customHex.toLowerCase() === c.hex.toLowerCase()}
-                  onClick={() => saveAccent(c.hex, accentEditingTheme)}
+                  data-active={!showPicker && customHex.toLowerCase() === c.hex.toLowerCase()}
+                  onClick={() => {
+                    // Selecting a preset should deselect custom and close picker without saving custom temp
+                    if (showPicker) {
+                      setShowPicker(false)
+                      setTempAccentHex(null)
+                    }
+                    saveAccent(c.hex, accentEditingTheme)
+                  }}
                 />
               ))}
+              {/* Custom pill (moved to the end/right) */}
+              <button
+                type="button"
+                aria-label="Custom color"
+                title="Custom"
+                className={cn(
+                  'h-9 inline-flex items-center gap-2 rounded-full border px-3 text-sm font-medium cursor-pointer ring-2 ring-transparent',
+                  'hover:bg-[hsl(var(--accent)/.08)]',
+                  (showPicker || isCustomSelected) && 'ring-foreground ring-offset-2 ring-offset-background bg-[hsl(var(--accent)/.10)]'
+                )}
+                onClick={() => {
+                  setShowPicker((prev) => {
+                    const next = !prev
+                    if (next) setTempAccentHex(customHex)
+                    else setTempAccentHex(null)
+                    return next
+                  })
+                }}
+              >
+                <span
+                  className="h-4 w-4 rounded-full shadow-sm"
+                  style={{ background: customHex }}
+                />
+                <span>Custom</span>
+              </button>
             </div>
-            <button
-              className="h-9 rounded-md px-3 border hover:bg-muted text-sm font-medium"
-              onClick={() => setShowPicker((v) => !v)}
-            >
-              {showPicker ? 'Close' : 'Custom...'}
-            </button>
           </div>
           {showPicker && (
             <div className="mt-4 grid gap-2 sm:grid-cols-[auto_1fr] items-start">
