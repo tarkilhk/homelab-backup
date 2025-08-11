@@ -11,7 +11,8 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import base64
 
-from app.core.db import init_db, bootstrap_db, SessionLocal, get_session, get_engine
+from app.core.db import init_db, bootstrap_db, get_session, get_engine
+import app.core.db as db_mod
 from app.core.logging import setup_logging
 from app.core.scheduler import get_scheduler, schedule_jobs_on_startup
 from sqlalchemy.exc import IntegrityError
@@ -40,12 +41,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         # Ensure engine/session are initialized and use real DB
         get_engine()
-        assert SessionLocal is not None
-        db = SessionLocal()
+        session_factory = db_mod.SessionLocal
+        assert session_factory is not None
+        db_session = session_factory()
         try:
-            schedule_jobs_on_startup(scheduler, db)
+            schedule_jobs_on_startup(scheduler, db_session)
         finally:
-            db.close()
+            db_session.close()
     scheduler.start()
     logger.info("APScheduler started with Asia/Singapore timezone and jobs scheduled")
     
