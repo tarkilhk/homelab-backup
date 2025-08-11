@@ -1,13 +1,18 @@
+
+networks:
+  homelab-backup-net:
+    driver: bridge
 services:
   backend:
     build: ../backend
-    image: homelab/backup-backend:latest
+    image: tarkilhk/homelab-backup:backend-latest
     env_file:
       - .env
     environment:
       - TZ=${TZ}
       - DB_FOLDER=/app/db
       - LOG_LEVEL=DEBUG
+      - LOG_SQL_ECHO=0
     volumes:
       - ${BACKUP_ROOT_HOST}:/backups
       - /home/dev/projects/homelab-backup/db:/app/db
@@ -15,12 +20,17 @@ services:
     ports:
       - "8080:8080"
     restart: unless-stopped
+    networks:
+      - homelab-backup-net
 
   frontend:
     build: ../frontend
-    image: homelab/backup-frontend:latest
+    image: tarkilhk/homelab-backup:frontend-latest
     depends_on:
       - backend
     ports:
       - "8081:80"
     restart: unless-stopped
+    networks:
+      - homelab-backup-net
+

@@ -102,11 +102,11 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/homelab-backup-backend
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/homelab-backup
           tags: |
-            type=sha,prefix=sha-,format=short
-            type=raw,value=latest
-            type=ref,event=tag
+            type=sha,prefix=backend-sha-,format=short
+            type=raw,value=backend-latest
+            type=ref,event=tag,prefix=backend-
 
       # Frontend image metadata and tags
       - name: Docker meta (frontend)
@@ -114,11 +114,11 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/homelab-backup-frontend
+            ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/homelab-backup
           tags: |
-            type=sha,prefix=sha-,format=short
-            type=raw,value=latest
-            type=ref,event=tag
+            type=sha,prefix=frontend-sha-,format=short
+            type=raw,value=frontend-latest
+            type=ref,event=tag,prefix=frontend-
 
       - name: Build and push backend image
         uses: docker/build-push-action@v6

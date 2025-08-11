@@ -36,11 +36,14 @@ def setup_logging(level: Optional[str] = None) -> None:
     # Always align root level (uvicorn may install handlers before we run)
     root_logger.setLevel(log_level)
 
-    # Align common third-party loggers to our level (uvicorn, sqlalchemy)
+    # Align common third-party loggers to our level (uvicorn)
     logging.getLogger("uvicorn").setLevel(log_level)
     logging.getLogger("uvicorn.error").setLevel(log_level)
     logging.getLogger("uvicorn.access").setLevel(log_level)
-    # SQLAlchemy engine echo controlled elsewhere; keep INFO for statements
-    logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO)
+
+    # SQLAlchemy: keep quiet by default; detailed SQL is controlled via engine echo
+    # Only show SQL engine logs when DEBUG is enabled at the root
+    sqlalchemy_engine_level = logging.DEBUG if root_logger.level == logging.DEBUG else logging.WARNING
+    logging.getLogger("sqlalchemy.engine").setLevel(sqlalchemy_engine_level)
 
 

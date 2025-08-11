@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, Fragment } from 'react'
-import { ChevronRight, ChevronDown, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react'
+import { ChevronRight, ChevronDown, CheckCircle2, AlertTriangle, XCircle, X } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { api, type RunWithJob, type TargetRun } from '../api/client'
 import { formatLocalDateTime, formatLocalDateTimeShort } from '../lib/dates'
@@ -9,6 +9,25 @@ import AppCard from '../components/ui/AppCard'
 // Use shared date utility that parses naive UTC and renders in local TZ
 const formatShortDateTime = (dt?: string | null): string =>
   dt ? formatLocalDateTimeShort(dt) : '—'
+
+// Human-readable byte size formatter (e.g., 12.3 MB)
+const formatBytes = (value?: number | null): string => {
+  if (value === null || value === undefined || isNaN(value)) return '—'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+  let num = Math.max(0, value)
+  let unitIdx = 0
+  while (num >= 1024 && unitIdx < units.length - 1) {
+    num /= 1024
+    unitIdx += 1
+  }
+  const rounded = num >= 100 ? Math.round(num) : Math.round(num * 10) / 10
+  return `${rounded} ${units[unitIdx]}`
+}
+
+const formatBytesWithRaw = (value?: number | null): string => {
+  if (value === null || value === undefined || isNaN(value)) return '—'
+  return `${formatBytes(value)} (${value.toLocaleString()} bytes)`
+}
 
 // Map run/target-run status to a text color class for messages
 function statusTextColorClass(status?: string): string {
@@ -263,23 +282,44 @@ export default function RunsPage() {
           <div className="bg-background border rounded-md shadow-xl max-w-2xl w-full mx-4" onClick={(e) => e.stopPropagation()}>
             <div className="p-3 border-b flex items-center">
               <div className="font-semibold">Run #{detailsRun.id} — {detailsRun.job?.name ?? `Job #${detailsRun.job_id}`}</div>
-              <button className="ml-auto text-sm cursor-pointer" onClick={() => setDetailsRun(null)}>Close</button>
+              <button aria-label="Close" className="ml-auto text-sm cursor-pointer" onClick={() => setDetailsRun(null)}>
+                <X className="h-5 w-5 text-red-500" />
+              </button>
             </div>
             <div className="p-4 space-y-3">
+              <div className="grid gap-3 md:grid-cols-2">
+                <div>
+                  <div className="text-xs uppercase tracking-wide italic text-[hsl(var(--muted-foreground))]">Started</div>
+                  <div className="text-sm">{formatLocalDateTime(detailsRun.started_at)}</div>
+                </div>
+                <div>
+                  <div className="text-xs uppercase tracking-wide italic text-[hsl(var(--muted-foreground))]">Finished</div>
+                  <div className="text-sm">{detailsRun.finished_at ? formatLocalDateTime(detailsRun.finished_at) : '—'}</div>
+                </div>
+              </div>
+              
               <div>
-                <div className="text-xs text-gray-600">Status</div>
-                <div>{detailsRun.status}</div>
+                <div className="text-xs uppercase tracking-wide italic text-[hsl(var(--muted-foreground))]">Status</div>
+                <div className="flex items-center gap-2">
+                  {detailsRun.status === 'success' && <CheckCircle2 className="h-5 w-5 text-green-600" aria-label="success" />}
+                  {detailsRun.status === 'failed' && <XCircle className="h-5 w-5 text-red-600" aria-label="failed" />}
+                  {detailsRun.status === 'partial' && <AlertTriangle className="h-5 w-5 text-amber-500" aria-label="partial" />}
+                  {detailsRun.status !== 'success' && detailsRun.status !== 'failed' && detailsRun.status !== 'partial' && (
+                    <AlertTriangle className="h-5 w-5 text-gray-500" aria-label={detailsRun.status} />
+                  )}
+                  <span className="text-sm text-[hsl(var(--foreground))]">{detailsRun.status}</span>
+                </div>
               </div>
               {detailsRun.message && (
                 <div>
-                  <div className="text-xs text-gray-600">Message</div>
-                  <div className={`whitespace-pre-wrap ${statusTextColorClass(detailsRun.status)}`}>{detailsRun.message}</div>
+                  <div className="text-xs uppercase tracking-wide italic text-[hsl(var(--muted-foreground))]">Message</div>
+                  <div className={`whitespace-pre-wrap ${statusTextColorClass(detailsRun.status)} text-sm`}>{detailsRun.message}</div>
                 </div>
               )}
               {detailsRun.logs_text && (
                 <div>
-                  <div className="text-xs text-gray-600">Logs</div>
-                  <pre className="bg-muted/40 p-3 rounded max-h-80 overflow-auto whitespace-pre-wrap">{detailsRun.logs_text}</pre>
+                  <div className="text-xs uppercase tracking-wide italic text-[hsl(var(--muted-foreground))]">Logs</div>
+                  <pre className="bg-muted/40 p-3 rounded max-h-80 overflow-auto whitespace-pre-wrap text-sm">{detailsRun.logs_text}</pre>
                 </div>
               )}
             </div>
@@ -340,20 +380,16 @@ function ExpandedTargetRunRows({ runId, targetIdToName }: { runId: number; targe
 
   return (
     <>
-      <tr className="bg-muted/50 text-left">
+      {/* spacer row separating parent row from child rows */}
+      <tr className="bg-muted/40 border-t">
         <td className="px-2 py-1" />
-        <td className="px-4 py-1" />
-        <td className="px-4 py-1 text-xs text-gray-600">Target</td>
-        <td className="px-4 py-1 text-xs text-gray-600">Status</td>
-        <td className="px-4 py-1 text-xs text-gray-600">Started</td>
-        <td className="px-4 py-1 text-xs text-gray-600">Finished</td>
-        <td className="px-4 py-1 text-xs text-gray-600 text-right">Details</td>
+        <td className="px-4 py-1" colSpan={6} />
       </tr>
       {items.map((tr: TargetRun, idx: number) => (
-        <tr key={tr.id} className="bg-muted/30 border-t align-middle">
+        <tr key={tr.id} className="bg-muted/30 border-t align-middle text-xs">
           <td className="px-2 py-1" />
           <td className="px-0 py-1 text-center">
-            <span className="inline-flex items-center justify-center rounded-md bg-[hsl(var(--accent))] text-white text-sm font-semibold px-2.5 py-0.5 shadow-sm min-w-[2.25rem]">
+            <span className="inline-flex items-center justify-center rounded-md bg-[hsl(var(--accent))] text-white text-xs font-medium px-2 py-0.5 shadow-sm min-w-[2rem]">
               {idx + 1}/{items.length}
             </span>
           </td>
@@ -371,7 +407,7 @@ function ExpandedTargetRunRows({ runId, targetIdToName }: { runId: number; targe
           <td className="px-4 py-1 text-right">
             {(tr.status === 'failed' || !!tr.message || !!tr.logs_text) ? (
               <button
-                className="text-xs underline text-[hsl(var(--accent))]"
+                className="text-[11px] underline text-[hsl(var(--accent))]"
                 onClick={() => setDetailsTr(tr)}
               >
                 View
@@ -386,11 +422,21 @@ function ExpandedTargetRunRows({ runId, targetIdToName }: { runId: number; targe
           <div className="bg-background border rounded-md shadow-xl max-w-2xl w-full mx-4" onClick={(e) => e.stopPropagation()}>
             <div className="p-3 border-b flex items-center">
               <div className="font-semibold">TargetRun #{detailsTr.id} — {targetIdToName.get(detailsTr.target_id) ?? detailsTr.target_id}</div>
-              <button className="ml-auto text-sm cursor-pointer" onClick={() => setDetailsTr(null)}>Close</button>
+              <button aria-label="Close" className="ml-auto text-sm cursor-pointer" onClick={() => setDetailsTr(null)}>
+                <X className="h-5 w-5 text-red-500" />
+              </button>
             </div>
             <div className="p-4 grid gap-3 md:grid-cols-2">
               <div>
-                <div className="text-xs text-gray-600">Status</div>
+                <div className="text-xs uppercase tracking-wide italic text-[hsl(var(--muted-foreground))]">Started</div>
+                <div className="text-sm">{formatLocalDateTime(detailsTr.started_at)}</div>
+              </div>
+              <div>
+                <div className="text-xs uppercase tracking-wide italic text-[hsl(var(--muted-foreground))]">Finished</div>
+                <div className="text-sm">{detailsTr.finished_at ? formatLocalDateTime(detailsTr.finished_at) : '—'}</div>
+              </div>
+              <div>
+                <div className="text-xs uppercase tracking-wide text-[hsl(var(--muted-foreground))]">Status</div>
                 <div className="flex items-center gap-2">
                   {detailsTr.status === 'success' && <CheckCircle2 className="h-5 w-5 text-green-600" aria-label="success" />}
                   {detailsTr.status === 'failed' && <XCircle className="h-5 w-5 text-red-600" aria-label="failed" />}
@@ -398,20 +444,20 @@ function ExpandedTargetRunRows({ runId, targetIdToName }: { runId: number; targe
                   {detailsTr.status !== 'success' && detailsTr.status !== 'failed' && detailsTr.status !== 'partial' && (
                     <AlertTriangle className="h-5 w-5 text-gray-500" aria-label={detailsTr.status} />
                   )} 
-                  <span className="text-xs text-gray-700">{detailsTr.status}</span>
+                  <span className="text-sm text-[hsl(var(--foreground))]">{detailsTr.status}</span>
                 </div>
               </div>
               <div className="md:col-span-2">
-                <div className="text-xs text-gray-600">Artifact</div>
-                <div className="text-xs break-all">{detailsTr.artifact_path ?? '—'}</div>
+                <div className="text-xs uppercase tracking-wide italic text-[hsl(var(--muted-foreground))]">Artifact</div>
+                <div className="text-sm break-all">{detailsTr.artifact_path ?? '—'}</div>
               </div>
               <div>
-                <div className="text-xs text-gray-600">Size (bytes)</div>
-                <div className="text-xs">{detailsTr.artifact_bytes ?? '—'}</div>
+                <div className="text-xs uppercase tracking-wide italic text-[hsl(var(--muted-foreground))]">Size</div>
+                <div className="text-sm">{formatBytesWithRaw(detailsTr.artifact_bytes as number)}</div>
               </div>
               <div className="md:col-span-2">
-                <div className="text-xs text-gray-600">SHA256</div>
-                <div className="text-xs break-all">
+                <div className="text-xs uppercase tracking-wide italic text-[hsl(var(--muted-foreground))]">SHA256</div>
+                <div className="text-sm break-all">
                   {detailsTr.sha256 ? (
                     <button
                       type="button"
@@ -428,24 +474,17 @@ function ExpandedTargetRunRows({ runId, targetIdToName }: { runId: number; targe
                   ) : '—'}
                 </div>
               </div>
-              <div>
-                <div className="text-xs text-gray-600">Started</div>
-                <div className="text-xs">{formatLocalDateTime(detailsTr.started_at)}</div>
-              </div>
-              <div>
-                <div className="text-xs text-gray-600">Finished</div>
-                <div className="text-xs">{detailsTr.finished_at ? formatLocalDateTime(detailsTr.finished_at) : '—'}</div>
-              </div>
+              
               {detailsTr.message && (
                 <div className="md:col-span-2">
-                  <div className="text-xs text-gray-600">Message</div>
-                  <div className={`text-xs whitespace-pre-wrap ${statusTextColorClass(detailsTr.status)}`}>{detailsTr.message}</div>
+                  <div className="text-xs uppercase tracking-wide italic text-[hsl(var(--muted-foreground))]">Message</div>
+                  <div className={`text-sm whitespace-pre-wrap ${statusTextColorClass(detailsTr.status)}`}>{detailsTr.message}</div>
                 </div>
               )}
               {detailsTr.logs_text && (
                 <div className="md:col-span-2">
-                  <div className="text-xs text-gray-600">Logs</div>
-                  <pre className="bg-muted/40 p-3 rounded max-h-80 overflow-auto whitespace-pre-wrap">{detailsTr.logs_text}</pre>
+                  <div className="text-xs uppercase tracking-wide italic text-[hsl(var(--muted-foreground))]">Logs</div>
+                  <pre className="bg-muted/40 p-3 rounded max-h-80 overflow-auto whitespace-pre-wrap text-sm">{detailsTr.logs_text}</pre>
                 </div>
               )}
             </div>

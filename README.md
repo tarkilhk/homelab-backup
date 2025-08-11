@@ -14,19 +14,51 @@ Prerequisites:
 - Docker and Docker Compose
 - A host directory for backup artifacts (e.g., `/mnt/nas/backups`)
 
-1) Create `deploy/.env` with your settings:
+Compose and configuration files:
+- Compose file: [deploy/docker-compose.yml](deploy/docker-compose.yml)
+- Environment file: `deploy/.env` (see sample below)
+
+### Images on Docker Hub
+- Repository: [`tarkilhk/homelab-backup`](https://hub.docker.com/r/tarkilhk/homelab-backup)
+- Tags used by CI:
+  - Backend: `backend-latest`, `backend-vX.Y.Z`, `backend-sha-<shortsha>`
+  - Frontend: `frontend-latest`, `frontend-vX.Y.Z`, `frontend-sha-<shortsha>`
+
+Use Docker Compose to manage images and containers; it will pull tags as needed.
+
+The compose file references these tags. You can pin a specific tag by editing `deploy/docker-compose.yml` and changing the `image` tags.
+
+1) Create `deploy/.env` with your settings (or copy from `deploy/.env.sample`):
 
 ```env
 TZ=Etc/UTC
 # REQUIRED: host directory to store backups
 BACKUP_ROOT_HOST=/mnt/nas/backups
 
-# Optional
+# Backend options
 LOG_LEVEL=INFO
+LOG_SQL_ECHO=0
 DB_FOLDER=/app/db
+
+# Optional: SMTP notifications
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASS=
+SMTP_FROM=
+SMTP_TO=
+SMTP_STARTTLS=true
 ```
 
-2) Start the stack:
+Note: The compose file maps the SQLite database directory with a host bind mount. Update the left-hand side of the mapping to a persistent path on your host if needed (defaults to the repository's `db/` folder).
+
+2) Start the stack (Compose pulls images automatically):
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+Optionally, to build locally instead of pulling prebuilt images:
 
 ```bash
 docker compose -f deploy/docker-compose.yml up -d --build
@@ -37,6 +69,8 @@ docker compose -f deploy/docker-compose.yml up -d --build
 - API docs (Swagger): `http://localhost:8080/api/docs`
 - Health: `http://localhost:8080/health` and `http://localhost:8080/ready`
 - Metrics: `http://localhost:8080/metrics`
+
+Note: Always use Docker Compose to run this stack. The frontend relies on the compose network to reach the backend at `http://backend:8080` (see `frontend/nginx.conf`). Running containers individually with `docker run` will require recreating the same network and service names.
 
 To stop:
 
@@ -57,7 +91,7 @@ Volumes and persistence:
 - The SQLite database is stored under `DB_FOLDER` (default `/app/db`) and is volume-mapped by the compose file.
 
 ## Basic usage
-1. Open the UI at `http://localhost:8081` and create a Target.
+1. Open the UI at `http://<your-server-name>:8081` and create a Target.
 2. Choose a plugin and fill the configuration form.
 3. Create a Job referencing the Target and set a schedule.
 4. Run the Job manually or wait for the scheduler.

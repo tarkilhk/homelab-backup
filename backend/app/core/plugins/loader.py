@@ -71,7 +71,8 @@ def _discover_plugins() -> Dict[str, Type[BackupPlugin]]:
             pkg = importlib.import_module(module_base)
             candidates.extend(list(_iter_subclasses_in_module(pkg)))
         except Exception as exc:
-            logger.debug("Failed importing %s: %s", module_base, exc)
+            # Elevate to error so operational issues surface clearly in logs
+            logger.error("Plugin import failed for %s: %s", module_base, exc, exc_info=True)
             continue
 
         # If not found on package level, try conventional `.plugin` module
@@ -80,11 +81,12 @@ def _discover_plugins() -> Dict[str, Type[BackupPlugin]]:
                 mod = importlib.import_module(f"{module_base}.plugin")
                 candidates.extend(list(_iter_subclasses_in_module(mod)))
             except Exception as exc:
-                logger.debug("Failed importing %s.plugin: %s", module_base, exc)
+                logger.error("Plugin import failed for %s.plugin: %s", module_base, exc, exc_info=True)
                 continue
 
         if not candidates:
             # No plugin classes discovered for this key
+            logger.error("No BackupPlugin subclasses discovered for plugin key '%s'", key)
             continue
 
         # Prefer classes with *Plugin suffix; stable selection by name
