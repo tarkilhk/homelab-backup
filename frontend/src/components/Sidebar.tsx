@@ -30,13 +30,15 @@ const groups: { header: string; items: Item[] }[] = [
   },
 ]
 
-export default function Sidebar() {
+type SidebarProps = { onNavigate?: () => void }
+
+export default function Sidebar({ onNavigate }: SidebarProps) {
   const { pathname } = useLocation()
   return (
     <div className="h-full flex flex-col">
       {/* Brand */}
       <div className="px-4 h-20 flex items-center">
-        <Link to="/" className="flex items-center gap-3 group">
+        <Link to="/" className="flex items-center gap-3 group" onClick={() => onNavigate?.()}>
           <img
             src={logoUrl}
             alt="Homelab Backup"
@@ -59,6 +61,7 @@ export default function Sidebar() {
                   <NavLink
                     to={it.to}
                     end
+                    onClick={() => onNavigate?.()}
                     className={({ isActive }) => {
                       // Treat target-scoped jobs route as active for the Jobs menu item
                       const alsoActive = it.to === '/jobs' && /^\/targets\/\d+\/jobs\/?$/.test(pathname)

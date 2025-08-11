@@ -32,7 +32,7 @@ export default function AppShell({ children, header }: PropsWithChildren<{ heade
           >
             <X className="h-5 w-5" />
           </button>
-          <Sidebar />
+          <Sidebar onNavigate={() => setMobileNavOpen(false)} />
         </div>
       </aside>
 
