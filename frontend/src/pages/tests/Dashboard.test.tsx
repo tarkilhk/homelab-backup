@@ -23,6 +23,7 @@ vi.mock('../../api/client', () => {
     api: {
       listTargets: vi.fn(),
       listJobs: vi.fn(),
+      listPlugins: vi.fn(),
       listRuns: vi.fn(),
       upcomingJobs: vi.fn(),
     },
@@ -58,6 +59,11 @@ describe('DashboardPage', () => {
     ;(api.listJobs as any).mockResolvedValue([
       { id: 10, tag_id: 101, name: 'Job A', schedule_cron: '* * * * *', enabled: true, created_at: '', updated_at: '' },
     ])
+    ;(api.listPlugins as any).mockResolvedValue([
+      { key: 'local-files', name: 'Local Files', version: '1.0.0' },
+      { key: 's3', name: 'Amazon S3', version: '1.0.0' },
+      { key: 'gdrive', name: 'Google Drive', version: '1.0.0' },
+    ])
     ;(api.listRuns as any).mockImplementation((params?: any) => {
       if (params && params.start_date) {
         // Last 24h stats: 2 runs, 1 success
@@ -89,6 +95,11 @@ describe('DashboardPage', () => {
     const jobsLabel = screen.getByText('Jobs')
     const jobsCard = jobsLabel.parentElement!.parentElement as HTMLElement
     expect(within(jobsCard).getByText('1')).toBeInTheDocument()
+
+    // Plugins card shows "3"
+    const pluginsLabel = screen.getByText('Plugins')
+    const pluginsCard = pluginsLabel.parentElement!.parentElement as HTMLElement
+    expect(within(pluginsCard).getByText('3')).toBeInTheDocument()
 
     // Runs (24h) shows "2"
     const runsLabel = screen.getByText('Runs (24h)')
