@@ -14,8 +14,11 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
+# Allow frontend utility libraries under src
+!frontend/src/lib/
+!frontend/src/lib/**
 parts/
 sdist/
 var/
