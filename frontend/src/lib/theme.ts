@@ -84,9 +84,11 @@ export function getStoredAccent(theme: 'light' | 'dark'): string {
     const themed = localStorage.getItem(key)
     if (themed) return themed
     const legacy = localStorage.getItem(STORAGE_KEYS.accent)
-    return legacy ?? '#7c3aed'
+    const defaultHsl = theme === 'light' ? ACCENT_HSL.blue : ACCENT_HSL.teal
+    return legacy ?? defaultHsl
   } catch {
-    return '#7c3aed'
+    const defaultHsl = theme === 'light' ? ACCENT_HSL.blue : ACCENT_HSL.teal
+    return defaultHsl
   }
 }
 
