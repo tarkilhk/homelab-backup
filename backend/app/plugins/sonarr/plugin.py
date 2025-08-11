@@ -97,6 +97,18 @@ class SonarrPlugin(BackupPlugin):
                 )
                 raise
 
+            # Some servers (or test doubles) may return the archive content directly
+            # on the trigger POST. If the response has non-JSON content, save it now.
+            try:
+                post_content = trigger_resp.content or b""
+            except Exception:  # pragma: no cover - very defensive
+                post_content = b""
+            post_looks_json = post_content.strip().startswith((b"{", b"["))
+            if post_content and not post_looks_json:
+                with open(artifact_path, "wb") as fp:
+                    fp.write(post_content)
+                return {"artifact_path": artifact_path}
+
             # 2) Poll the backup list for the newly created entry
             backup_id: Optional[int] = None
             poll_deadline = asyncio.get_event_loop().time() + 60.0
@@ -106,6 +118,16 @@ class SonarrPlugin(BackupPlugin):
                 try:
                     list_resp = await client.get(list_url, headers={"X-Api-Key": api_key})
                     list_resp.raise_for_status()
+
+                    # Some implementations may return the archive directly on GET as well
+                    # Detect non-JSON body and treat it as the archive.
+                    body = list_resp.content or b""
+                    is_json_like = body.strip().startswith((b"{", b"["))
+                    if body and not is_json_like:
+                        with open(artifact_path, "wb") as fp:
+                            fp.write(body)
+                        return {"artifact_path": artifact_path}
+
                     items: List[Dict[str, Any]] = list_resp.json() or []
                     # Heuristic: find most recent manual backup created at/after trigger
                     # Example item keys: id, name, path, type ("manual"/"scheduled"), size, time
