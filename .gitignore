@@ -206,6 +206,8 @@ Thumbs.db
 .env.development
 .env.test
 .env.production
+# Ensure sample env file is tracked
+!deploy/.env.sample
 
 # Temporary files
 *.tmp
