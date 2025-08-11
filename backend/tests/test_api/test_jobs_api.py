@@ -1,10 +1,30 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+import tempfile
+import pytest
+from typing import Any, Dict
+from app.core.plugins.base import BackupPlugin, BackupContext
 from sqlalchemy.orm import Session
 
 
-def test_jobs_crud_and_run_now(client: TestClient) -> None:
+def test_jobs_crud_and_run_now(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Provide a minimal success plugin so the run-now path can complete
+    class _SuccessPlugin(BackupPlugin):
+        async def validate_config(self, config: Dict[str, Any]) -> bool:  # noqa: ARG002
+            return True
+        async def test(self, config: Dict[str, Any]) -> bool:  # noqa: ARG002
+            return True
+        async def backup(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
+            fd, path = tempfile.mkstemp(prefix="backup-test-", suffix=".txt")
+            return {"artifact_path": path}
+        async def restore(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
+            return {"ok": True}
+        async def get_status(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
+            return {"ok": True}
+
+    import app.core.scheduler as sched
+    monkeypatch.setattr(sched, "get_plugin", lambda name: _SuccessPlugin(name))
     # Need a target first (auto-tag should be created for target name)
     target_payload = {
         "name": "Test Service",

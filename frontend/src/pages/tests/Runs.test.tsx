@@ -93,7 +93,7 @@ describe('RunsPage', () => {
     })
   })
 
-  it('does not show top-level Artifact column but shows it when expanded', async () => {
+  it('does not show an Artifact column; details modal shows artifact info', async () => {
     render(wrapper(<RunsPage />))
     await screen.findAllByText('Past Runs')
     // Before expanding, Artifact header should not be present anywhere
@@ -103,12 +103,15 @@ describe('RunsPage', () => {
     const expandBtn = (await screen.findAllByRole('button', { name: 'Expand' }))[0]
     fireEvent.click(expandBtn)
 
-    // After expansion, nested table shows Artifact header and file icon with tooltip
+    // In expanded rows, there is no Artifact column; artifact details are shown in a modal
+    // Open the target run details modal
+    const viewBtn = await screen.findByText('View')
+    fireEvent.click(viewBtn)
+
+    // Modal shows Artifact, Size, and SHA256 with expected values
     await screen.findByText('Artifact')
-    const icon = (await screen.findByLabelText('Artifact')) as HTMLElement
-    expect(icon.getAttribute('title')).toBe('/backups/pihole/2025-08-10/pihole.zip')
-    // Size and SHA256 should render from the expanded run response
-    await screen.findByText('12345')
+    await screen.findByText('/backups/pihole/2025-08-10/pihole.zip')
+    await screen.findByText('12.1 KB (12,345 bytes)')
     await screen.findByText('0f' + 'a'.repeat(62))
   })
 })
