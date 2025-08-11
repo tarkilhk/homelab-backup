@@ -146,7 +146,7 @@ def test_scheduled_job_creates_run_and_marks_success(
         assert run.started_at is not None
         assert run.finished_at is not None
         # Parent run no longer carries artifact metadata
-        assert getattr(run, "artifact_path") is None
+        assert getattr(run, "artifact_path", None) is None
     finally:
         check_db.close()
 
@@ -165,7 +165,7 @@ def test_run_job_immediately_shared_logic(session: Session, caplog: pytest.LogCa
 
     assert run.job_id == job.id
     assert run.status == "success"
-    assert getattr(run, "artifact_path") is None
+    assert getattr(run, "artifact_path", None) is None
     assert run.finished_at is not None
 
     messages = [r.getMessage() for r in caplog.records]
