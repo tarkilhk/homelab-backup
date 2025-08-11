@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Generator
+from typing import Generator, Any, Dict
 
 import pytest
 from sqlalchemy import create_engine
@@ -16,6 +16,8 @@ from app.core.scheduler import (
     _scheduled_job,  # type: ignore[attr-defined]
     run_job_immediately,
 )
+import tempfile
+from app.core.plugins.base import BackupPlugin, BackupContext
 from app.models import Target, Job, Run, Tag, TargetTag
 
 
@@ -133,6 +135,23 @@ def test_scheduled_job_creates_run_and_marks_success(
     target = _create_target(session)
     job = _create_job(session, target.id, "Now", "* * * * *", enabled=True)
 
+    # Force plugin to be a minimal success plugin
+    class _SuccessPlugin(BackupPlugin):
+        async def validate_config(self, config: Dict[str, Any]) -> bool:  # noqa: ARG002
+            return True
+        async def test(self, config: Dict[str, Any]) -> bool:  # noqa: ARG002
+            return True
+        async def backup(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
+            fd, path = tempfile.mkstemp(prefix="backup-test-", suffix=".txt")
+            return {"artifact_path": path}
+        async def restore(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
+            return {"ok": True}
+        async def get_status(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
+            return {"ok": True}
+
+    import app.core.scheduler as sched
+    monkeypatch.setattr(sched, "get_plugin", lambda name: _SuccessPlugin(name))
+
     caplog.set_level(logging.INFO, logger="app.core.scheduler")
     _scheduled_job(job.id)
 
@@ -156,9 +175,26 @@ def test_scheduled_job_creates_run_and_marks_success(
     assert any("run_finished" in m for m in messages)
 
 
-def test_run_job_immediately_shared_logic(session: Session, caplog: pytest.LogCaptureFixture) -> None:
+def test_run_job_immediately_shared_logic(session: Session, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
     target = _create_target(session)
     job = _create_job(session, target.id, "Manual", "0 0 * * *", enabled=True)
+
+    # Force plugin to be a minimal success plugin
+    class _SuccessPlugin(BackupPlugin):
+        async def validate_config(self, config: Dict[str, Any]) -> bool:  # noqa: ARG002
+            return True
+        async def test(self, config: Dict[str, Any]) -> bool:  # noqa: ARG002
+            return True
+        async def backup(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
+            fd, path = tempfile.mkstemp(prefix="backup-test-", suffix=".txt")
+            return {"artifact_path": path}
+        async def restore(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
+            return {"ok": True}
+        async def get_status(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
+            return {"ok": True}
+
+    import app.core.scheduler as sched
+    monkeypatch.setattr(sched, "get_plugin", lambda name: _SuccessPlugin(name))
 
     caplog.set_level(logging.INFO, logger="app.core.scheduler")
     run = run_job_immediately(session, job.id, triggered_by="manual_test")

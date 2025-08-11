@@ -16,6 +16,7 @@ Prerequisites:
 
 Compose and configuration files:
 - Compose file: [deploy/docker-compose.yml](deploy/docker-compose.yml)
+- Env sample: [deploy/.env.sample](deploy/.env.sample)
 - Environment file: `deploy/.env` (see sample below)
 
 ### Images on Docker Hub
@@ -28,7 +29,11 @@ Use Docker Compose to manage images and containers; it will pull tags as needed.
 
 The compose file references these tags. You can pin a specific tag by editing `deploy/docker-compose.yml` and changing the `image` tags.
 
-1) Create `deploy/.env` with your settings (or copy from `deploy/.env.sample`):
+1) Create `deploy/.env` with your settings (or copy the sample first):
+
+```bash
+cp deploy/.env.sample deploy/.env
+```
 
 ```env
 TZ=Etc/UTC
