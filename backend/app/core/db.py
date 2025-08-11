@@ -72,11 +72,28 @@ logger.info("DB file path: %s", db_file)
 SQLITE_URL = f"sqlite:///{db_file.resolve()}"
 logger.info("SQLite URL: %s", SQLITE_URL)
 
+def _resolve_sql_echo() -> bool | str:
+    """Resolve SQL echo flag from environment.
+
+    Supports the following values for `LOG_SQL_ECHO`:
+    - "" (unset or empty): returns False (no SQL echo)
+    - truthy ("1", "true", "yes", "on"): returns True (INFO-level statements)
+    - "debug": returns "debug" (DEBUG-level with parameter values)
+    Any other value defaults to False.
+    """
+    raw = os.getenv("LOG_SQL_ECHO", "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("debug", "2", "verbose"):
+        return "debug"
+    return False
+
+
 # Create engine
 engine = create_engine(
     SQLITE_URL,
     connect_args={"check_same_thread": False},  # Required for SQLite
-    echo=True,  # Set to False in production (kept True for diagnosing persistence)
+    echo=_resolve_sql_echo(),
 )
 
 # Create session factory

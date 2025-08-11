@@ -3,8 +3,8 @@
 Responsibilities:
 - Provide a singleton `AsyncIOScheduler` instance
 - Load enabled `Job`s from DB on startup and schedule them
-- Execute a scheduled job by creating a `Run` row, logging structured JSON, and
-  marking success with a dummy artifact path (placeholder for real plugins)
+- Execute a scheduled job by creating a `Run` row and invoking the configured plugin
+- On errors (including missing plugin), mark the run as failed instead of creating dummy artifacts
 - Provide helpers to trigger the same logic immediately (manual run)
 """
 
@@ -241,27 +241,25 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
             artifact_path=artifact_path,
         )
         return {"target_id": target_id, "status": TargetRunStatus.SUCCESS.value, "error": None, "artifact_path": artifact_path}
-    except KeyError:
+    except KeyError as exc:
         finished_at = datetime.now(timezone.utc)
-        artifact_path = f"/backups/job-{job.id}-{int(finished_at.timestamp())}.dummy"
         target_run.finished_at = finished_at
-        target_run.status = TargetRunStatus.SUCCESS.value
-        target_run.message = "Run completed successfully (dummy)"
-        target_run.artifact_path = artifact_path
-        # Dummy artifacts are not real files; leave metadata unset
-        target_run.logs_text = (target_run.logs_text or "") + f"\nCompleted at {finished_at.isoformat()}"
+        target_run.status = TargetRunStatus.FAILED.value
+        target_run.message = "Run failed: missing plugin on target"
+        # Do not set artifact fields for missing plugins
+        target_run.logs_text = (target_run.logs_text or "") + f"\nFailed at {finished_at.isoformat()} with error: {exc}"
         db.add(target_run)
         db.commit()
         db.refresh(target_run)
         _log_event(
-            "plugin_missing_fallback",
+            "plugin_missing",
             job_id=job.id,
             run_id=run.id,
             target_run_id=target_run.id,
             plugin="<missing>",
-            artifact_path=artifact_path,
+            error=str(exc),
         )
-        return {"target_id": target_id, "status": TargetRunStatus.SUCCESS.value, "error": None, "artifact_path": artifact_path}
+        return {"target_id": target_id, "status": TargetRunStatus.FAILED.value, "error": "missing_plugin"}
     except Exception as exc:
         finished_at = datetime.now(timezone.utc)
         target_run.finished_at = finished_at
@@ -401,20 +399,20 @@ def _perform_run(db: Session, job: JobModel, triggered_by: str) -> RunModel:
             run_id=run.id,
             plugin=plugin_key,
         )
-    except KeyError:
-        # Unknown plugin — keep legacy dummy success behavior to satisfy tests.
+    except KeyError as exc:
+        # Missing plugin — mark the run as failed; do not create dummy artifacts.
         finished_at = datetime.now(timezone.utc)
-        artifact_path = f"/backups/job-{job.id}-{int(finished_at.timestamp())}.dummy"
         run.finished_at = finished_at
-        run.status = RunStatus.SUCCESS.value
-        run.message = "Run completed successfully (dummy)"
-        run.logs_text = (run.logs_text or "") + f"\nCompleted at {finished_at.isoformat()}"
+        run.status = RunStatus.FAILED.value
+        run.message = "Run failed: missing plugin on target"
+        run.logs_text = (run.logs_text or "") + f"\nFailed at {finished_at.isoformat()} with error: {exc}"
 
         _log_event(
-            "plugin_missing_fallback",
+            "plugin_missing",
             job_id=job.id,
             run_id=run.id,
             plugin="<missing>",
+            error=str(exc),
         )
     except Exception as exc:  # Catch-all failures → mark failed
         finished_at = datetime.now(timezone.utc)

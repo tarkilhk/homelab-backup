@@ -297,7 +297,7 @@ class SonarrPlugin(BackupPlugin):
                 content2 = dl2_resp.content or b""
                 if not content2:
                     raise RuntimeError("Sonarr backup fallback download returned no content")
-            with open(artifact_path, "wb") as fp:
+                with open(artifact_path, "wb") as fp:
                     fp.write(content2)
             except httpx.HTTPError as exc:
                 self._logger.error(
