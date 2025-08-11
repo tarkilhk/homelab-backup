@@ -37,13 +37,10 @@ cp deploy/.env.sample deploy/.env
 
 ```env
 TZ=Etc/UTC
-# REQUIRED: host directory to store backups
-BACKUP_ROOT_HOST=/mnt/nas/backups
 
 # Backend options
 LOG_LEVEL=INFO
 LOG_SQL_ECHO=0
-DB_FOLDER=/app/db
 
 # Optional: SMTP notifications
 SMTP_HOST=
@@ -87,13 +84,19 @@ docker compose -f deploy/docker-compose.yml down
 
 Environment variables consumed by the compose stack/backend:
 - `TZ`: container timezone
-- `BACKUP_ROOT_HOST`: host path mounted to `/backups` in the backend container
 - `LOG_LEVEL`: backend log level (DEBUG/INFO/WARNING/ERROR)
-- `DB_FOLDER`: backend path (inside container) where the SQLite DB directory lives; the compose file maps a host directory to `/app/db`
 
 Volumes and persistence:
-- Backups are written under `/backups/<target-slug>/<YYYY-MM-DD>/...` in the backend container, which maps to `BACKUP_ROOT_HOST` on the host.
-- The SQLite database is stored under `DB_FOLDER` (default `/app/db`) and is volume-mapped by the compose file.
+- Backups are written under `/backups/<target-slug>/<YYYY-MM-DD>/...` inside the backend container. Bind mount your host directory to `/backups` in your compose file, for example:
+
+```yaml
+services:
+  backend:
+    volumes:
+      - /mnt/nas/backups:/backups
+      - ./db:/app/db
+```
+- The SQLite database is stored under `/app/db` inside the backend container. Mount any host directory you prefer to this path in the compose file.
 
 ## Basic usage
 1. Open the UI at `http://<your-server-name>:8081` and create a Target.

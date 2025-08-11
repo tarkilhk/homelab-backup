@@ -10,7 +10,7 @@
     - "Use lazy logging params (logger.info('msg %s', var)) not f-strings"
     - "Do not log secrets or PII; scrub tokens/passwords"
     - "Timestamps must be timezone-aware UTC"
-    - "SQLite location is driven by DB_FOLDER env; default to ./db; avoid DATABASE_URL"
+    - "SQLite location is fixed to /app/db inside the container; avoid DATABASE_URL"
     - "Only create tables on startup via an init_db() routine; never auto-drop tables"
     - "Do not call Base.metadata.drop_all() in application runtime"
     - "Gate SQLAlchemy engine echo with an env flag (e.g., LOG_SQL_ECHO/DEBUG); default False"
