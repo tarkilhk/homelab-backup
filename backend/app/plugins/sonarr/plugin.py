@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
+import asyncio
 import httpx
 import logging
 
@@ -15,7 +16,12 @@ class SonarrPlugin(BackupPlugin):
 
     Research notes: Sonarr's UI exposes backups via *System → Backup* which generates
     a zip archive for download. This plugin automates that by calling the
-    `/api/v3/system/backup` endpoint with an API key for authentication.
+    backup endpoints with an API key for authentication.
+
+    Correct API flow (Servarr family, including Sonarr v3):
+    - POST `/api/v3/system/backup` to trigger a new manual backup
+    - Poll GET `/api/v3/system/backup` to find the newly created backup entry
+    - GET `/api/v3/system/backup/{id}/download` to download the ZIP archive
     """
 
     backup_root = "/backups"
@@ -61,19 +67,127 @@ class SonarrPlugin(BackupPlugin):
         if not base_url or not api_key:
             raise ValueError("Sonarr config must include base_url and api_key")
 
-        backup_url = f"{base_url}/api/v3/system/backup"
+        list_url = f"{base_url}/api/v3/system/backup"
+        create_url = f"{base_url}/api/v3/system/backup"
+
+        # Start time boundary to identify the new backup entry
+        started_at_iso = datetime.now(timezone.utc).isoformat()
+
         self._logger.info(
-            "sonarr_backup_request | job_id=%s target_id=%s url=%s artifact=%s",
+            "sonarr_backup_trigger | job_id=%s target_id=%s url=%s artifact=%s",
             context.job_id,
             context.target_id,
-            backup_url,
+            create_url,
             artifact_path,
         )
+
         async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.get(backup_url, headers={"X-Api-Key": api_key})
-            resp.raise_for_status()
+            # 1) Trigger a new manual backup
+            try:
+                trigger_resp = await client.post(create_url, headers={"X-Api-Key": api_key})
+                # Sonarr may return 201/202 on success
+                if trigger_resp.status_code // 100 not in (2, 3):
+                    trigger_resp.raise_for_status()
+            except httpx.HTTPError as exc:
+                self._logger.error(
+                    "sonarr_backup_trigger_error | job_id=%s target_id=%s error=%s",
+                    context.job_id,
+                    context.target_id,
+                    str(exc),
+                )
+                raise
+
+            # 2) Poll the backup list for the newly created entry
+            backup_id: Optional[int] = None
+            poll_deadline = asyncio.get_event_loop().time() + 60.0
+            last_list_error: Optional[str] = None
+
+            while backup_id is None and asyncio.get_event_loop().time() < poll_deadline:
+                try:
+                    list_resp = await client.get(list_url, headers={"X-Api-Key": api_key})
+                    list_resp.raise_for_status()
+                    items: List[Dict[str, Any]] = list_resp.json() or []
+                    # Heuristic: find most recent manual backup created at/after trigger
+                    # Example item keys: id, name, path, type ("manual"/"scheduled"), size, time
+                    candidate: Optional[Dict[str, Any]] = None
+                    for it in items:
+                        if not isinstance(it, dict):
+                            continue
+                        if it.get("type") not in ("manual", "scheduled"):
+                            continue
+                        it_time = it.get("time")
+                        try:
+                            # Compare ISO timestamps when possible
+                            if isinstance(it_time, str) and it_time >= started_at_iso:
+                                if it.get("type") == "manual":
+                                    candidate = it
+                                    break
+                                # Fallback: if only scheduled exists, keep the newest
+                                if candidate is None:
+                                    candidate = it
+                        except Exception:
+                            # If time parsing fails, we'll fallback to first item later
+                            pass
+
+                    if candidate is None and items:
+                        # Fallback to the first item (usually newest) if we cannot match by time
+                        candidate = items[0]
+
+                    if candidate and isinstance(candidate.get("id"), int):
+                        backup_id = int(candidate["id"])
+                        break
+                except (httpx.HTTPError, ValueError) as exc:
+                    last_list_error = str(exc)
+
+                await asyncio.sleep(1.0)
+
+            if backup_id is None:
+                msg = (
+                    "Unable to locate newly created Sonarr backup entry after trigger"
+                    + (f" | last_error={last_list_error}" if last_list_error else "")
+                )
+                self._logger.error(
+                    "sonarr_backup_list_timeout | job_id=%s target_id=%s msg=%s",
+                    context.job_id,
+                    context.target_id,
+                    msg,
+                )
+                raise RuntimeError(msg)
+
+            # 3) Download the archive
+            download_url = f"{base_url}/api/v3/system/backup/{backup_id}/download"
+            self._logger.info(
+                "sonarr_backup_download | job_id=%s target_id=%s url=%s backup_id=%s",
+                context.job_id,
+                context.target_id,
+                download_url,
+                backup_id,
+            )
+            try:
+                dl_resp = await client.get(
+                    download_url,
+                    headers={
+                        "X-Api-Key": api_key,
+                        "Accept": "application/zip, application/octet-stream",
+                    },
+                )
+                dl_resp.raise_for_status()
+            except httpx.HTTPError as exc:
+                self._logger.error(
+                    "sonarr_backup_download_error | job_id=%s target_id=%s error=%s",
+                    context.job_id,
+                    context.target_id,
+                    str(exc),
+                )
+                raise
+
+            content = dl_resp.content
+            if not content:
+                raise RuntimeError("Sonarr backup download returned no content")
+
             with open(artifact_path, "wb") as fp:
-                fp.write(resp.content)
+                fp.write(content)
+
         return {"artifact_path": artifact_path}
 
     async def restore(self, context: BackupContext) -> Dict[str, Any]:
