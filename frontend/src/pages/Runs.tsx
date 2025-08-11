@@ -1,26 +1,14 @@
 import { useEffect, useMemo, useState, Fragment } from 'react'
-import { ChevronRight, ChevronDown, CheckCircle2, AlertTriangle, XCircle, File } from 'lucide-react'
+import { ChevronRight, ChevronDown, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { api, type RunWithJob, type TargetRun } from '../api/client'
-import { formatLocalDateTime } from '../lib/dates'
+import { formatLocalDateTime, formatLocalDateTimeShort } from '../lib/dates'
 import { useLocation } from 'react-router-dom'
 import AppCard from '../components/ui/AppCard'
 
-// Compact date-time for table cells: YYYY-MM-DD HH:mm (no seconds)
-function formatShortDateTime(dt?: string | null): string {
-  if (!dt) return '—'
-  try {
-    const d = new Date(dt)
-    const yyyy = d.getFullYear()
-    const mm = String(d.getMonth() + 1).padStart(2, '0')
-    const dd = String(d.getDate()).padStart(2, '0')
-    const hh = String(d.getHours()).padStart(2, '0')
-    const mi = String(d.getMinutes()).padStart(2, '0')
-    return `${yyyy}-${mm}-${dd} ${hh}:${mi}`
-  } catch {
-    return String(dt)
-  }
-}
+// Use shared date utility that parses naive UTC and renders in local TZ
+const formatShortDateTime = (dt?: string | null): string =>
+  dt ? formatLocalDateTimeShort(dt) : '—'
 
 // Map run/target-run status to a text color class for messages
 function statusTextColorClass(status?: string): string {
@@ -206,7 +194,7 @@ export default function RunsPage() {
               <th className="px-4 py-2">Status</th>
               <th className="px-4 py-2">Started</th>
               <th className="px-4 py-2">Finished</th>
-              <th className="px-4 py-2">Details</th>
+              <th className="px-4 py-2 text-right">Details</th>
             </tr>
           </thead>
           <tbody>
@@ -249,10 +237,10 @@ export default function RunsPage() {
                     </td>
                     <td className="px-4 py-2">{formatShortDateTime(r.started_at)}</td>
                     <td className="px-4 py-2">{formatShortDateTime(r.finished_at)}</td>
-                    <td className="px-4 py-2">
+                    <td className="px-4 py-2 text-right">
                       {r.status === 'failed' || r.message || r.logs_text ? (
-                         <button
-                          className="text-xs underline text-[hsl(var(--accent))] cursor-pointer"
+                        <button
+                          className="text-sm font-medium underline text-[hsl(var(--accent))] cursor-pointer"
                           onClick={(e) => { e.stopPropagation(); setDetailsRun(r) }}
                         >
                           View
@@ -359,7 +347,7 @@ function ExpandedTargetRunRows({ runId, targetIdToName }: { runId: number; targe
         <td className="px-4 py-1 text-xs text-gray-600">Status</td>
         <td className="px-4 py-1 text-xs text-gray-600">Started</td>
         <td className="px-4 py-1 text-xs text-gray-600">Finished</td>
-        <td className="px-4 py-1 text-xs text-gray-600">Artifact</td>
+        <td className="px-4 py-1 text-xs text-gray-600 text-right">Details</td>
       </tr>
       {items.map((tr: TargetRun, idx: number) => (
         <tr key={tr.id} className="bg-muted/30 border-t align-middle">
@@ -380,29 +368,15 @@ function ExpandedTargetRunRows({ runId, targetIdToName }: { runId: number; targe
           </td>
           <td className="px-4 py-1">{formatShortDateTime(tr.started_at)}</td>
           <td className="px-4 py-1">{formatShortDateTime(tr.finished_at)}</td>
-          <td className="px-4 py-1">
-            <div className="flex items-start gap-2 w-full">
-              {tr.artifact_path && (
-                <>
-                  <span aria-label="Artifact" title={tr.artifact_path}>
-                    <File className="h-4 w-4" />
-                  </span>
-                  <div className="grid text-xs">
-                    <span>{tr.artifact_bytes ?? '—'}</span>
-                    <span className="font-mono break-all">{tr.sha256 ?? '—'}</span>
-                  </div>
-                </>
-              )}
-              {(tr.status === 'failed' || !!tr.message || !!tr.logs_text) && (
-                <button
-                  className="underline text-[hsl(var(--accent))] ml-auto"
-                  onClick={() => setDetailsTr(tr)}
-                >
-                  View
-                </button>
-              )}
-              {!tr.artifact_path && !(tr.status === 'failed' || !!tr.message || !!tr.logs_text) && '—'}
-            </div>
+          <td className="px-4 py-1 text-right">
+            {(tr.status === 'failed' || !!tr.message || !!tr.logs_text) ? (
+              <button
+                className="text-xs underline text-[hsl(var(--accent))]"
+                onClick={() => setDetailsTr(tr)}
+              >
+                View
+              </button>
+            ) : '—'}
           </td>
         </tr>
       ))}
