@@ -381,20 +381,28 @@ function ExpandedTargetRunRows({ runId, targetIdToName }: { runId: number; targe
           <td className="px-4 py-1">{formatShortDateTime(tr.started_at)}</td>
           <td className="px-4 py-1">{formatShortDateTime(tr.finished_at)}</td>
           <td className="px-4 py-1">
-            {tr.artifact_path ? (
-              <div className="flex items-start gap-2">
-                <span aria-label="Artifact" title={tr.artifact_path}>
-                  <File className="h-4 w-4" />
-                </span>
-                <div className="grid text-xs">
-                  <span>{tr.artifact_bytes ?? '—'}</span>
-                  <span className="font-mono break-all">{tr.sha256 ?? '—'}</span>
-                </div>
-                <button className="underline text-[hsl(var(--accent))] ml-auto" onClick={() => setDetailsTr(tr)}>View</button>
-              </div>
-            ) : (
-              '—'
-            )}
+            <div className="flex items-start gap-2 w-full">
+              {tr.artifact_path && (
+                <>
+                  <span aria-label="Artifact" title={tr.artifact_path}>
+                    <File className="h-4 w-4" />
+                  </span>
+                  <div className="grid text-xs">
+                    <span>{tr.artifact_bytes ?? '—'}</span>
+                    <span className="font-mono break-all">{tr.sha256 ?? '—'}</span>
+                  </div>
+                </>
+              )}
+              {(tr.status === 'failed' || !!tr.message || !!tr.logs_text) && (
+                <button
+                  className="underline text-[hsl(var(--accent))] ml-auto"
+                  onClick={() => setDetailsTr(tr)}
+                >
+                  View
+                </button>
+              )}
+              {!tr.artifact_path && !(tr.status === 'failed' || !!tr.message || !!tr.logs_text) && '—'}
+            </div>
           </td>
         </tr>
       ))}
