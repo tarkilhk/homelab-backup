@@ -515,6 +515,8 @@ def run_job_immediately(db: Session, job_id: int, triggered_by: str = "manual") 
         db.refresh(run)
     except Exception:
         pass
+    # Always emit run_finished for manual runs regardless of aggregation errors
+    try:
         _log_event(
             "run_finished",
             job_id=job.id,
@@ -529,6 +531,8 @@ def run_job_immediately(db: Session, job_id: int, triggered_by: str = "manual") 
             ),
             message=run.message,
         )
+    except Exception:
+        pass
     _log_event("manual_run_complete", job_id=job.id, run_id=run.id, status=run.status)
     return run
 
