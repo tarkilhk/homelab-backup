@@ -8,16 +8,12 @@ services:
     image: tarkilhk/homelab-backup:backend-latest
     env_file:
       - .env
-    environment:
-      - TZ=${TZ}
-      - LOG_LEVEL=DEBUG
-      - LOG_SQL_ECHO=0
     volumes:
       - /tmp/backups:/backups
       - /home/dev/projects/homelab-backup/db:/app/db
       - /etc/localtime:/etc/localtime:ro
     ports:
-      - "8080:8080"
+      - "8086:8080"
     restart: unless-stopped
     networks:
       - homelab-backup-net
@@ -27,6 +23,8 @@ services:
     image: tarkilhk/homelab-backup:frontend-latest
     depends_on:
       - backend
+    environment:
+      - BACKEND_ORIGIN=http://backend:8080
     ports:
       - "8081:80"
     restart: unless-stopped
