@@ -15,6 +15,8 @@ services:
     ports:
       - "8086:8080"
     restart: unless-stopped
+    # Run the backend with a host-matched UID:GID to avoid volume permission issues.
+    # user: "1000:1000"
     healthcheck:
       # Python-based readiness probe (curl not present in backend image)
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready')\" || exit 1"]
