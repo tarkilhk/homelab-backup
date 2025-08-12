@@ -6,12 +6,15 @@ import TagsPage from './pages/Tags'
 import JobsPage from './pages/Jobs'
 import RunsPage from './pages/Runs'
 import OptionsPage from './pages/Options'
+import ErrorPage from './pages/ErrorPage'
+import NotFoundPage from './pages/NotFound'
 
 export function getRoutes() {
   return [
     {
       path: '/',
       element: <App />,
+      errorElement: <ErrorPage />,
       children: [
         { index: true, element: <DashboardPage /> },
         { path: 'targets', element: <TargetsPage /> },
@@ -21,6 +24,8 @@ export function getRoutes() {
         { path: 'jobs', element: <JobsPage /> },
         { path: 'runs', element: <RunsPage /> },
         { path: 'options', element: <OptionsPage /> },
+        // Catch-all for unknown nested routes
+        { path: '*', element: <NotFoundPage /> },
       ],
     },
   ] as const
