@@ -1,5 +1,4 @@
 import os
-from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -32,20 +31,11 @@ async def test_lidarr_validate_and_test(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_lidarr_backup_writes_artifact(monkeypatch):
-    backups = [
-        {"id": 1, "time": "2024-01-01T00:00:00Z"},
-        {"id": 2, "time": "2024-01-02T00:00:00Z"},
-    ]
-
+async def test_lidarr_backup_writes_artifact(monkeypatch, tmp_path):
     async def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/api/v1/command") and request.method == "POST":
-            return httpx.Response(200, json={"id": 1})
         if request.url.path.endswith("/api/v1/system/backup") and request.method == "GET":
-            return httpx.Response(200, json=backups)
-        if request.url.path.endswith("/api/v1/system/backup/2") and request.method == "GET":
             return httpx.Response(200, content=b"zipdata")
-        return httpx.Response(404)
+        return httpx.Response(200, json={"status": "ok"})
 
     transport = httpx.MockTransport(handler)
     orig_client = httpx.AsyncClient
@@ -57,6 +47,7 @@ async def test_lidarr_backup_writes_artifact(monkeypatch):
     monkeypatch.setattr(httpx, "AsyncClient", _client)
 
     plugin = LidarrPlugin(name="lidarr")
+    plugin.backup_root = str(tmp_path)
     ctx = BackupContext(
         job_id="1",
         target_id="1",
@@ -66,4 +57,4 @@ async def test_lidarr_backup_writes_artifact(monkeypatch):
     result = await plugin.backup(ctx)
     artifact_path = result.get("artifact_path")
     assert artifact_path and os.path.exists(artifact_path)
-    assert artifact_path.endswith('.zip')
+    assert artifact_path.endswith(".zip")
