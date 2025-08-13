@@ -1,14 +1,16 @@
 import { useParams, useLocation } from 'react-router-dom'
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api, type JobCreate, type Job, type Target } from '../api/client'
+import { useMutation, useQuery, useQueryClient, useQueries } from '@tanstack/react-query'
+import { api, type JobCreate, type Job, type Tag, type TagTargetAttachment } from '../api/client'
 import { formatLocalDateTime } from '../lib/dates'
 import { Button } from '../components/ui/button'
-import { Trash2, Pencil, Play, Check, X, Plus } from 'lucide-react'
+import { useConfirm } from '../components/ConfirmProvider'
+import { Trash2, Pencil, Play, Check, X, Plus, Target as TargetIcon, Sparkles } from 'lucide-react'
 import AppCard from '../components/ui/AppCard'
 import IconButton from '../components/IconButton'
 
 export default function JobsPage() {
+  const confirm = useConfirm()
   const location = useLocation() as unknown as { state?: { openJobId?: number } }
   const preselectJobId = location?.state?.openJobId
   const { id } = useParams()
@@ -21,11 +23,13 @@ export default function JobsPage() {
     enabled: Number.isFinite(targetId as number),
   })
 
-  // Always fetch targets for mapping names and filters
-  const { data: targets } = useQuery({
-    queryKey: ['targets'],
-    queryFn: api.listTargets,
-  })
+  // Tags for selection and display
+  const { data: tags } = useQuery({ queryKey: ['tags'], queryFn: api.listTags })
+  const tagIdToName = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const t of (tags as Tag[] | undefined) ?? []) map.set(t.id, t.display_name)
+    return map
+  }, [tags])
 
   // Jobs listing for table below
   const { data: jobs } = useQuery({
@@ -33,8 +37,37 @@ export default function JobsPage() {
     queryFn: api.listJobs,
   })
 
-  // Selected target when using global jobs page
-  const [selectedTargetId, setSelectedTargetId] = useState<number | ''>('')
+  // Build a list of unique tag IDs from jobs to lazily fetch target counts
+  const jobTagIds: number[] = useMemo(() => {
+    const ids = new Set<number>()
+    for (const j of ((jobs ?? []) as Job[])) ids.add(j.tag_id)
+    return Array.from(ids)
+  }, [jobs])
+
+  // Fetch target lists per tag for all tags present in jobs (used for counts + hover tooltips)
+  const tagTargetsQueries = useQueries({
+    queries: jobTagIds.map((tid) => ({
+      queryKey: ['tag', tid, 'targets'],
+      queryFn: () => api.listTargetsForTag(tid),
+      staleTime: 30_000,
+    })),
+  })
+
+  const { tagIdToTargetCount, tagIdToTargetNames } = useMemo(() => {
+    const countMap = new Map<number, number>()
+    const namesMap = new Map<number, string[]>()
+    jobTagIds.forEach((tid, idx) => {
+      const list = tagTargetsQueries[idx]?.data as TagTargetAttachment[] | undefined
+      if (Array.isArray(list)) {
+        countMap.set(tid, list.length)
+        namesMap.set(tid, list.map((x) => x.target.name))
+      }
+    })
+    return { tagIdToTargetCount: countMap, tagIdToTargetNames: namesMap }
+  }, [jobTagIds, tagTargetsQueries])
+
+  // Selected tag when using global jobs page
+  const [selectedTagId, setSelectedTagId] = useState<number | ''>('')
 
   const [form, setForm] = useState<{
     name: string
@@ -45,6 +78,10 @@ export default function JobsPage() {
     schedule_cron: '',
     enabled: 'true',
   })
+
+  // Track whether the user has opted-in to dynamic name suggestions via the
+  // sparkles button. When false, we never modify a non-empty name.
+  const [nameSuggested, setNameSuggested] = useState<boolean>(false)
 
   // Edit/Delete state (edit happens via the top form)
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -59,25 +96,17 @@ export default function JobsPage() {
   // Filters for jobs table
   const [filters, setFilters] = useState<{
     status: '' | 'true' | 'false'
-    targetId: number | ''
-  }>({ status: '', targetId: '' })
-
-  const targetNameById = useMemo(() => {
-    const map = new Map<number, string>()
-    for (const t of (targets as Target[] | undefined) ?? []) {
-      map.set(t.id, t.name)
-    }
-    return map
-  }, [targets])
+    tagId: number | ''
+  }>({ status: '', tagId: '' })
+  
 
   // No date or name filters currently
 
   const filteredJobs: Job[] = useMemo(() => {
     return ((jobs ?? []) as Job[])
-      .filter((j) => (Number.isFinite(targetId as number) ? j.target_id === (targetId as number) : true))
-      .filter((j) => (filters.status ? j.enabled === filters.status : true))
-      .filter((j) => (filters.targetId ? j.target_id === filters.targetId : true))
-  }, [jobs, targetId, filters])
+      .filter((j) => (filters.status ? String(j.enabled) === filters.status : true))
+      .filter((j) => (filters.tagId ? j.tag_id === filters.tagId : true))
+  }, [jobs, filters])
 
   // Humanize a 5-field cron expression for common cases
   function pad2(n: number): string { return n.toString().padStart(2, '0') }
@@ -155,6 +184,45 @@ export default function JobsPage() {
     return null
   }
 
+  // Known name prefixes derived from cron cadence
+  const knownPrefixes = ['Daily', 'Weekly', 'Monthly'] as const
+
+  // Remove any leading known prefix(es) from a name. Handles repeated
+  // application like "Daily Daily foo" and exact matches like "Daily".
+  function stripKnownPrefix(name: string): string {
+    let s = name ?? ''
+    // Remove repeated prefixes like "Daily Daily foo"
+    // Always match the word and the trailing space when present
+    // to avoid leaving stray spaces behind
+    // Also handle exact match (e.g., s === 'Daily') at the end
+    for (;;) {
+      const match = knownPrefixes.find((p) => s.startsWith(`${p} `))
+      if (!match) break
+      s = s.slice(match.length + 1)
+    }
+    if (knownPrefixes.some((p) => s === p)) return ''
+    return s
+  }
+
+  // Build a suggested name using current cron, target or selected tag
+  function buildSuggestedName(prevName?: string): string | null {
+    const prefix = inferPrefixFromCron(form.schedule_cron)
+    const strippedPrev = stripKnownPrefix((prevName ?? '').trim())
+    const tName = target?.name
+    const selectedTagName = (() => {
+      if (selectedTagId === '' || Number.isFinite(targetId as number)) return null
+      const name = tagIdToName.get(selectedTagId as number)
+      return name ?? null
+    })()
+    const suffix = Number.isFinite(targetId as number) && tName
+      ? `${tName} Backup`
+      : selectedTagName
+        ? `${selectedTagName} Backup`
+        : (strippedPrev || 'Backup')
+    if (!suffix && !prefix) return null
+    return [prefix, suffix].filter(Boolean).join(' ')
+  }
+
   // Update defaults when a specific target page is used
   useLayoutEffect(() => {
     if (Number.isFinite(targetId as number) && target) {
@@ -163,81 +231,26 @@ export default function JobsPage() {
         name: prev.name || `${target.name} Backup`,
         schedule_cron: prev.schedule_cron || '0 2 * * *',
       }))
+      // Reset suggestion state when auto-seeding from target
+      setNameSuggested(false)
     }
   }, [target?.name, targetId, target])
 
-  // When selecting a target from the global Jobs page, seed a sensible default name
+  // Auto-suggest name when cron or tag changes, but only if the name is empty
+  // or the user explicitly opted-in by clicking the sparkles button.
   useEffect(() => {
-    if (!Number.isFinite(targetId as number) && selectedTargetId && Array.isArray(targets)) {
-      const selected = (targets as Target[]).find((t) => t.id === selectedTargetId)
-      if (selected) {
-        setForm((prev) => ({
-          ...prev,
-          name: prev.name || `${selected.name} Backup`,
-        }))
-      }
-    }
-  }, [selectedTargetId, targetId, targets])
-
-  // If user picks the standard daily cron, prefix the job name with "Daily "
-  useEffect(() => {
-    if (!Number.isFinite(targetId as number) && selectedTargetId && Array.isArray(targets)) {
-      const selected = (targets as Target[]).find((t) => t.id === selectedTargetId)
-      if (selected && form.schedule_cron === '0 2 * * *') {
-        const baseName = `${selected.name} Backup`
-        if (form.name === baseName) {
-          setForm((prev) => ({ ...prev, name: `Daily ${baseName}` }))
-        }
-      }
-    }
-  }, [form.schedule_cron, selectedTargetId, targetId, targets])
-
-  // Auto-fill job name when selecting a target from global page
-  useEffect(() => {
-    if (!Number.isFinite(targetId as number) && selectedTargetId && targets) {
-      const t = (targets as Target[]).find((x) => x.id === selectedTargetId)
-      if (t) {
-        setForm((prev) => {
-          const suffix = `${t.name} Backup`
-          // Keep any existing prefix if present
-          const maybePrefix = inferPrefixFromCron(prev.schedule_cron)
-          const nextName = maybePrefix ? `${maybePrefix} ${suffix}` : suffix
-          return { ...prev, name: nextName }
-        })
-      }
-    }
-  }, [selectedTargetId, targets, targetId])
-
-  // Update name prefix based on cron selections
-  useEffect(() => {
-    // Only auto-prefix on the global Jobs page after user interactions
-    if (Number.isFinite(targetId as number)) return
-    const prefix = inferPrefixFromCron(form.schedule_cron)
-    if (!prefix) return
     setForm((prev) => {
-      // If name already includes a common prefix, replace it; else prefix
-      const suffixFromTarget = (() => {
-        // If a target is in route, use that; else try selected target
-        const tName = target?.name || (targets as Target[] | undefined)?.find((t) => t.id === selectedTargetId)?.name
-        if (!tName) return prev.name
-        const base = `${tName} Backup`
-        // If prev.name already ends with base (with or without prefix), reuse base
-        // Extract suffix by removing any known prefix
-        const knownPrefixes = ['Daily', 'Weekly', 'Monthly']
-        for (const p of knownPrefixes) {
-          if (prev.name.startsWith(`${p} `)) {
-            const rest = prev.name.slice(p.length + 1)
-            return rest
-          }
-        }
-        return base
-      })()
-      const newName = `${prefix} ${suffixFromTarget}`
-      if (newName === prev.name) return prev
-      return { ...prev, name: newName }
+      const currentName = (prev.name ?? '').trim()
+      const allowUpdate = currentName === '' || nameSuggested
+      if (!allowUpdate) return prev
+      const suggested = buildSuggestedName(prev.name)
+      if (!suggested || suggested === prev.name) return prev
+      return { ...prev, name: suggested }
     })
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.schedule_cron])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.schedule_cron, selectedTagId])
+
+  // (Removed per new behavior; handled by combined effect above.)
 
   const createMut = useMutation({
     mutationFn: (payload: JobCreate) => api.createJob(payload),
@@ -248,14 +261,14 @@ export default function JobsPage() {
         setForm({ name: `${target.name} Backup`, schedule_cron: '0 2 * * *', enabled: 'true' })
       } else {
         setForm({ name: '', schedule_cron: '', enabled: 'true' })
-        setSelectedTargetId('')
+        setSelectedTagId('')
       }
       setShowEditor(false)
     },
   })
 
   const updateMut = useMutation({
-    mutationFn: ({ id, body }: { id: number; body: { name: string; schedule_cron: string; enabled: string } }) =>
+    mutationFn: ({ id, body }: { id: number; body: { name: string; schedule_cron: string; enabled: boolean; tag_id?: number } }) =>
       api.updateJob(id, body),
     onSuccess: () => {
       setEditingId(null)
@@ -277,9 +290,9 @@ export default function JobsPage() {
     const j = (jobs as Job[]).find((it) => it.id === preselectJobId)
     if (j) {
       setEditingId(j.id)
-      setForm({ name: j.name, schedule_cron: j.schedule_cron, enabled: j.enabled })
+      setForm({ name: j.name, schedule_cron: j.schedule_cron, enabled: String(j.enabled) as 'true' | 'false' })
       if (!Number.isFinite(targetId as number)) {
-        setSelectedTargetId(j.target_id)
+        setSelectedTagId(j.tag_id)
       }
       setShowEditor(true)
     }
@@ -293,6 +306,72 @@ export default function JobsPage() {
       qc.invalidateQueries({ queryKey: ['runs'] })
     },
   })
+
+  // If on a target-specific page, find its AUTO tag to use as default tag selection
+  const { data: autoTagId } = useQuery({
+    queryKey: ['target', targetId, 'auto-tag'],
+    queryFn: async () => {
+      const list = await api.listTargetTags(targetId as number)
+      const auto = list.find((tt) => tt.origin === 'AUTO')
+      return auto?.tag.id ?? null
+    },
+    enabled: Number.isFinite(targetId as number),
+  })
+
+  // For the form panel, compute the current tag whose targets will be affected
+  const currentFormTagId = useMemo(() => {
+    return Number.isFinite(targetId as number) ? (autoTagId ?? null) : (selectedTagId === '' ? null : (selectedTagId as number))
+  }, [autoTagId, selectedTagId, targetId])
+
+  // Fetch dynamic target count for the currently selected tag in the form
+  const { data: currentFormTagTargets } = useQuery({
+    queryKey: ['tag', currentFormTagId, 'targets'],
+    queryFn: async () => await api.listTargetsForTag(currentFormTagId as number),
+    enabled: Number.isFinite(currentFormTagId as unknown as number),
+    staleTime: 15_000,
+  })
+  const currentFormTagTargetCount = (currentFormTagTargets ?? []).length
+  const currentFormTagTargetNames = (currentFormTagTargets ?? []).map((t) => t.target.name)
+
+  useEffect(() => {
+    // When viewing jobs scoped to a target, always reflect that target's AUTO tag
+    if (Number.isFinite(targetId as number) && autoTagId) {
+      setSelectedTagId(autoTagId as number)
+      setFilters((f) => ({ ...f, tagId: autoTagId as number }))
+    }
+  }, [autoTagId, targetId])
+
+  // When landing on a target-scoped Jobs page from Targets, open the editor panel by default
+  useEffect(() => {
+    if (Number.isFinite(targetId as number) && autoTagId && !showEditor && editingId === null) {
+      setShowEditor(true)
+    }
+  }, [targetId, autoTagId, showEditor, editingId])
+
+  // Cancel editing helper (used by Cancel button and Escape key)
+  function cancelEditing(): void {
+    setEditingId(null)
+    if (Number.isFinite(targetId as number) && target) {
+      setForm({ name: `${target.name} Backup`, schedule_cron: '0 2 * * *', enabled: 'true' })
+    } else {
+      setForm({ name: '', schedule_cron: '', enabled: 'true' })
+      setSelectedTagId('')
+    }
+    setNameSuggested(false)
+    setShowEditor(false)
+  }
+
+  // Global Escape handler to cancel edit when editor is open
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape' && (showEditor || editingId !== null)) {
+        e.preventDefault()
+        cancelEditing()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [showEditor, editingId, target, targetId])
 
   return (
     <div className="space-y-6">
@@ -311,7 +390,8 @@ export default function JobsPage() {
           onClick={() => {
             setEditingId(null)
             setForm({ name: '', schedule_cron: '', enabled: 'true' })
-            setSelectedTargetId('')
+            setSelectedTagId('')
+            setNameSuggested(false)
             setShowEditor(true)
           }}
         >
@@ -328,47 +408,57 @@ export default function JobsPage() {
             if (editingId) {
               updateMut.mutate({
                 id: editingId,
-                body: { name: form.name, schedule_cron: form.schedule_cron, enabled: form.enabled },
+                body: { name: form.name, schedule_cron: form.schedule_cron, enabled: form.enabled === 'true', tag_id: Number.isFinite(targetId as number) ? (autoTagId ?? undefined) : (selectedTagId as number) },
               })
             } else {
-              const idToUse = Number.isFinite(targetId as number)
-                ? (target as Target)?.id
-                : (selectedTargetId as number)
-              if (!idToUse) return
+              const tagToUse = Number.isFinite(targetId as number)
+                ? (autoTagId as number | null)
+                : (selectedTagId as number)
+              if (!tagToUse) return
               const payload: JobCreate = {
-                target_id: idToUse,
+                tag_id: tagToUse,
                 name: form.name,
                 schedule_cron: form.schedule_cron,
-                enabled: form.enabled,
+                enabled: form.enabled === 'true',
               }
               createMut.mutate(payload)
             }
           }}
         >
           {(!Number.isFinite(targetId as number)) ? (
-            // Global Jobs page: render Target and Cron with aligned input row
+            // Global Jobs page: render Tag and Cron with aligned input row
             <div className="sm:col-span-2 grid gap-x-4">
               {/* Label row */}
               <div className="grid sm:grid-cols-2 gap-x-4">
-                <label className="text-sm" htmlFor="job-target-select">Target</label>
+                <label className="text-sm" htmlFor="job-tag-select">Tag</label>
                 <label className="text-sm" htmlFor="cron-input">Cron</label>
               </div>
               {/* Input row (aligned) */}
               <div className="grid sm:grid-cols-2 gap-x-4">
                 <div>
                   <select
-                    id="job-target-select"
+                    id="job-tag-select"
                     className="border rounded px-3 py-2 bg-background w-full"
-                    value={selectedTargetId}
-                    onChange={(e) => setSelectedTargetId(e.target.value === '' ? '' : Number(e.target.value))}
-                    aria-label="Target"
+                    value={selectedTagId}
+                    onChange={(e) => setSelectedTagId(e.target.value === '' ? '' : Number(e.target.value))}
+                    aria-label="Tag"
                     required
                   >
-                    <option value="" disabled>Select a target…</option>
-                    {(targets ?? []).map((t: Target) => (
-                      <option key={t.id} value={t.id}>{t.name}</option>
+                    <option value="" disabled>Select a tag…</option>
+                    {(tags ?? []).map((t: Tag) => (
+                      <option key={t.id} value={t.id}>{t.display_name}</option>
                     ))}
                   </select>
+                  {currentFormTagId && (
+                    <div
+                      className="mt-2 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs text-muted-foreground"
+                      title={(currentFormTagTargetNames.length ? currentFormTagTargetNames.join('\n') : '')}
+                    >
+                      <TargetIcon className="h-3.5 w-3.5" />
+                      <span>{currentFormTagTargetCount || '—'}</span>
+                      <span className="opacity-75">targets</span>
+                    </div>
+                  )}
                 </div>
                 <div>
                   <div className="flex items-center gap-2">
@@ -389,34 +479,87 @@ export default function JobsPage() {
               </div>
             </div>
           ) : (
-            // Target-specific page: only Cron field
-            <div className="grid gap-1 sm:col-start-1 sm:row-start-1">
-              <label className="text-sm" htmlFor="cron-input">Cron</label>
-              <div className="flex items-center gap-2">
-                <input
-                  id="cron-input"
-                  className="border rounded px-3 py-2 font-mono w-44"
-                  placeholder="0 2 * * *"
-                  value={form.schedule_cron}
-                  onChange={(e) => setForm({ ...form, schedule_cron: e.target.value })}
-                  required
-                />
-                <span className="text-sm md:text-base text-gray-500 whitespace-nowrap" aria-live="polite">
-                  {humanCron ?? '—'}
-                </span>
+            // Target-specific page: show fixed Tag (AUTO) and Cron fields aligned like the global layout
+            <div className="sm:col-span-2 grid gap-x-4">
+              {/* Label row */}
+              <div className="grid sm:grid-cols-2 gap-x-4">
+                <label className="text-sm" htmlFor="job-tag-select">Tag</label>
+                <label className="text-sm" htmlFor="cron-input">Cron</label>
               </div>
-              <span className="text-xs text-gray-500">Use standard 5-field crontab, e.g., 0 2 * * * for 2:00 AM daily.</span>
+              {/* Input row */}
+              <div className="grid sm:grid-cols-2 gap-x-4">
+                <div>
+                  <select
+                    id="job-tag-select"
+                    className="border rounded px-3 py-2 bg-muted/50 w-full"
+                    value={currentFormTagId ?? ''}
+                    onChange={() => { /* Tag is fixed to AUTO for the target */ }}
+                    aria-label="Tag"
+                    disabled
+                  >
+                    <option value="">Select a tag…</option>
+                    {(tags ?? []).map((t: Tag) => (
+                      <option key={t.id} value={t.id}>{t.display_name}</option>
+                    ))}
+                  </select>
+                  {currentFormTagId && (
+                    <div
+                      className="mt-2 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs text-muted-foreground"
+                      title={(currentFormTagTargetNames.length ? currentFormTagTargetNames.join('\n') : '')}
+                    >
+                      <TargetIcon className="h-3.5 w-3.5" />
+                      <span>{currentFormTagTargetCount || '—'}</span>
+                      <span className="opacity-75">targets</span>
+                    </div>
+                  )}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      id="cron-input"
+                      className="border rounded px-3 py-2 font-mono w-44"
+                      placeholder="0 2 * * *"
+                      value={form.schedule_cron}
+                      onChange={(e) => setForm({ ...form, schedule_cron: e.target.value })}
+                      required
+                    />
+                    <span className="text-sm md:text-base text-gray-500 whitespace-nowrap" aria-live="polite">
+                      {humanCron ?? '—'}
+                    </span>
+                  </div>
+                  <span className="block mt-1 text-xs text-gray-500">Use standard 5-field crontab, e.g., 0 2 * * * for 2:00 AM daily.</span>
+                </div>
+              </div>
             </div>
           )}
           <div className="grid gap-1 sm:col-start-1 sm:row-start-2">
             <label className="text-sm" htmlFor="name-input">Job Name</label>
-            <input
-              id="name-input"
-              className="border rounded px-3 py-2"
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              required
-            />
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                aria-label="Suggest name"
+                title="Suggest name"
+                className="p-2 rounded hover:bg-muted text-[hsl(var(--accent))]"
+                onClick={() => {
+                  const suggested = buildSuggestedName(form.name)
+                  if (suggested) {
+                    setForm((prev) => ({ ...prev, name: suggested }))
+                    setNameSuggested(true)
+                  }
+                }}
+              >
+                <Sparkles className="h-4 w-4" />
+              </button>
+              <input
+                id="name-input"
+                className="border rounded px-3 py-2 flex-1"
+                value={form.name}
+                onChange={(e) => {
+                  setForm({ ...form, name: e.target.value })
+                }}
+                required
+              />
+            </div>
           </div>
           <label className="grid gap-1">
             <span className="text-sm">Enabled</span>
@@ -436,16 +579,7 @@ export default function JobsPage() {
             <Button
               type="button"
               variant="cancel"
-              onClick={() => {
-                setEditingId(null)
-                if (Number.isFinite(targetId as number) && target) {
-                  setForm({ name: `${target.name} Backup`, schedule_cron: '0 2 * * *', enabled: 'true' })
-                } else {
-                  setForm({ name: '', schedule_cron: '', enabled: 'true' })
-                  setSelectedTargetId('')
-                }
-                setShowEditor(false)
-              }}
+              onClick={cancelEditing}
             >
               Cancel
             </Button>
@@ -476,16 +610,16 @@ export default function JobsPage() {
               </select>
             </div>
             <div className="grid gap-1">
-              <label className="text-sm" htmlFor="jobs-filter-target">Filter Target</label>
+              <label className="text-sm" htmlFor="jobs-filter-tag">Filter Tag</label>
               <select
-                id="jobs-filter-target"
+                id="jobs-filter-tag"
                 className="border rounded px-3 py-2 bg-background"
-                value={filters.targetId === '' ? '' : String(filters.targetId)}
-                onChange={(e) => setFilters((f) => ({ ...f, targetId: e.target.value === '' ? '' : Number(e.target.value) }))}
+                value={filters.tagId === '' ? '' : String(filters.tagId)}
+                onChange={(e) => setFilters((f) => ({ ...f, tagId: e.target.value === '' ? '' : Number(e.target.value) }))}
               >
-                <option value="">All targets</option>
-                {((targets ?? []) as Target[]).map((t) => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
+                <option value="">All tags</option>
+                {((tags ?? []) as Tag[]).map((t) => (
+                  <option key={t.id} value={t.id}>{t.display_name}</option>
                 ))}
               </select>
             </div>
@@ -493,7 +627,7 @@ export default function JobsPage() {
               <button
                 type="button"
                 className="text-sm underline"
-                onClick={() => setFilters({ status: '', targetId: '' })}
+                onClick={() => setFilters({ status: '', tagId: '' })}
               >
                 Clear filters
               </button>
@@ -503,9 +637,10 @@ export default function JobsPage() {
            <table className="w-full text-sm">
             <thead>
               <tr className="text-left">
-                <th className="px-4 py-2 w-[30%]">Name</th>
-                <th className="px-4 py-2 w-[20%]">Target</th>
-                <th className="px-4 py-2 w-[20%]">Cron</th>
+                <th className="px-4 py-2 w-[28%]">Name</th>
+                <th className="px-4 py-2 w-[20%]">Tag</th>
+                <th className="px-4 py-2 w-[12%]">Targets</th>
+                <th className="px-4 py-2 w-[18%]">Cron</th>
                 <th className="px-4 py-2 w-[10%]">Enabled</th>
                 <th className="px-4 py-2">Created</th>
                 <th className="px-4 py-2 text-right">Actions</th>
@@ -514,22 +649,58 @@ export default function JobsPage() {
             <tbody>
               {filteredJobs
                 .map((j) => (
-                  <tr key={j.id} className="border-t align-top">
+                  <tr
+                    key={j.id}
+                    className="border-t align-top hover:bg-muted/30 cursor-pointer"
+                    onDoubleClick={(e) => {
+                      const target = e.target as HTMLElement
+                      let el: HTMLElement | null = target
+                      let interactive = false
+                      while (el) {
+                        const tag = el.tagName?.toLowerCase()
+                        if (tag && ['button', 'a', 'input', 'select', 'textarea', 'label', 'svg', 'path'].includes(tag)) { interactive = true; break }
+                        if (el.getAttribute && el.getAttribute('role') === 'button') { interactive = true; break }
+                        el = el.parentElement
+                      }
+                      if (interactive) return
+                      // Prevent text selection caused by double-click and briefly disable selection on the row
+                      e.preventDefault()
+                      const row = e.currentTarget as HTMLElement
+                      row.classList.add('select-none')
+                      try { window.getSelection()?.removeAllRanges?.() } catch {}
+                      window.setTimeout(() => row.classList.remove('select-none'), 300)
+                      setEditingId(j.id)
+                      setForm({ name: j.name, schedule_cron: j.schedule_cron, enabled: String(j.enabled) as 'true' | 'false' })
+                      if (!Number.isFinite(targetId as number)) {
+                        setSelectedTagId(j.tag_id)
+                      }
+                      setShowEditor(true)
+                    }}
+                  >
                     <td className="px-4 py-2">{j.name}</td>
-                    <td className="px-4 py-2">{targetNameById.get(j.target_id) ?? target?.name ?? '—'}</td>
+                    <td className="px-4 py-2">{tagIdToName.get(j.tag_id) ?? '—'}</td>
+                     <td className="px-4 py-2">
+                       <div
+                         className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs text-muted-foreground"
+                         title={(tagIdToTargetNames.get(j.tag_id)?.join('\n')) || ''}
+                       >
+                         <TargetIcon className="h-3.5 w-3.5" />
+                         <span>{tagIdToTargetCount.get(j.tag_id) ?? '—'}</span>
+                       </div>
+                     </td>
                     <td className="px-4 py-2 font-mono">{j.schedule_cron}</td>
-                    <td className="px-4 py-2">{j.enabled}</td>
+                    <td className="px-4 py-2">{j.enabled ? 'true' : 'false'}</td>
                     <td className="px-4 py-2">{formatLocalDateTime(j.created_at)}</td>
                     <td className="px-4 py-2 text-right">
                       <div className="flex justify-end gap-2">
                         <button
                           aria-label="Edit"
-                          className="p-2 rounded hover:bg-muted"
+                          className="p-2 rounded hover:bg-muted cursor-pointer"
                           onClick={() => {
                             setEditingId(j.id)
-                            setForm({ name: j.name, schedule_cron: j.schedule_cron, enabled: j.enabled })
+                            setForm({ name: j.name, schedule_cron: j.schedule_cron, enabled: String(j.enabled) as 'true' | 'false' })
                             if (!Number.isFinite(targetId as number)) {
-                              setSelectedTargetId(j.target_id)
+                              setSelectedTagId(j.tag_id)
                             }
                             setShowEditor(true)
                           }}
@@ -538,7 +709,7 @@ export default function JobsPage() {
                         </button>
                         <button
                           aria-label="Run now"
-                          className="p-2 rounded hover:bg-muted"
+                          className="p-2 rounded hover:bg-muted cursor-pointer"
                           onClick={async () => {
                             try {
                               await runNowMut.mutateAsync(j.id)
@@ -584,9 +755,15 @@ export default function JobsPage() {
                         </button>
                         <button
                           aria-label="Delete"
-                          className="p-2 rounded hover:bg-muted"
-                          onClick={() => {
-                            const ok = window.confirm(`Delete job "${j.name}"? This cannot be undone.`)
+                          className="p-2 rounded hover:bg-muted cursor-pointer"
+                          onClick={async () => {
+                            const ok = await confirm({
+                              title: `dev.tarkilnetwork:8081`,
+                              description: `Delete job "${j.name}"? This cannot be undone.`,
+                              confirmText: 'OK',
+                              cancelText: 'Cancel',
+                              variant: 'danger',
+                            })
                             if (ok) deleteMut.mutate(j.id)
                           }}
                         >

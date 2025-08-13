@@ -13,7 +13,6 @@ BACKUP_BASE_PATH = "/backups"
 
 class PostgreSQLPlugin(BackupPlugin):
     """PostgreSQL backup plugin executed via a temporary Docker container.
-
     Research notes:
     - `pg_dump` is the standard utility to export a PostgreSQL database into a
       script file or archive format.

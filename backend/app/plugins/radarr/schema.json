@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "required": ["base_url", "api_key"],
+  "properties": {
+    "base_url": { "type": "string", "format": "uri", "title": "Base URL", "default": "http://radarr.local:7878" },
+    "api_key": { "type": "string", "title": "API Key", "default": "yourapikey" }
+  }
+}

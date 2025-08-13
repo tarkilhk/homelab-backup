@@ -15,14 +15,20 @@ RUN npm run build
 # 2) Runtime stage
 FROM nginx:1.27-alpine AS runner
 
-# Copy custom nginx config
-COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Copy Nginx config template and entrypoint for envsubst
+COPY nginx.conf /etc/nginx/conf.d/default.conf.template
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+# Install envsubst
+RUN apk add --no-cache gettext
 
 # Copy build output
 COPY --from=builder /app/dist /usr/share/nginx/html
 
 EXPOSE 80
 
-# Use the default nginx entrypoint/cmd
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["nginx", "-g", "daemon off;"]
 
 

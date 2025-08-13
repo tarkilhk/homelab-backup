@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "required": ["base_url", "token"],
+  "properties": {
+    "base_url": { "type": "string", "format": "uri", "title": "Base URL", "default": "http://invoiceninja.local" },
+    "token": { "type": "string", "title": "API Token", "default": "your token" }
+  }
+}
