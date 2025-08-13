@@ -19,9 +19,10 @@ class DummyProcess:
 @pytest.mark.asyncio
 async def test_test_returns_true(monkeypatch):
     async def fake_exec(*args, **kwargs):
-        # Ensure docker is used to invoke pg_isready for connectivity check
+        # Ensure docker is used to invoke pg_dump --schema-only for connectivity
         assert args[0] == "docker"
-        assert "pg_isready" in args
+        assert "pg_dump" in args
+        assert "--schema-only" in args
         return DummyProcess(returncode=0)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
