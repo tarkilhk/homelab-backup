@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import logging
+import asyncio
 from datetime import datetime, timezone
 from typing import Any, Dict
 
@@ -12,16 +13,16 @@ from app.core.plugins.base import BackupContext, BackupPlugin
 
 class InvoiceNinjaPlugin(BackupPlugin):
     """Invoice Ninja backup plugin using export API.
-
     Research summary:
     - `GET /api/v1/ping` returns company and user info, used for connectivity tests.
-    - `POST /api/v1/export` triggers a company export job and returns a signed
-      download URL for a zip archive.
-    - `CompanyExport` job writes the archive under `backups/` on the server.
+    - `POST /api/v1/export` queues a `CompanyExport` job and responds with a
+      signed temporary URL for `GET /api/v1/protected_download/<hash>`.
+    - The job writes a zip containing JSON data, documents and backups; the
+      URL becomes valid once the job completes so polling is required.
     Authentication uses the `X-API-Token` header.
     """
 
-    def __init__(self, name: str, version: str = "0.1.0") -> None:
+    def __init__(self, name: str, version: str = "0.2.0") -> None:
         super().__init__(name=name, version=version)
         self._logger = logging.getLogger(__name__)
 
@@ -79,15 +80,26 @@ class InvoiceNinjaPlugin(BackupPlugin):
                 context.target_id,
                 export_url,
             )
-            resp = await client.post(export_url, headers=headers)
+            post_headers = {**headers, "X-Requested-With": "XMLHttpRequest"}
+            resp = await client.post(export_url, headers=post_headers)
             resp.raise_for_status()
             data = resp.json()
             download_url = data.get("url")
             if not download_url:
                 raise RuntimeError("export did not return download url")
 
-            # 2) download archive
-            dl_resp = await client.get(download_url, headers=headers)
+            # 2) poll for archive readiness
+            dl_resp = None
+            for attempt in range(10):
+                self._logger.info(
+                    "invoiceninja_poll_download | attempt=%s url=%s", attempt + 1, download_url
+                )
+                dl_resp = await client.get(download_url, headers=headers)
+                if dl_resp.status_code == 200 and dl_resp.headers.get("content-type", "") != "application/json":
+                    break
+                await asyncio.sleep(3)
+            else:
+                raise RuntimeError("export download not ready")
             dl_resp.raise_for_status()
 
         meta = context.metadata or {}

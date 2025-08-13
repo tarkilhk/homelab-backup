@@ -1,4 +1,5 @@
 import os
+import asyncio
 import httpx
 import pytest
 
@@ -29,10 +30,15 @@ async def test_test_returns_true(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_backup_writes_artifact(tmp_path, monkeypatch):
+    attempts = {"n": 0}
+
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST" and request.url.path.endswith("/api/v1/export"):
             return httpx.Response(200, json={"message": "Processing", "url": "http://example.local/dl/export.zip"})
         if request.method == "GET" and request.url.path == "/dl/export.zip":
+            attempts["n"] += 1
+            if attempts["n"] < 2:
+                return httpx.Response(404)
             return httpx.Response(200, content=b"data")
         return httpx.Response(404)
 
@@ -47,6 +53,11 @@ async def test_backup_writes_artifact(tmp_path, monkeypatch):
 
     plugin = InvoiceNinjaPlugin(name="invoiceninja")
     monkeypatch.setattr(plugin, "_base_dir", lambda: str(tmp_path))
+
+    async def fake_sleep(seconds: float):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
 
     ctx = BackupContext(
         job_id="1",
