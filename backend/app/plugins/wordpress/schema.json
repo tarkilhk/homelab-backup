@@ -1,0 +1,8 @@
+{
+  "type": "object",
+  "required": ["site_path"],
+  "properties": {
+    "site_path": {"type": "string", "title": "WordPress Directory", "default": "/var/www/html"},
+    "wp_path": {"type": "string", "title": "WP-CLI Path", "default": "wp"}
+  }
+}
