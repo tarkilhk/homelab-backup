@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Generator
+from typing import Generator, Any, Dict
 
 import pytest
 from sqlalchemy import create_engine
@@ -16,7 +16,9 @@ from app.core.scheduler import (
     _scheduled_job,  # type: ignore[attr-defined]
     run_job_immediately,
 )
-from app.models import Target, Job, Run
+import tempfile
+from app.core.plugins.base import BackupPlugin, BackupContext
+from app.models import Target, Job, Run, Tag, TargetTag
 
 
 class DummyScheduler:
@@ -68,10 +70,19 @@ def _create_job(
     target_id: int,
     name: str,
     cron: str,
-    enabled: str = "true",
+    enabled: bool = True,
 ) -> Job:
+    # Create a tag and attach to the target so the scheduler can resolve targets by tag
+    tag = Tag(display_name=name)
+    db.add(tag)
+    db.commit()
+    db.refresh(tag)
+
+    db.add(TargetTag(target_id=target_id, tag_id=tag.id, origin="DIRECT"))
+    db.commit()
+
     job = Job(
-        target_id=target_id,
+        tag_id=tag.id,
         name=name,
         schedule_cron=cron,
         enabled=enabled,
@@ -85,9 +96,9 @@ def _create_job(
 def test_schedule_jobs_on_startup_filters_and_args(session: Session, caplog: pytest.LogCaptureFixture) -> None:
     target = _create_target(session)
 
-    enabled_valid = _create_job(session, target.id, "Daily", "*/5 * * * *", enabled="true")
-    enabled_invalid = _create_job(session, target.id, "Bad", "not a cron", enabled="true")
-    disabled = _create_job(session, target.id, "Disabled", "0 2 * * *", enabled="false")
+    enabled_valid = _create_job(session, target.id, "Daily", "*/5 * * * *", enabled=True)
+    enabled_invalid = _create_job(session, target.id, "Bad", "not a cron", enabled=True)
+    disabled = _create_job(session, target.id, "Disabled", "0 2 * * *", enabled=False)
 
     sched = DummyScheduler()
     caplog.set_level(logging.INFO, logger="app.core.scheduler")
@@ -122,7 +133,24 @@ def test_scheduled_job_creates_run_and_marks_success(
     monkeypatch.setattr(sched_mod, "SessionLocal", TestingSessionLocal, raising=True)
 
     target = _create_target(session)
-    job = _create_job(session, target.id, "Now", "* * * * *", enabled="true")
+    job = _create_job(session, target.id, "Now", "* * * * *", enabled=True)
+
+    # Force plugin to be a minimal success plugin
+    class _SuccessPlugin(BackupPlugin):
+        async def validate_config(self, config: Dict[str, Any]) -> bool:  # noqa: ARG002
+            return True
+        async def test(self, config: Dict[str, Any]) -> bool:  # noqa: ARG002
+            return True
+        async def backup(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
+            fd, path = tempfile.mkstemp(prefix="backup-test-", suffix=".txt")
+            return {"artifact_path": path}
+        async def restore(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
+            return {"ok": True}
+        async def get_status(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
+            return {"ok": True}
+
+    import app.core.scheduler as sched
+    monkeypatch.setattr(sched, "get_plugin", lambda name: _SuccessPlugin(name))
 
     caplog.set_level(logging.INFO, logger="app.core.scheduler")
     _scheduled_job(job.id)
@@ -136,7 +164,8 @@ def test_scheduled_job_creates_run_and_marks_success(
         assert run.status == "success"
         assert run.started_at is not None
         assert run.finished_at is not None
-        assert run.artifact_path is not None and run.artifact_path != ""
+        # Parent run no longer carries artifact metadata
+        assert getattr(run, "artifact_path", None) is None
     finally:
         check_db.close()
 
@@ -146,16 +175,33 @@ def test_scheduled_job_creates_run_and_marks_success(
     assert any("run_finished" in m for m in messages)
 
 
-def test_run_job_immediately_shared_logic(session: Session, caplog: pytest.LogCaptureFixture) -> None:
+def test_run_job_immediately_shared_logic(session: Session, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch) -> None:
     target = _create_target(session)
-    job = _create_job(session, target.id, "Manual", "0 0 * * *", enabled="true")
+    job = _create_job(session, target.id, "Manual", "0 0 * * *", enabled=True)
+
+    # Force plugin to be a minimal success plugin
+    class _SuccessPlugin(BackupPlugin):
+        async def validate_config(self, config: Dict[str, Any]) -> bool:  # noqa: ARG002
+            return True
+        async def test(self, config: Dict[str, Any]) -> bool:  # noqa: ARG002
+            return True
+        async def backup(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
+            fd, path = tempfile.mkstemp(prefix="backup-test-", suffix=".txt")
+            return {"artifact_path": path}
+        async def restore(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
+            return {"ok": True}
+        async def get_status(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
+            return {"ok": True}
+
+    import app.core.scheduler as sched
+    monkeypatch.setattr(sched, "get_plugin", lambda name: _SuccessPlugin(name))
 
     caplog.set_level(logging.INFO, logger="app.core.scheduler")
     run = run_job_immediately(session, job.id, triggered_by="manual_test")
 
     assert run.job_id == job.id
     assert run.status == "success"
-    assert run.artifact_path is not None
+    assert getattr(run, "artifact_path", None) is None
     assert run.finished_at is not None
 
     messages = [r.getMessage() for r in caplog.records]

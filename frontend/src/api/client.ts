@@ -9,18 +9,55 @@ export type Target = {
   updated_at: string
 }
 
+export type Tag = {
+  id: number
+  slug: string
+  display_name: string
+  created_at: string
+  updated_at: string
+}
+
+export type TagCreate = {
+  name: string
+}
+
+export type TargetTagWithOrigin = {
+  tag: Tag
+  origin: 'AUTO' | 'DIRECT' | 'GROUP'
+  source_group_id?: number | null
+}
+
+export type TagTargetAttachment = {
+  target: Target
+  origin: 'AUTO' | 'DIRECT' | 'GROUP'
+  source_group_id?: number | null
+}
+
 export type Run = {
   id: number
   job_id: number
   started_at: string
   finished_at?: string | null
-  status: string
+  status: 'running' | 'success' | 'failed' | 'partial'
   message?: string | null
-  artifact_path?: string | null
   logs_text?: string | null
 }
 
-export type RunWithJob = Run & { job: Job }
+export type TargetRun = {
+  id: number
+  run_id: number
+  target_id: number
+  started_at: string
+  finished_at?: string | null
+  status: string
+  message?: string | null
+  artifact_path?: string | null
+  artifact_bytes?: number | null
+  sha256?: string | null
+  logs_text?: string | null
+}
+
+export type RunWithJob = Run & { job: Job; target_runs: TargetRun[] }
 
 export type PluginInfo = {
   key: string
@@ -31,27 +68,46 @@ export type PluginInfo = {
 
 export type Job = {
   id: number
-  target_id: number
+  tag_id: number
   name: string
   schedule_cron: string
-  enabled: string
+  enabled: boolean
   created_at: string
   updated_at: string
 }
 
 export type JobCreate = {
-  target_id: number
+  tag_id: number
   name: string
   schedule_cron: string
-  enabled?: string
+  enabled?: boolean
 }
 
 export type JobUpdate = Partial<{
-  target_id: number
+  tag_id: number
   name: string
   schedule_cron: string
-  enabled: string
+  enabled: boolean
 }>
+
+// Groups API types
+export type Group = {
+  id: number
+  name: string
+  description?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type GroupCreate = {
+  name: string
+  description?: string | null
+}
+
+export type GroupUpdate = Partial<GroupCreate>
+
+export type GroupWithTargets = Group & { targets: Target[] }
+export type GroupWithTags = Group & { tags: Tag[] }
 
 const API_BASE = '/api/v1'
 
@@ -61,8 +117,31 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   })
   if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`Request failed ${res.status}: ${text}`)
+    let errorMessage = `Request failed ${res.status}`
+    const contentType = res.headers.get('content-type') ?? ''
+    try {
+      if (contentType.includes('application/json')) {
+        const data = await res.json()
+        const detail = (data as any)?.detail ?? (data as any)?.message ?? (data as any)?.error
+        if (typeof detail === 'string') {
+          errorMessage = detail
+        } else if (Array.isArray(detail)) {
+          errorMessage = detail
+            .map((d: any) => (typeof d === 'string' ? d : d?.msg ?? JSON.stringify(d)))
+            .join(', ')
+        } else {
+          errorMessage = JSON.stringify(data)
+        }
+      } else {
+        const text = await res.text()
+        errorMessage = text || errorMessage
+      }
+    } catch {
+      // Swallow parsing errors and fall back to generic message
+    }
+    const err = new Error(errorMessage)
+    ;(err as any).status = res.status
+    throw err
   }
   if (res.status === 204) return undefined as unknown as T
   return (await res.json()) as T
@@ -83,6 +162,8 @@ export type TargetUpdate = Partial<{
 export const api = {
   listTargets: () => request<Target[]>('/targets/'),
   getTarget: (id: number) => request<Target>(`/targets/${id}`),
+  listTargetTags: (id: number) => request<TargetTagWithOrigin[]>(`/targets/${id}/tags`),
+  listTargetSchedules: (id: number) => request<string[]>(`/targets/${id}/schedules`),
   createTarget: (payload: TargetCreatePlugin) =>
     request<Target>('/targets/', { method: 'POST', body: JSON.stringify(payload) }),
   updateTarget: (id: number, payload: TargetUpdate) =>
@@ -96,17 +177,39 @@ export const api = {
     }),
   testTarget: (id: number) =>
     request<{ ok: boolean; error?: string }>(`/targets/${id}/test`, { method: 'POST' }),
-  listRuns: (params?: { status?: string; start_date?: string; end_date?: string; target_id?: number }) => {
+  listRuns: (params?: { status?: string; start_date?: string; end_date?: string; tag_id?: number }) => {
     const search = new URLSearchParams()
     if (params?.status) search.set('status', params.status)
     if (params?.start_date) search.set('start_date', params.start_date)
     if (params?.end_date) search.set('end_date', params.end_date)
-    if (params?.target_id != null) search.set('target_id', String(params.target_id))
+    if (params?.tag_id != null) search.set('tag_id', String(params.tag_id))
     const q = search.toString()
     return request<RunWithJob[]>(`/runs/${q ? `?${q}` : ''}`)
   },
+  getRun: (id: number) => request<RunWithJob>(`/runs/${id}`),
   listPlugins: () => request<PluginInfo[]>('/plugins/'),
   getPluginSchema: (key: string) => request<Record<string, unknown>>(`/plugins/${key}/schema`),
+  // Tags
+  listTags: () => request<Tag[]>('/tags/'),
+  getTag: (id: number) => request<Tag>(`/tags/${id}`),
+  createTag: (payload: TagCreate) => request<Tag>('/tags/', { method: 'POST', body: JSON.stringify(payload) }),
+  listTargetsForTag: (id: number) => request<TagTargetAttachment[]>(`/tags/${id}/targets`),
+  deleteTag: (id: number) => request<void>(`/tags/${id}`, { method: 'DELETE' }),
+  // Groups
+  listGroups: () => request<Group[]>('/groups/'),
+  createGroup: (payload: GroupCreate) => request<Group>('/groups/', { method: 'POST', body: JSON.stringify(payload) }),
+  updateGroup: (id: number, payload: GroupUpdate) => request<Group>(`/groups/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteGroup: (id: number) => request<void>(`/groups/${id}`, { method: 'DELETE' }),
+  getGroupTargets: (id: number) => request<GroupWithTargets>(`/groups/${id}/targets`),
+  addTargetsToGroup: (id: number, target_ids: number[]) =>
+    request<GroupWithTargets>(`/groups/${id}/targets`, { method: 'POST', body: JSON.stringify({ target_ids }) }),
+  removeTargetsFromGroup: (id: number, target_ids: number[]) =>
+    request<GroupWithTargets>(`/groups/${id}/targets`, { method: 'DELETE', body: JSON.stringify({ target_ids }) }),
+  getGroupTags: (id: number) => request<GroupWithTags>(`/groups/${id}/tags`),
+  addTagsToGroup: (id: number, tag_names: string[]) =>
+    request<GroupWithTags>(`/groups/${id}/tags`, { method: 'POST', body: JSON.stringify({ tag_names }) }),
+  removeTagsFromGroup: (id: number, tag_names: string[]) =>
+    request<GroupWithTags>(`/groups/${id}/tags`, { method: 'DELETE', body: JSON.stringify({ tag_names }) }),
   // Jobs
   listJobs: () => request<Job[]>('/jobs/'),
   createJob: (payload: JobCreate) => request<Job>('/jobs/', { method: 'POST', body: JSON.stringify(payload) }),
@@ -115,7 +218,7 @@ export const api = {
   deleteJob: (id: number) => request<void>(`/jobs/${id}`, { method: 'DELETE' }),
   runJobNow: (id: number) => request<Run>(`/jobs/${id}/run`, { method: 'POST' }),
   // Dashboard helpers
-  upcomingJobs: () => request<Array<{ job_id: number; name: string; target_id: number; next_run_at: string }>>('/jobs/upcoming'),
+  upcomingJobs: () => request<Array<{ job_id: number; name: string; next_run_at: string }>>('/jobs/upcoming'),
 }
 
 
