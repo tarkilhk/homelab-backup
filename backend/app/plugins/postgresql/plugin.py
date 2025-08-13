@@ -13,13 +13,12 @@ BACKUP_BASE_PATH = "/backups"
 
 class PostgreSQLPlugin(BackupPlugin):
     """PostgreSQL backup plugin executed via a temporary Docker container.
-
     Research notes:
     - `pg_dump` is the standard utility to export a PostgreSQL database into a
       script file or archive format.
     - Because the host environment may not ship PostgreSQL client binaries,
-      this plugin runs `pg_dump` (and `pg_isready` for connectivity checks)
-      inside the official `postgres` container.
+      this plugin runs `pg_dump` inside the official `postgres` container and
+      uses `pg_dump --schema-only` to verify connectivity.
     SQL dumps are stored under
     `/backups/<slug>/<date>/postgresql-dump-<timestamp>.sql`.
     """
@@ -47,7 +46,7 @@ class PostgreSQLPlugin(BackupPlugin):
         return True
 
     async def test(self, config: Dict[str, Any]) -> bool:
-        """Check database connectivity using `pg_isready` in a container."""
+        """Check database connectivity using `pg_dump --schema-only` in a container."""
         if not await self.validate_config(config):
             return False
         host = str(config.get("host"))
@@ -63,14 +62,14 @@ class PostgreSQLPlugin(BackupPlugin):
             "-e",
             f"PGPASSWORD={password}",
             "postgres:16-alpine",
-            "pg_isready",
+            "pg_dump",
+            "--schema-only",
             "-h",
             host,
             "-p",
             str(port),
             "-U",
             user,
-            "-d",
             database,
         ]
 
@@ -82,11 +81,11 @@ class PostgreSQLPlugin(BackupPlugin):
             )
             _, stderr_data = await proc.communicate()
         except OSError as exc:
-            self._logger.warning("pg_isready_exec_error | host=%s error=%s", host, exc)
+            self._logger.warning("pg_dump_exec_error | host=%s error=%s", host, exc)
             return False
         if proc.returncode != 0:
             err = stderr_data.decode(errors="ignore").strip()
-            self._logger.warning("pg_isready_connection_failed | host=%s error=%s", host, err)
+            self._logger.warning("pg_dump_connection_failed | host=%s error=%s", host, err)
             return False
         return True
 
