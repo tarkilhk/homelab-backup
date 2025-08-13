@@ -3,17 +3,19 @@
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 import logging
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, FileResponse, Response
+from fastapi.responses import RedirectResponse, FileResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import base64
 
-from app.core.db import init_db, bootstrap_db, SessionLocal
+from app.core.db import init_db, bootstrap_db, get_session, get_engine
+import app.core.db as db_mod
 from app.core.logging import setup_logging
 from app.core.scheduler import get_scheduler, schedule_jobs_on_startup
+from sqlalchemy.exc import IntegrityError
 
 
 @asynccontextmanager
@@ -28,11 +30,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     
     scheduler = get_scheduler()
     # Schedule enabled jobs from DB before starting scheduler
-    db = SessionLocal()
-    try:
-        schedule_jobs_on_startup(scheduler, db)
-    finally:
-        db.close()
+    # Prefer FastAPI dependency override for DB if present (used by tests)
+    override = app.dependency_overrides.get(get_session)  # type: ignore[attr-defined]
+    if override is not None:
+        db = next(override())
+        try:
+            schedule_jobs_on_startup(scheduler, db)
+        finally:
+            db.close()
+    else:
+        # Ensure engine/session are initialized and use real DB
+        get_engine()
+        session_factory = db_mod.SessionLocal
+        assert session_factory is not None
+        db_session = session_factory()
+        try:
+            schedule_jobs_on_startup(scheduler, db_session)
+        finally:
+            db_session.close()
     scheduler.start()
     logger.info("APScheduler started with Asia/Singapore timezone and jobs scheduled")
     
@@ -69,6 +84,7 @@ app.add_middleware(
 
 # Include routers
 from app.api import health, targets, jobs, runs, plugins, metrics
+from app.api import tags, groups
 
 # Mount health endpoints unversioned for infra probes (/health, /ready)
 app.include_router(health.router)
@@ -78,6 +94,8 @@ app.include_router(targets.router, prefix="/api/v1")
 app.include_router(jobs.router, prefix="/api/v1")
 app.include_router(runs.router, prefix="/api/v1")
 app.include_router(plugins.router, prefix="/api/v1")
+app.include_router(tags.router, prefix="/api/v1")
+app.include_router(groups.router, prefix="/api/v1")
 
 # Prometheus metrics (unversioned)
 app.include_router(metrics.router)
@@ -131,6 +149,12 @@ async def serve_favicon():
 
 # Readiness is provided via health router as /ready
 
+
+# Global exception handlers
+@app.exception_handler(IntegrityError)
+async def handle_integrity_error(_request: Request, exc: IntegrityError) -> JSONResponse:
+    # Standardize DB integrity errors as 409 with readable message
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
 
 if __name__ == "__main__":
     import uvicorn

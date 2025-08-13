@@ -8,7 +8,7 @@
     --muted-foreground: 215.4 16.3% 46.9%;
     --border: 214.3 31.8% 91.4%;
     --ring: 215 20% 65%;
-    /* Accent (default teal). Can be changed in Options */
+    /* Accent default teal (shared token); runtime sets per-theme defaults via ACCENT_HSL */
     --accent: 174 60% 45%;
     --accent-foreground: 0 0% 100%;
     --accent-soft: 174 60% 45% / 0.12;

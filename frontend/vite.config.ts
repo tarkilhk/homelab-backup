@@ -7,7 +7,9 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        // Allow overriding backend origin during local dev.
+        // Use VITE_API_ORIGIN if provided, otherwise default to FastAPI default port 8080.
+        target: process.env.VITE_API_ORIGIN || 'http://localhost:8080',
         changeOrigin: true,
       },
     },

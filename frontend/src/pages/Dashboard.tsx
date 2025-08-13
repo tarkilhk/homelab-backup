@@ -1,4 +1,4 @@
-import { Activity, CalendarClock, Rocket, ShieldCheck } from 'lucide-react'
+import { Activity, CalendarClock, Rocket, ShieldCheck, Puzzle } from 'lucide-react'
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import AppCard from '../components/ui/AppCard'
@@ -11,6 +11,7 @@ export default function DashboardPage() {
   const navigate = useNavigate()
   const { data: targets } = useQuery({ queryKey: ['targets'], queryFn: api.listTargets })
   const { data: jobs } = useQuery({ queryKey: ['jobs'], queryFn: api.listJobs })
+  const { data: plugins } = useQuery({ queryKey: ['plugins'], queryFn: api.listPlugins })
 
   const { data: runs24 } = useQuery({
     queryKey: ['runs', 'last24h'],
@@ -38,8 +39,9 @@ export default function DashboardPage() {
     const successCount = runs24?.filter((r) => r.status === 'success').length ?? 0
     const totalRuns = runs24?.length ?? 0
     const successRate = totalRuns > 0 ? Math.round((successCount / totalRuns) * 100) : undefined
-    return { targetsCount, jobsCount, runsCount, successRate }
-  }, [targets, jobs, runs24])
+    const pluginsCount = plugins?.length ?? undefined
+    return { targetsCount, jobsCount, runsCount, successRate, pluginsCount }
+  }, [targets, jobs, runs24, plugins])
 
   return (
     <div className="space-y-6">
@@ -47,14 +49,15 @@ export default function DashboardPage() {
         <h1 className="text-2xl font-semibold">Dashboard</h1>
         <p className="text-sm text-muted-foreground">Overview of your homelab backups.</p>
       </div>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <StatCard label="Plugins" value={metrics.pluginsCount ?? '—'} icon={Puzzle} />
         <StatCard label="Targets" value={metrics.targetsCount ?? '—'} icon={Rocket} onClick={() => navigate('/targets')} />
         <StatCard label="Jobs" value={metrics.jobsCount ?? '—'} icon={CalendarClock} onClick={() => navigate('/jobs')} />
         <StatCard label="Runs (24h)" value={metrics.runsCount ?? '—'} icon={Activity} onClick={() => navigate('/runs')} />
         <StatCard label="Success rate" value={metrics.successRate != null ? `${metrics.successRate}%` : '—'} icon={ShieldCheck} onClick={() => navigate('/runs')} />
       </div>
       <div className="grid gap-6 lg:grid-cols-2">
-        <AppCard title="Recent Runs" description={`Latest ${RECENT_RUNS_LIMIT} runs`} onTitleClick={() => navigate('/runs')}>
+        <AppCard title="Recent Runs" description={`Last ${RECENT_RUNS_LIMIT} runs`} onTitleClick={() => navigate('/runs')}>
           {topRecentRuns.length === 0 ? (
             <div className="text-sm text-muted-foreground">No recent runs.</div>
           ) : (

@@ -11,15 +11,23 @@ type Props = PropsWithChildren<{
 }>
 
 export default function AppCard({ title, description, className, headerRight, onTitleClick, children }: Props) {
+  const isInteractive = Boolean(onTitleClick)
+  const hasHeaderContent = Boolean(title || description || headerRight)
   return (
     <motion.section
       initial={{ y: 6, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       transition={{ duration: 0.18, ease: 'easeOut' }}
-      whileHover={{ y: -2 }}
-      className={cn('rounded-2xl border surface-card shadow-[0_6px_20px_rgba(0,0,0,.35)] ring-0 hover:ring-2 focus-within:ring-2 ring-[hsl(var(--accent))] transition-shadow', className)}
+      whileHover={isInteractive ? { y: -2 } : undefined}
+      className={cn(
+        // Only show accent rings for interactive cards. Non-clickable cards
+        // should not display a focus-within ring when inner inputs are focused.
+        'rounded-2xl border surface-card shadow-[0_6px_20px_rgba(0,0,0,.35)] transition-shadow',
+        isInteractive && 'ring-0 hover:ring-2 ring-[hsl(var(--accent))]',
+        className
+      )}
     >
-      {(title || description) && (
+      {hasHeaderContent && (
         <div
           className={cn(
             'border-b px-5 py-3.5 flex items-center gap-2 bg-gradient-to-r from-[hsl(var(--accent)/.10)] to-transparent',
@@ -36,11 +44,13 @@ export default function AppCard({ title, description, className, headerRight, on
             }
           }}
         >
-          <div className="font-semibold tracking-tight">
-            {title}
-            {description && <div className="text-xs font-normal text-muted-foreground">{description}</div>}
-          </div>
-          <div className="ml-auto">{headerRight}</div>
+          {(title || description) && (
+            <div className="font-semibold tracking-tight">
+              {title}
+              {description && <div className="text-xs font-normal text-muted-foreground">{description}</div>}
+            </div>
+          )}
+          <div className={cn((title || description) ? 'ml-auto' : undefined)}>{headerRight}</div>
         </div>
       )}
       <div className="px-5 py-4">{children}</div>

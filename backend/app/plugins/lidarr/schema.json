@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "required": ["base_url", "api_key"],
+  "properties": {
+    "base_url": {
+      "type": "string",
+      "format": "uri",
+      "title": "Base URL",
+      "default": "http://lidarr.local:8686"
+    },
+    "api_key": {
+      "type": "string",
+      "title": "API Key",
+      "default": "your_api_key"
+    }
+  }
+}
