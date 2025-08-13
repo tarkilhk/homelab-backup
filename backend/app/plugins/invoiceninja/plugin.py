@@ -13,7 +13,6 @@ from app.core.plugins.base import BackupContext, BackupPlugin
 
 class InvoiceNinjaPlugin(BackupPlugin):
     """Invoice Ninja backup plugin using export API.
-
     Research summary:
     - `GET /api/v1/ping` returns company and user info, used for connectivity tests.
     - `POST /api/v1/export` queues a `CompanyExport` job and responds with a

@@ -14,19 +14,56 @@ Prerequisites:
 - Docker and Docker Compose
 - A host directory for backup artifacts (e.g., `/mnt/nas/backups`)
 
-1) Create `deploy/.env` with your settings:
+Compose and configuration files:
+- Compose file: [deploy/docker-compose.yml](deploy/docker-compose.yml)
+- Env sample: [deploy/.env.sample](deploy/.env.sample)
+- Environment file: `deploy/.env` (see sample below)
+
+### Images on Docker Hub
+- Repository: [`tarkilhk/homelab-backup`](https://hub.docker.com/r/tarkilhk/homelab-backup)
+- Tags used by CI:
+  - Backend: `backend-latest`, `backend-vX.Y.Z`, `backend-sha-<shortsha>`
+  - Frontend: `frontend-latest`, `frontend-vX.Y.Z`, `frontend-sha-<shortsha>`
+
+Use Docker Compose to manage images and containers; it will pull tags as needed.
+
+The compose file references these tags. You can pin a specific tag by editing `deploy/docker-compose.yml` and changing the `image` tags.
+
+1) Create `deploy/.env` with your settings (or copy the sample first):
 
 ```env
 TZ=Etc/UTC
-# REQUIRED: host directory to store backups
-BACKUP_ROOT_HOST=/mnt/nas/backups
 
-# Optional
+# Backend options
 LOG_LEVEL=INFO
-DB_FOLDER=/app/db
+LOG_SQL_ECHO=0
+
+# Optional: SMTP notifications
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USER=
+SMTP_PASS=
+SMTP_FROM=
+SMTP_TO=
+SMTP_STARTTLS=true
+
+# Frontend → Backend connection
+# The frontend proxies `/api/*` to this origin. For Compose, the default works.
+# Examples: http://backend:8080 (Compose service), http://192.168.1.50:8080, https://api.example.com
+BACKEND_ORIGIN=http://backend:8080
 ```
 
-2) Start the stack:
+Reminder: Within Docker Compose, services talk to each other via the service name and the container port. Set `BACKEND_ORIGIN` to `http://backend:8080` (service name + internal port), not to the host-mapped port (e.g., `http://backend:8086`). Using the host port from inside containers will lead to 502 errors from the frontend.
+
+Note: The compose file maps the SQLite database directory with a host bind mount. Update the left-hand side of the mapping to a persistent path on your host if needed (defaults to the repository's `db/` folder).
+
+2) Start the stack (Compose pulls images automatically):
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+Optionally, to build locally instead of pulling prebuilt images:
 
 ```bash
 docker compose -f deploy/docker-compose.yml up -d --build
@@ -38,6 +75,8 @@ docker compose -f deploy/docker-compose.yml up -d --build
 - Health: `http://localhost:8080/health` and `http://localhost:8080/ready`
 - Metrics: `http://localhost:8080/metrics`
 
+Note: Always use Docker Compose to run this stack. The frontend relies on the compose network to reach the backend at `http://backend:8080` (see `frontend/nginx.conf`). Running containers individually with `docker run` will require recreating the same network and service names.
+
 To stop:
 
 ```bash
@@ -48,16 +87,22 @@ docker compose -f deploy/docker-compose.yml down
 
 Environment variables consumed by the compose stack/backend:
 - `TZ`: container timezone
-- `BACKUP_ROOT_HOST`: host path mounted to `/backups` in the backend container
 - `LOG_LEVEL`: backend log level (DEBUG/INFO/WARNING/ERROR)
-- `DB_FOLDER`: backend path (inside container) where the SQLite DB directory lives; the compose file maps a host directory to `/app/db`
 
 Volumes and persistence:
-- Backups are written under `/backups/<target-slug>/<YYYY-MM-DD>/...` in the backend container, which maps to `BACKUP_ROOT_HOST` on the host.
-- The SQLite database is stored under `DB_FOLDER` (default `/app/db`) and is volume-mapped by the compose file.
+- Backups are written under `/backups/<target-slug>/<YYYY-MM-DD>/...` inside the backend container. Bind mount your host directory to `/backups` in your compose file, for example:
+
+```yaml
+services:
+  backend:
+    volumes:
+      - /mnt/nas/backups:/backups
+      - ./db:/app/db
+```
+- The SQLite database is stored under `/app/db` inside the backend container. Mount any host directory you prefer to this path in the compose file.
 
 ## Basic usage
-1. Open the UI at `http://localhost:8081` and create a Target.
+1. Open the UI at `http://<your-server-name>:8081` and create a Target.
 2. Choose a plugin and fill the configuration form.
 3. Create a Job referencing the Target and set a schedule.
 4. Run the Job manually or wait for the scheduler.
@@ -72,7 +117,7 @@ The system supports adding new plugins to back up different services. See `ADDIN
 - `backend/`: FastAPI app, APScheduler, SQLite via SQLAlchemy
 - `frontend/`: React + Vite UI
 - `deploy/`: `docker-compose.yml` for local/NAS deployment
-- `db/` and `db_default/`: local database folders (mapped in compose)
+- `db/`: local database folders (mapped in compose)
 
 ## License
 GPL-3.0-or-later (see `LICENSE`).

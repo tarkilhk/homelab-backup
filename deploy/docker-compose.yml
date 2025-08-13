@@ -1,26 +1,50 @@
+
+networks:
+  homelab-backup-net:
+    driver: bridge
 services:
   backend:
     build: ../backend
-    image: homelab/backup-backend:latest
+    image: tarkilhk/homelab-backup:backend-latest
     env_file:
       - .env
-    environment:
-      - TZ=${TZ}
-      - DB_FOLDER=/app/db
-      - LOG_LEVEL=DEBUG
     volumes:
-      - ${BACKUP_ROOT_HOST}:/backups
+      - /tmp/backups:/backups
       - /home/dev/projects/homelab-backup/db:/app/db
       - /etc/localtime:/etc/localtime:ro
     ports:
-      - "8080:8080"
+      - "8086:8080"
     restart: unless-stopped
+    # Run the backend with a host-matched UID:GID to avoid volume permission issues.
+    # user: "1000:1000"
+    healthcheck:
+      # Python-based readiness probe (curl not present in backend image)
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ready')\" || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
+    networks:
+      - homelab-backup-net
 
   frontend:
     build: ../frontend
-    image: homelab/backup-frontend:latest
+    image: tarkilhk/homelab-backup:frontend-latest
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
+    environment:
+      - BACKEND_ORIGIN=http://backend:8080
     ports:
       - "8081:80"
     restart: unless-stopped
+    healthcheck:
+      # BusyBox wget is present in the nginx:alpine image
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/ || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - homelab-backup-net
+

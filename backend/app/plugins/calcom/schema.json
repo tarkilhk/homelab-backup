@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "required": ["database_url"],
+  "properties": {
+    "database_url": {
+      "type": "string",
+      "title": "Database URL",
+      "format": "uri",
+      "default": "postgresql://user:pass@host:5432/calcom"
+    }
+  }
+}

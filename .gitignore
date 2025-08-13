@@ -14,8 +14,11 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
+# Allow frontend utility libraries under src
+!frontend/src/lib/
+!frontend/src/lib/**
 parts/
 sdist/
 var/
@@ -203,6 +206,8 @@ Thumbs.db
 .env.development
 .env.test
 .env.production
+# Ensure sample env file is tracked
+!deploy/.env.sample
 
 # Temporary files
 *.tmp

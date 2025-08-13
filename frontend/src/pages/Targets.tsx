@@ -1,13 +1,17 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { api, type Target, type PluginInfo } from '../api/client'
+import { api, type Target, type PluginInfo, type TargetTagWithOrigin } from '../api/client'
 import { useEffect, useState } from 'react'
 import { Button } from '../components/ui/button'
-import { Trash2, Pencil, Calendar, Check, X, Plus } from 'lucide-react'
+import { Trash2, Pencil, Calendar, Check, X, Plus, Tag as TagIcon } from 'lucide-react'
+import { formatLocalDateTime } from '../lib/dates'
 import AppCard from '../components/ui/AppCard'
 import IconButton from '../components/IconButton'
 import { Link } from 'react-router-dom'
+import { useConfirm } from '../components/ConfirmProvider'
+import { toast } from 'sonner'
 
 export default function TargetsPage() {
+  const confirm = useConfirm()
   const qc = useQueryClient()
   const { data: targets, isLoading, error } = useQuery({
     queryKey: ['targets'],
@@ -56,8 +60,8 @@ export default function TargetsPage() {
             setConfig({})
           }
         }
-      } catch (_err) {
-        // If schema is not available (404), fall back to raw JSON
+      } catch (err) {
+        // If schema is not available (404), fall back to raw JSON; otherwise notify
         if (!cancelled) {
           setSchema(null)
           if (editingId) {
@@ -69,6 +73,11 @@ export default function TargetsPage() {
             }
           } else {
             setConfig({})
+          }
+          const status = (err as any)?.status
+          if (status !== 404) {
+            const message = (err as any)?.message || 'Failed to load plugin schema'
+            toast.error(message)
           }
         }
       }
@@ -109,6 +118,64 @@ export default function TargetsPage() {
     },
   })
 
+  // Lazy tag fetching per target for tooltip display
+  const [tagsStateByTargetId, setTagsStateByTargetId] = useState<
+    Record<number, { status: 'idle' | 'loading' | 'success' | 'error'; data?: TargetTagWithOrigin[] }>
+  >({})
+
+  async function ensureTargetTagsLoaded(targetId: number) {
+    const current = tagsStateByTargetId[targetId]
+    if (current && (current.status === 'loading' || current.status === 'success')) return
+    setTagsStateByTargetId((prev) => ({ ...prev, [targetId]: { status: 'loading' } }))
+    try {
+      const data = await api.listTargetTags(targetId)
+      setTagsStateByTargetId((prev) => ({ ...prev, [targetId]: { status: 'success', data } }))
+    } catch (err) {
+      setTagsStateByTargetId((prev) => ({ ...prev, [targetId]: { status: 'error' } }))
+      const message = (err as any)?.message || 'Failed to load target tags'
+      toast.error(message)
+    }
+  }
+
+  // On-demand per-target schedule computation using dedicated endpoint
+  const [schedulesByTargetId, setSchedulesByTargetId] = useState<
+    Record<number, { status: 'idle' | 'loading' | 'success' | 'error'; names?: string[] }>
+  >({})
+
+  useEffect(() => {
+    const tlist = targets ?? []
+    if (!tlist.length) return
+    let cancelled = false
+    async function load() {
+      // Mark all as loading first
+      setSchedulesByTargetId((prev) => {
+        const next = { ...prev }
+        for (const t of tlist) next[t.id] = { status: 'loading' }
+        return next
+      })
+      try {
+        await Promise.all(
+          tlist.map(async (t) => {
+            try {
+              const names = await api.listTargetSchedules(t.id)
+              if (cancelled) return
+              setSchedulesByTargetId((prev) => ({ ...prev, [t.id]: { status: 'success', names } }))
+            } catch {
+              if (cancelled) return
+              setSchedulesByTargetId((prev) => ({ ...prev, [t.id]: { status: 'error' } }))
+            }
+          })
+        )
+      } catch {
+        // ignore; individual target errors handled above
+      }
+    }
+    load()
+    return () => {
+      cancelled = true
+    }
+  }, [JSON.stringify((targets ?? []).map((t) => t.id))])
+
   // Test status and error message for connectivity test
   const [testError, setTestError] = useState<string>('')
   const [testState, setTestState] = useState<'idle' | 'success' | 'error'>('idle')
@@ -137,6 +204,29 @@ export default function TargetsPage() {
       setTimeout(() => setTestState('idle'), 1300)
     },
   })
+
+  // Cancel editing helper
+  function cancelEditing(): void {
+    setEditingId(null)
+    setForm({ name: '', plugin_name: '', plugin_config_json: '{}' })
+    setSchema(null)
+    setConfig({})
+    setShowEditor(false)
+    setTestError('')
+    setTestState('idle')
+  }
+
+  // Escape key to cancel edit
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape' && (showEditor || editingId !== null)) {
+        e.preventDefault()
+        cancelEditing()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [showEditor, editingId])
 
   return (
     <div className="space-y-6">
@@ -315,13 +405,7 @@ export default function TargetsPage() {
             <Button
               type="button"
               variant="cancel"
-              onClick={() => {
-                setEditingId(null)
-                setForm({ name: '', plugin_name: '', plugin_config_json: '{}' })
-                setSchema(null)
-                setConfig({})
-                setShowEditor(false)
-              }}
+              onClick={cancelEditing}
             >
               Cancel
             </Button>
@@ -337,7 +421,7 @@ export default function TargetsPage() {
         </AppCard>
       )}
 
-      <AppCard title="Existing Targets" className="overflow-x-auto">
+      <AppCard title="Existing Targets" className="overflow-x-auto ring-0 hover:ring-0 focus-within:ring-0">
         {isLoading ? (
           <div className="p-4 text-sm text-gray-600">Loading...</div>
         ) : error ? (
@@ -355,13 +439,87 @@ export default function TargetsPage() {
             </thead>
             <tbody>
               {(targets ?? []).map((t: Target) => (
-                <tr key={t.id} className="border-t align-top">
+                <tr
+                  key={t.id}
+                  className="border-t align-top hover:bg-muted/30 cursor-pointer"
+                  onDoubleClick={(e) => {
+                    const target = e.target as HTMLElement
+                    let el: HTMLElement | null = target
+                    let interactive = false
+                    while (el) {
+                      const tag = el.tagName?.toLowerCase()
+                      if (tag && ['button', 'a', 'input', 'select', 'textarea', 'label', 'svg', 'path'].includes(tag)) { interactive = true; break }
+                      if (el.getAttribute && el.getAttribute('role') === 'button') { interactive = true; break }
+                      el = el.parentElement
+                    }
+                    if (interactive) return
+                    // Prevent text selection caused by double-click and briefly disable selection on the row
+                    e.preventDefault()
+                    const row = e.currentTarget as HTMLElement
+                    row.classList.add('select-none')
+                    try { window.getSelection()?.removeAllRanges?.() } catch {}
+                    window.setTimeout(() => row.classList.remove('select-none'), 300)
+                    setEditingId(t.id)
+                    setForm({
+                      name: t.name,
+                      plugin_name: t.plugin_name ?? '',
+                      plugin_config_json: t.plugin_config_json ?? '{}',
+                    })
+                    try {
+                      const parsed = JSON.parse(t.plugin_config_json || '{}')
+                      setConfig(parsed && typeof parsed === 'object' ? parsed : {})
+                    } catch {
+                      setConfig({})
+                    }
+                    setShowEditor(true)
+                  }}
+                >
                   <td className="px-4 py-2 w-[20%]">{t.name}</td>
                   <td className="px-4 py-2 w-[20%]">{t.plugin_name ?? '—'}</td>
-                  <td className="px-4 py-2">—</td>
-                  <td className="px-4 py-2">{new Date(t.created_at).toLocaleString()}</td>
+                  <td className="px-4 py-2">
+                    {(() => {
+                      const st = schedulesByTargetId[t.id]
+                      if (!st || st.status === 'idle' || st.status === 'loading') return '—'
+                      const names = st.names ?? []
+                      return names.length ? (
+                      <div className="relative group inline-flex items-center">
+                        <Check className="h-4 w-4 text-green-600" aria-label="Has schedule" />
+                        {/* Tooltip with schedule names */}
+                        <div className="pointer-events-none absolute left-5 top-0 -translate-y-2 opacity-0 group-hover:opacity-100 group-hover:-translate-y-3 transition-all duration-150 ease-out z-20">
+                          <div className="max-w-xs rounded-md border bg-popover text-popover-foreground shadow-md px-2.5 py-1.5 text-xs leading-relaxed whitespace-pre">
+                            {names.join('\n')}
+                          </div>
+                        </div>
+                      </div>
+                      ) : (
+                        <X className="h-4 w-4 text-red-600" aria-label="No schedule" />
+                      )
+                    })()}
+                  </td>
+                  <td className="px-4 py-2">{formatLocalDateTime(t.created_at)}</td>
                   <td className="px-4 py-2 text-right">
                     <div className="flex justify-end gap-2">
+                      {/* Tag hover icon with modern tooltip */}
+                      <div
+                        className="relative group inline-flex items-center"
+                        onMouseEnter={() => ensureTargetTagsLoaded(t.id)}
+                      >
+                        <span className="p-2 rounded text-muted-foreground cursor-default">
+                          <TagIcon className="h-4 w-4" aria-hidden="true" />
+                        </span>
+                        {/* Tooltip */}
+                        <div className="pointer-events-none absolute right-8 top-0 -translate-y-2 opacity-0 group-hover:opacity-100 group-hover:-translate-y-3 transition-all duration-150 ease-out z-20">
+                          <div className="max-w-xs rounded-md border bg-popover text-popover-foreground shadow-md px-2.5 py-1.5 text-xs leading-relaxed whitespace-pre-wrap">
+                            {(() => {
+                              const st = tagsStateByTargetId[t.id]
+                              if (!st || st.status === 'idle' || st.status === 'loading') return 'Loading tags…'
+                              if (st.status === 'error') return 'Failed to load tags'
+                              const names = (st.data ?? []).map((tt) => tt.tag.display_name)
+                              return names.length ? names.join('  ') : 'No tags'
+                            })()}
+                          </div>
+                        </div>
+                      </div>
                       <button
                         aria-label="Edit"
                         className="p-2 rounded hover:bg-muted"
@@ -394,8 +552,14 @@ export default function TargetsPage() {
                       <button
                         aria-label="Delete"
                         className="p-2 rounded hover:bg-muted"
-                        onClick={() => {
-                          const ok = window.confirm(`Delete target \"${t.name}\"? This cannot be undone.`)
+                        onClick={async () => {
+                          const ok = await confirm({
+                            title: `dev.tarkilnetwork:8081`,
+                            description: `Delete target "${t.name}"? This cannot be undone.`,
+                            confirmText: 'OK',
+                            cancelText: 'Cancel',
+                            variant: 'danger',
+                          })
                           if (ok) deleteMut.mutate(t.id)
                         }}
                       >
