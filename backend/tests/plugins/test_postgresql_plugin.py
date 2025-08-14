@@ -1,5 +1,7 @@
 import asyncio
 import os
+import sys
+import types
 import pytest
 
 from app.core.plugins.base import BackupContext
@@ -18,14 +20,21 @@ class DummyProcess:
 
 @pytest.mark.asyncio
 async def test_test_returns_true(monkeypatch):
-    async def fake_exec(*args, **kwargs):
-        # Ensure docker is used to invoke pg_dump --schema-only for connectivity
-        assert args[0] == "docker"
-        assert "pg_dump" in args
-        assert "--schema-only" in args
-        return DummyProcess(returncode=0)
+    class DummyConn:
+        async def fetchval(self, query):
+            assert query.strip().upper() == "SELECT 1"
+            return 1
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+        async def close(self):
+            return None
+
+    async def dummy_connect(**kwargs):
+        # Ensure connection params are passed
+        assert "host" in kwargs and "user" in kwargs and "database" in kwargs
+        return DummyConn()
+
+    dummy_asyncpg = types.SimpleNamespace(connect=dummy_connect)
+    monkeypatch.setitem(sys.modules, "asyncpg", dummy_asyncpg)
     plugin = PostgreSQLPlugin(name="postgresql")
     ok = await plugin.test(
         {

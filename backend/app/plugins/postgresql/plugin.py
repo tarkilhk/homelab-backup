@@ -46,7 +46,7 @@ class PostgreSQLPlugin(BackupPlugin):
         return True
 
     async def test(self, config: Dict[str, Any]) -> bool:
-        """Check database connectivity using `pg_dump --schema-only` in a container."""
+        """Check database connectivity using an async PostgreSQL driver (no Docker/binaries)."""
         if not await self.validate_config(config):
             return False
         host = str(config.get("host"))
@@ -55,39 +55,34 @@ class PostgreSQLPlugin(BackupPlugin):
         password = str(config.get("password"))
         database = str(config.get("database"))
 
-        cmd = [
-            "docker",
-            "run",
-            "--rm",
-            "-e",
-            f"PGPASSWORD={password}",
-            "postgres:16-alpine",
-            "pg_dump",
-            "--schema-only",
-            "-h",
-            host,
-            "-p",
-            str(port),
-            "-U",
-            user,
-            database,
-        ]
-
+        # Import locally so the module remains importable even if the optional
+        # dependency is not installed. We fail the test() gracefully in that case.
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
+            import asyncpg  # type: ignore
+        except Exception as exc:  # pragma: no cover - environment dependent
+            self._logger.warning("asyncpg_not_available | error=%s", exc)
+            return False
+
+        conn = None
+        try:
+            conn = await asyncpg.connect(
+                host=host,
+                port=port,
+                user=user,
+                password=password,
+                database=database,
             )
-            _, stderr_data = await proc.communicate()
-        except OSError as exc:
-            self._logger.warning("pg_dump_exec_error | host=%s error=%s", host, exc)
+            value = await conn.fetchval("SELECT 1")
+            return value == 1
+        except Exception as exc:
+            self._logger.warning("postgresql_test_failed | host=%s error=%s", host, exc)
             return False
-        if proc.returncode != 0:
-            err = stderr_data.decode(errors="ignore").strip()
-            self._logger.warning("pg_dump_connection_failed | host=%s error=%s", host, err)
-            return False
-        return True
+        finally:
+            if conn is not None:
+                try:
+                    await conn.close()
+                except Exception:
+                    pass
 
     async def backup(self, context: BackupContext) -> Dict[str, Any]:
         cfg = getattr(context, "config", {}) or {}
