@@ -1,4 +1,4 @@
-# Homelab Backup Orchestrator
+# Homelab Backup
 
 Pluggable backup orchestrator for homelab services. Define targets (Pi-hole, databases, apps), schedule jobs, and store artifacts in a consistent directory layout on your NAS or local disk.
 
