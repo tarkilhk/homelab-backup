@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "required": ["host", "user", "password", "database"],
+  "properties": {
+    "host": { "type": "string", "title": "Host", "default": "localhost" },
+    "port": { "type": "integer", "title": "Port", "default": 3306 },
+    "user": { "type": "string", "title": "User", "default": "root" },
+    "password": { "type": "string", "title": "Password", "default": "secret" },
+    "database": { "type": "string", "title": "Database", "default": "mysql" }
+  }
+}
