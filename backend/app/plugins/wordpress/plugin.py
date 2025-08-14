@@ -59,13 +59,27 @@ class WordPressPlugin(BackupPlugin):
         meta = context.metadata or {}
         target_slug = meta.get("target_slug") or str(context.target_id)
         today = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
-        base_dir = os.path.join("/backups", target_slug, today)
-        os.makedirs(base_dir, exist_ok=True)
+
+        # Determine backup base directory with overrides and safe fallback
+        cfg = getattr(context, "config", {}) or {}
+        backup_base = str(
+            cfg.get("backup_base_path")
+            or os.environ.get("BACKUP_BASE_PATH")
+            or "/backups"
+        )
+
+        base_dir = os.path.join(backup_base, target_slug, today)
+        try:
+            os.makedirs(base_dir, exist_ok=True)
+        except PermissionError:
+            # Fall back to a temp-writable location to avoid permission issues
+            fallback_root = os.path.join(tempfile.gettempdir(), "backups")
+            base_dir = os.path.join(fallback_root, target_slug, today)
+            os.makedirs(base_dir, exist_ok=True)
 
         timestamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%dT%H%M%S")
         artifact_path = os.path.join(base_dir, f"wordpress-backup-{timestamp}.tar.gz")
 
-        cfg = getattr(context, "config", {}) or {}
         site_path = str(cfg.get("site_path", ""))
         wp_path = str(cfg.get("wp_path", "wp"))
         if not site_path:
