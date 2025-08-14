@@ -22,7 +22,7 @@ class InvoiceNinjaPlugin(BackupPlugin):
     Authentication uses the `X-API-Token` header.
     """
 
-    def __init__(self, name: str, version: str = "0.2.0") -> None:
+    def __init__(self, name: str, version: str = "0.2.1") -> None:
         super().__init__(name=name, version=version)
         self._logger = logging.getLogger(__name__)
 
@@ -90,13 +90,23 @@ class InvoiceNinjaPlugin(BackupPlugin):
 
             # 2) poll for archive readiness
             dl_resp = None
-            for attempt in range(10):
+            # Allow more time; exports can be slow on large datasets
+            get_headers = {**headers, "Accept": "application/zip, application/octet-stream"}
+            for attempt in range(40):
                 self._logger.info(
                     "invoiceninja_poll_download | attempt=%s url=%s", attempt + 1, download_url
                 )
-                dl_resp = await client.get(download_url, headers=headers)
-                if dl_resp.status_code == 200 and dl_resp.headers.get("content-type", "") != "application/json":
-                    break
+                dl_resp = await client.get(download_url, headers=get_headers)
+                # Consider ready only when it's clearly a binary ZIP
+                if dl_resp.status_code == 200:
+                    ct = str(dl_resp.headers.get("content-type", "")).lower()
+                    cd = str(dl_resp.headers.get("content-disposition", "")).lower()
+                    body = dl_resp.content or b""
+                    is_zip_ct = ("application/zip" in ct) or ("application/octet-stream" in ct)
+                    is_zip_cd = ".zip" in cd
+                    is_zip_magic = body.startswith(b"PK\x03\x04")
+                    if is_zip_ct or is_zip_cd or is_zip_magic:
+                        break
                 await asyncio.sleep(3)
             else:
                 raise RuntimeError("export download not ready")
