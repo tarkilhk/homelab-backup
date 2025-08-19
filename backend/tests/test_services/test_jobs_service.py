@@ -212,3 +212,184 @@ def test_per_target_retry_with_backoff(session: Session) -> None:
     assert all(attempts[t.id] == 2 for t in targets)
     # Backoff called for each initial failure
     assert len(sleeps) == len(targets)
+
+
+def test_job_create_adds_to_scheduler(monkeypatch, session):
+    """Test that creating a job automatically adds it to the scheduler."""
+    from app.core.scheduler import reschedule_job
+    
+    # Mock the reschedule_job function
+    mock_calls = []
+    def mock_reschedule_job(job_id, schedule_cron, enabled):
+        mock_calls.append({"job_id": job_id, "schedule_cron": schedule_cron, "enabled": enabled})
+        return True
+    
+    monkeypatch.setattr("app.core.scheduler.reschedule_job", mock_reschedule_job)
+    
+    svc = JobService(session)
+    tag = make_tag(session, "TestTag")
+    
+    # Create enabled job
+    job = svc.create(tag_id=tag.id, name="TestJob", schedule_cron="0 2 * * *", enabled=True)
+    
+    # Verify scheduler was called
+    assert len(mock_calls) == 1
+    assert mock_calls[0]["job_id"] == job.id
+    assert mock_calls[0]["schedule_cron"] == "0 2 * * *"
+    assert mock_calls[0]["enabled"] is True
+
+
+def test_job_create_disabled_does_not_add_to_scheduler(monkeypatch, session):
+    """Test that creating a disabled job does not add it to scheduler."""
+    from app.core.scheduler import reschedule_job
+    
+    # Mock the reschedule_job function
+    mock_calls = []
+    def mock_reschedule_job(job_id, schedule_cron, enabled):
+        mock_calls.append({"job_id": job_id, "schedule_cron": schedule_cron, "enabled": enabled})
+        return True
+    
+    monkeypatch.setattr("app.core.scheduler.reschedule_job", mock_reschedule_job)
+    
+    svc = JobService(session)
+    tag = make_tag(session, "TestTag")
+    
+    # Create disabled job
+    job = svc.create(tag_id=tag.id, name="TestJob", schedule_cron="0 2 * * *", enabled=False)
+    
+    # Verify scheduler was not called
+    assert len(mock_calls) == 0
+
+
+def test_job_update_schedule_cron_updates_scheduler(monkeypatch, session):
+    """Test that updating job cron automatically updates scheduler."""
+    from app.core.scheduler import reschedule_job
+    
+    # Mock the reschedule_job function
+    mock_calls = []
+    def mock_reschedule_job(job_id, schedule_cron, enabled):
+        mock_calls.append({"job_id": job_id, "schedule_cron": schedule_cron, "enabled": enabled})
+        return True
+    
+    monkeypatch.setattr("app.core.scheduler.reschedule_job", mock_reschedule_job)
+    
+    svc = JobService(session)
+    tag = make_tag(session, "TestTag")
+    job = svc.create(tag_id=tag.id, name="TestJob", schedule_cron="0 2 * * *", enabled=True)
+    
+    # Clear mock calls from create
+    mock_calls.clear()
+    
+    # Update cron
+    svc.update(job.id, schedule_cron="0 3 * * *")
+    
+    # Verify scheduler was called with new cron
+    assert len(mock_calls) == 1
+    assert mock_calls[0]["job_id"] == job.id
+    assert mock_calls[0]["schedule_cron"] == "0 3 * * *"
+    assert mock_calls[0]["enabled"] is True
+
+
+def test_job_update_enabled_status_updates_scheduler(monkeypatch, session):
+    """Test that updating job enabled status automatically updates scheduler."""
+    from app.core.scheduler import reschedule_job
+    
+    # Mock the reschedule_job function
+    mock_calls = []
+    def mock_reschedule_job(job_id, schedule_cron, enabled):
+        mock_calls.append({"job_id": job_id, "schedule_cron": schedule_cron, "enabled": enabled})
+        return True
+    
+    monkeypatch.setattr("app.core.scheduler.reschedule_job", mock_reschedule_job)
+    
+    svc = JobService(session)
+    tag = make_tag(session, "TestTag")
+    job = svc.create(tag_id=tag.id, name="TestJob", schedule_cron="0 2 * * *", enabled=True)
+    
+    # Clear mock calls from create
+    mock_calls.clear()
+    
+    # Disable job
+    svc.update(job.id, enabled=False)
+    
+    # Verify scheduler was called with disabled status
+    assert len(mock_calls) == 1
+    assert mock_calls[0]["job_id"] == job.id
+    assert mock_calls[0]["enabled"] is False
+
+
+def test_job_update_other_fields_does_not_update_scheduler(monkeypatch, session):
+    """Test that updating non-schedule fields doesn't trigger scheduler update."""
+    from app.core.scheduler import reschedule_job
+    
+    # Mock the reschedule_job function
+    mock_calls = []
+    def mock_reschedule_job(job_id, schedule_cron, enabled):
+        mock_calls.append({"job_id": job_id, "schedule_cron": schedule_cron, "enabled": enabled})
+        return True
+    
+    monkeypatch.setattr("app.core.scheduler.reschedule_job", mock_reschedule_job)
+    
+    svc = JobService(session)
+    tag = make_tag(session, "TestTag")
+    job = svc.create(tag_id=tag.id, name="TestJob", schedule_cron="0 2 * * *", enabled=True)
+    
+    # Clear mock calls from create
+    mock_calls.clear()
+    
+    # Update name only
+    svc.update(job.id, name="NewName")
+    
+    # Verify scheduler was not called
+    assert len(mock_calls) == 0
+
+
+def test_job_delete_removes_from_scheduler(monkeypatch, session):
+    """Test that deleting a job automatically removes it from scheduler."""
+    from app.core.scheduler import remove_job
+    
+    # Mock the remove_job function
+    mock_calls = []
+    def mock_remove_job(job_id):
+        mock_calls.append({"job_id": job_id})
+        return True
+    
+    monkeypatch.setattr("app.core.scheduler.remove_job", mock_remove_job)
+    
+    svc = JobService(session)
+    tag = make_tag(session, "TestTag")
+    job = svc.create(tag_id=tag.id, name="TestJob", schedule_cron="0 2 * * *", enabled=True)
+    
+    # Delete job
+    svc.delete(job.id)
+    
+    # Verify scheduler was called to remove job
+    assert len(mock_calls) == 1
+    assert mock_calls[0]["job_id"] == job.id
+
+
+def test_scheduler_update_failure_does_not_fail_job_operation(monkeypatch, session):
+    """Test that scheduler update failures don't cause job operations to fail."""
+    from app.core.scheduler import reschedule_job
+    
+    # Mock reschedule_job to raise an exception
+    def mock_reschedule_job(job_id, schedule_cron, enabled):
+        raise RuntimeError("Scheduler error")
+    
+    monkeypatch.setattr("app.core.scheduler.reschedule_job", mock_reschedule_job)
+    
+    svc = JobService(session)
+    tag = make_tag(session, "TestTag")
+    
+    # Job creation should still succeed even if scheduler update fails
+    job = svc.create(tag_id=tag.id, name="TestJob", schedule_cron="0 2 * * *", enabled=True)
+    assert job.id > 0
+    
+    # Job update should still succeed even if scheduler update fails
+    updated_job = svc.update(job.id, schedule_cron="0 3 * * *")
+    assert updated_job.schedule_cron == "0 3 * * *"
+    
+    # Job deletion should still succeed even if scheduler update fails
+    svc.delete(job.id)
+    # Verify job was deleted from DB
+    assert session.query(Job).filter(Job.id == job.id).first() is None
