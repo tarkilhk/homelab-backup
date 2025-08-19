@@ -278,7 +278,11 @@ def run_job_for_tag(
                 for attempt in range(0, max_retries + 1):
                     try:
                         res = runner(t)
-                        status = "success"
+                        # Use the status returned by the runner, fallback to "success" if not provided
+                        if isinstance(res, dict) and "status" in res:
+                            status = res["status"]
+                        else:
+                            status = "success"
                         if isinstance(res, dict):
                             ap = res.get("artifact_path")
                             if isinstance(ap, str):
