@@ -393,3 +393,125 @@ def test_scheduler_update_failure_does_not_fail_job_operation(monkeypatch, sessi
     svc.delete(job.id)
     # Verify job was deleted from DB
     assert session.query(Job).filter(Job.id == job.id).first() is None
+
+
+def test_scheduled_job_execution_success(monkeypatch, session):
+    """Test that _scheduled_job creates run and marks success."""
+    from app.core.scheduler import _scheduled_job
+    from app.core.db import get_session
+    import tempfile
+    
+    # Mock get_session to return our test session
+    def mock_get_session():
+        yield session
+    
+    import app.core.db as db_mod
+    monkeypatch.setattr(db_mod, "get_session", mock_get_session, raising=True)
+    
+    # Create target and job
+    target = make_target(session, "ScheduleTest")
+    tag = make_tag(session, "ScheduleTag")
+    attach(session, target, tag, origin="DIRECT")
+    job = make_job(session, tag, name="ScheduledJob", cron="* * * * *", enabled=True)
+    
+    # Mock successful plugin
+    class SuccessPlugin:
+        async def validate_config(self, config): return True
+        async def test(self, config): return True
+        async def backup(self, context):
+            fd, path = tempfile.mkstemp(prefix="backup-test-", suffix=".txt")
+            return {"artifact_path": path}
+        async def restore(self, context): return {"ok": True}
+        async def get_status(self, context): return {"ok": True}
+    
+    import app.core.scheduler as sched
+    monkeypatch.setattr(sched, "get_plugin", lambda name: SuccessPlugin())
+    
+    # Execute scheduled job
+    _scheduled_job(job.id)
+    
+    # Verify run was created and marked successful
+    from app.models import Run as RunModel
+    runs = session.query(RunModel).filter(RunModel.job_id == job.id).all()
+    assert len(runs) == 1
+    run = runs[0]
+    assert run.status == "success"
+    assert run.started_at is not None
+    assert run.finished_at is not None
+
+
+def test_scheduled_job_handles_plugin_errors(monkeypatch, session):
+    """Test that _scheduled_job handles plugin errors gracefully."""
+    from app.core.scheduler import _scheduled_job
+    from app.core.db import get_session
+    
+    # Mock get_session to return our test session
+    def mock_get_session():
+        yield session
+    
+    import app.core.db as db_mod
+    monkeypatch.setattr(db_mod, "get_session", mock_get_session, raising=True)
+    
+    # Create target and job
+    target = make_target(session, "ErrorTest")
+    tag = make_tag(session, "ErrorTag")
+    attach(session, target, tag, origin="DIRECT")
+    job = make_job(session, tag, name="ErrorJob", cron="* * * * *", enabled=True)
+    
+    # Mock failing plugin
+    class FailingPlugin:
+        async def validate_config(self, config): return True
+        async def test(self, config): return True
+        async def backup(self, context):
+            raise RuntimeError("Plugin backup failed")
+        async def restore(self, context): return {"ok": True}
+        async def get_status(self, context): return {"ok": True}
+    
+    import app.core.scheduler as sched
+    monkeypatch.setattr(sched, "get_plugin", lambda name: FailingPlugin())
+    
+    # Execute scheduled job
+    _scheduled_job(job.id)
+    
+    # Verify run was created and marked failed
+    from app.models import Run as RunModel
+    runs = session.query(RunModel).filter(RunModel.job_id == job.id).all()
+    assert len(runs) == 1
+    run = runs[0]
+    assert run.status == "failed"
+    assert run.started_at is not None
+    assert run.finished_at is not None
+    assert "failed" in run.message.lower()
+
+
+def test_run_job_immediately_shares_logic_with_scheduled_job(monkeypatch, session):
+    """Test that run_job_immediately uses the same execution logic."""
+    from app.core.scheduler import run_job_immediately
+    import tempfile
+    
+    # Create target and job
+    target = make_target(session, "ImmediateTest")
+    tag = make_tag(session, "ImmediateTag")
+    attach(session, target, tag, origin="DIRECT")
+    job = make_job(session, tag, name="ImmediateJob", cron="0 0 * * *", enabled=True)
+    
+    # Mock successful plugin
+    class SuccessPlugin:
+        async def validate_config(self, config): return True
+        async def test(self, config): return True
+        async def backup(self, context):
+            fd, path = tempfile.mkstemp(prefix="backup-test-", suffix=".txt")
+            return {"artifact_path": path}
+        async def restore(self, context): return {"ok": True}
+        async def get_status(self, context): return {"ok": True}
+    
+    import app.core.scheduler as sched
+    monkeypatch.setattr(sched, "get_plugin", lambda name: SuccessPlugin())
+    
+    # Execute job immediately
+    run = run_job_immediately(session, job.id, triggered_by="manual_test")
+    
+    # Verify run was created successfully
+    assert run.job_id == job.id
+    assert run.status == "success"
+    assert run.finished_at is not None
