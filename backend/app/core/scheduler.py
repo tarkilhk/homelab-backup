@@ -629,7 +629,8 @@ def scheduled_tick_with_session(db: Session, job_id: int) -> dict:
 
 def scheduled_tick(job_id: int) -> None:
     """Entry point for APScheduler to execute tag-based jobs on tick."""
-    db = SessionLocal()
+    from app.core.db import get_session
+    db = next(get_session())
     try:
         scheduled_tick_with_session(db, job_id)
     finally:
@@ -643,7 +644,8 @@ def _scheduled_job(job_id: int) -> None:  # legacy-compatible shim for tests
     - Otherwise, execute the legacy single-target _perform_run.
     """
     _log_event("scheduled_job_trigger", job_id=job_id)
-    db = SessionLocal()
+    from app.core.db import get_session
+    db = next(get_session())
     try:
         job = db.get(JobModel, job_id)
         if job is None:
@@ -716,4 +718,84 @@ def schedule_jobs_on_startup(scheduler: AsyncIOScheduler, db: Session) -> None:
         scheduled=scheduled_count,
         invalid_cron=invalid_count,
     )
+
+
+def reschedule_job(job_id: int, schedule_cron: str, enabled: bool = True) -> bool:
+    """Reschedule a specific job with new cron expression.
+    
+    Returns True if successful, False if job not found or invalid cron.
+    """
+    scheduler = get_scheduler()
+    if not hasattr(scheduler, "remove_job") or not hasattr(scheduler, "add_job"):
+        return False
+    
+    try:
+        # Remove existing job if it exists
+        job_id_str = f"job:{job_id}"
+        if scheduler.get_job(job_id_str):
+            scheduler.remove_job(job_id_str)
+            _log_event("job_removed", job_id=job_id)
+        
+        if not enabled:
+            _log_event("job_disabled", job_id=job_id)
+            return True
+        
+        # Parse and validate new cron
+        trigger = CronTrigger.from_crontab(schedule_cron)
+        
+        # Add new job
+        scheduler.add_job(
+            func=scheduled_tick,
+            trigger=trigger,
+            id=job_id_str,
+            name=f"Job {job_id}",
+            replace_existing=True,
+            kwargs={"job_id": job_id},
+            max_instances=1,
+        )
+        
+        _log_event("job_rescheduled", job_id=job_id, schedule_cron=schedule_cron)
+        return True
+        
+    except Exception as exc:
+        _log_event("job_reschedule_failed", job_id=job_id, schedule_cron=schedule_cron, error=str(exc))
+        return False
+
+
+def remove_job(job_id: int) -> bool:
+    """Remove a job from the scheduler."""
+    scheduler = get_scheduler()
+    if not hasattr(scheduler, "remove_job"):
+        return False
+    
+    try:
+        job_id_str = f"job:{job_id}"
+        if scheduler.get_job(job_id_str):
+            scheduler.remove_job(job_id_str)
+            _log_event("job_removed", job_id=job_id)
+            return True
+        return False
+    except Exception as exc:
+        _log_event("job_remove_failed", job_id=job_id, error=str(exc))
+        return False
+
+
+def get_scheduler_jobs() -> list[dict]:
+    """Get list of currently scheduled jobs for debugging."""
+    scheduler = get_scheduler()
+    if not hasattr(scheduler, "get_jobs"):
+        return []
+    
+    try:
+        jobs = []
+        for job in scheduler.get_jobs():
+            jobs.append({
+                "id": job.id,
+                "name": job.name,
+                "next_run_time": str(job.next_run_time) if job.next_run_time else None,
+                "trigger": str(job.trigger),
+            })
+        return jobs
+    except Exception:
+        return []
 

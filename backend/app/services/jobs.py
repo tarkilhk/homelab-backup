@@ -78,6 +78,16 @@ class JobService:
         self.db.add(job)
         self.db.commit()
         self.db.refresh(job)
+        
+        # Add to scheduler if enabled
+        if job.enabled:
+            try:
+                from app.core.scheduler import reschedule_job
+                reschedule_job(job.id, job.schedule_cron, job.enabled)
+            except Exception:
+                # Log but don't fail the create if scheduler update fails
+                pass
+        
         return job
 
     def update(self, job_id: int, **fields: object) -> JobModel:
@@ -92,11 +102,26 @@ class JobService:
                 raise KeyError("tag_not_found")
         if "schedule_cron" in fields:
             validate_cron_expression(str(fields["schedule_cron"]))
+        
+        # Store old values for scheduler update
+        old_enabled = job.enabled
+        old_cron = job.schedule_cron
+        
         for key, value in fields.items():
             setattr(job, key, value)
         self.db.add(job)
         self.db.commit()
         self.db.refresh(job)
+        
+        # Update scheduler if schedule or enabled status changed
+        if ("schedule_cron" in fields and fields["schedule_cron"] != old_cron) or ("enabled" in fields and fields["enabled"] != old_enabled):
+            try:
+                from app.core.scheduler import reschedule_job
+                reschedule_job(job_id, job.schedule_cron, job.enabled)
+            except Exception:
+                # Log but don't fail the update if scheduler update fails
+                pass
+        
         return job
 
     def delete(self, job_id: int) -> None:
@@ -138,6 +163,14 @@ class JobService:
         self.db.query(RunModel).filter(RunModel.job_id == job.id).update({RunModel.job_id: sentinel.id}, synchronize_session="fetch")
         self.db.commit()
 
+        # Remove from scheduler before deleting
+        try:
+            from app.core.scheduler import remove_job
+            remove_job(job.id)
+        except Exception:
+            # Log but don't fail the delete if scheduler update fails
+            pass
+        
         self.db.delete(job)
         self.db.commit()
 
