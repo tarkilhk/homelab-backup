@@ -7,10 +7,11 @@ WORKDIR /app
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
-# Install system dependencies including PostgreSQL client
+# Install system dependencies including PostgreSQL and MySQL clients
 RUN apt-get update && apt-get install -y \
     gcc \
     postgresql-client \
+    default-mysql-client \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy dependency files
