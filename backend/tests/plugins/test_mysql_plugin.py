@@ -62,8 +62,15 @@ async def test_test_returns_true(monkeypatch):
 @pytest.mark.asyncio
 async def test_backup_writes_artifact(tmp_path, monkeypatch):
     async def fake_exec(*args, **kwargs):
-        assert args[0] == "docker"
-        assert "mysqldump" in args
+        # Updated to match new direct command approach (same as PostgreSQL)
+        assert args[0] == "mysqldump"
+        assert "-h" in args and "localhost" in args
+        assert "-u" in args and "user" in args
+        assert "db" in args
+        # Verify MYSQL_PWD is set in environment
+        assert "env" in kwargs
+        assert "MYSQL_PWD" in kwargs["env"]
+        assert kwargs["env"]["MYSQL_PWD"] == "pw"
         return DummyProcess(returncode=0, stdout=b"dump data")
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)

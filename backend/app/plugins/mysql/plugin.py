@@ -100,13 +100,12 @@ class MySQLPlugin(BackupPlugin):
         timestamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%dT%H%M%S")
         artifact_path = os.path.join(base_dir, f"mysql-dump-{timestamp}.sql")
 
+        # Run mysqldump directly (installed in container) instead of via Docker
+        # Use MYSQL_PWD environment variable for password (same pattern as PostgreSQL)
+        env = os.environ.copy()
+        env["MYSQL_PWD"] = password
+
         cmd = [
-            "docker",
-            "run",
-            "--rm",
-            "-e",
-            f"MYSQL_PWD={password}",
-            "mysql:8",
             "mysqldump",
             "-h",
             host,
@@ -131,6 +130,7 @@ class MySQLPlugin(BackupPlugin):
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
             stdout_data, stderr_data = await proc.communicate()
         except OSError as exc:
@@ -153,6 +153,7 @@ class MySQLPlugin(BackupPlugin):
         """Restore a MySQL database from a SQL dump file using mysql command.
         
         Executes the mysql command to import the SQL dump back into the database.
+        Uses the same pattern as PostgreSQL: direct command execution with env vars.
         """
         cfg = context.config or {}
         host = str(cfg.get("host"))
@@ -178,17 +179,12 @@ class MySQLPlugin(BackupPlugin):
             artifact_path,
         )
         
-        # Use Docker to run mysql command similar to how backup uses mysqldump
+        # Run mysql directly (same pattern as PostgreSQL with psql)
+        # Use MYSQL_PWD environment variable for password
+        env = os.environ.copy()
+        env["MYSQL_PWD"] = password
+        
         cmd = [
-            "docker",
-            "run",
-            "--rm",
-            "-i",
-            "-e",
-            f"MYSQL_PWD={password}",
-            "-v",
-            f"{artifact_path}:/backup.sql:ro",
-            "mysql:8",
             "mysql",
             "-h",
             host,
@@ -197,17 +193,21 @@ class MySQLPlugin(BackupPlugin):
             "-u",
             user,
             database,
-            "-e",
-            "source /backup.sql",
         ]
+        
+        # Read the SQL dump and pipe it to mysql via stdin
+        with open(artifact_path, "rb") as f:
+            sql_content = f.read()
         
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
-            stdout_data, stderr_data = await proc.communicate()
+            stdout_data, stderr_data = await proc.communicate(input=sql_content)
         except OSError as exc:
             self._logger.error(
                 "mysql_restore_exec_error | job_id=%s source=%s dest=%s error=%s",
