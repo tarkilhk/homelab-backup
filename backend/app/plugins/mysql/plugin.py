@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 import logging
 
-from app.core.plugins.base import BackupContext, BackupPlugin
+from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
+from app.core.plugins.restore_utils import copy_artifact_for_restore
 
 BACKUP_BASE_PATH = "/backups"
 
@@ -148,8 +149,95 @@ class MySQLPlugin(BackupPlugin):
             fh.write(stdout_data)
         return {"artifact_path": artifact_path}
 
-    async def restore(self, context: BackupContext) -> Dict[str, Any]:  # pragma: no cover - not implemented
-        raise NotImplementedError("Restore operation is not implemented")
+    async def restore(self, context: RestoreContext) -> Dict[str, Any]:
+        """Restore a MySQL database from a SQL dump file using mysql command.
+        
+        Executes the mysql command to import the SQL dump back into the database.
+        """
+        cfg = context.config or {}
+        host = str(cfg.get("host"))
+        port = int(cfg.get("port", 3306))
+        user = str(cfg.get("user"))
+        password = str(cfg.get("password"))
+        database = str(cfg.get("database"))
+        
+        if not host or not user or not password or not database:
+            raise ValueError("mysql config requires host, user, password, database")
+        
+        artifact_path = context.artifact_path
+        if not artifact_path or not os.path.exists(artifact_path):
+            raise FileNotFoundError(f"Artifact not found: {artifact_path}")
+        
+        self._logger.info(
+            "mysql_restore_start | job_id=%s source=%s dest=%s host=%s database=%s artifact=%s",
+            context.job_id,
+            context.source_target_id,
+            context.destination_target_id,
+            host,
+            database,
+            artifact_path,
+        )
+        
+        # Use Docker to run mysql command similar to how backup uses mysqldump
+        cmd = [
+            "docker",
+            "run",
+            "--rm",
+            "-i",
+            "-e",
+            f"MYSQL_PWD={password}",
+            "-v",
+            f"{artifact_path}:/backup.sql:ro",
+            "mysql:8",
+            "mysql",
+            "-h",
+            host,
+            "-P",
+            str(port),
+            "-u",
+            user,
+            database,
+            "-e",
+            "source /backup.sql",
+        ]
+        
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_data, stderr_data = await proc.communicate()
+        except OSError as exc:
+            self._logger.error(
+                "mysql_restore_exec_error | job_id=%s source=%s dest=%s error=%s",
+                context.job_id,
+                context.source_target_id,
+                context.destination_target_id,
+                exc,
+            )
+            raise
+        
+        if proc.returncode != 0:
+            err = stderr_data.decode(errors="ignore").strip()
+            raise RuntimeError(f"mysql restore failed: {err}")
+        
+        artifact_bytes = os.path.getsize(artifact_path)
+        
+        self._logger.info(
+            "mysql_restore_success | job_id=%s source=%s dest=%s artifact=%s bytes=%s",
+            context.job_id,
+            context.source_target_id,
+            context.destination_target_id,
+            artifact_path,
+            artifact_bytes,
+        )
+        
+        return {
+            "status": "success",
+            "artifact_path": artifact_path,
+            "artifact_bytes": artifact_bytes,
+        }
 
     async def get_status(self, context: BackupContext) -> Dict[str, Any]:  # pragma: no cover - not implemented
         return {"status": "unknown"}

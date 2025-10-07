@@ -28,6 +28,10 @@ classifiers = [
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
 ]
 
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["tests*", "migrations*"]
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.4.1",
@@ -45,6 +49,10 @@ target-version = ['py311']
 [tool.isort]
 profile = "black"
 line_length = 100
+
+[tool.pytest.ini_options]
+pythonpath = "."
+testpaths = ["tests"]
 
 [tool.mypy]
 python_version = "3.11"

@@ -6,7 +6,7 @@ import tempfile
 import pytest
 from typing import Any, Dict
 from fastapi.testclient import TestClient
-from app.core.plugins.base import BackupPlugin, BackupContext
+from app.core.plugins.base import BackupPlugin, BackupContext, RestoreContext
 from app.api.metrics import _sanitize_label_value
 
 
@@ -62,7 +62,7 @@ class TestMetricsEndpoint:
             async def backup(self, context: BackupContext) -> Dict[str, Any]:
                 fd, path = tempfile.mkstemp(prefix="backup-test-", suffix=".txt")
                 return {"artifact_path": path}
-            async def restore(self, context: BackupContext) -> Dict[str, Any]:
+            async def restore(self, context: RestoreContext) -> Dict[str, Any]:
                 return {"ok": True}
             async def get_status(self, context: BackupContext) -> Dict[str, Any]:
                 return {"ok": True}
@@ -121,7 +121,7 @@ class TestMetricsEndpoint:
                 return True
             async def backup(self, context: BackupContext) -> Dict[str, Any]:
                 raise RuntimeError("Intentional failure for testing")
-            async def restore(self, context: BackupContext) -> Dict[str, Any]:
+            async def restore(self, context: RestoreContext) -> Dict[str, Any]:
                 return {"ok": True}
             async def get_status(self, context: BackupContext) -> Dict[str, Any]:
                 return {"ok": True}
@@ -181,7 +181,7 @@ class TestMetricsEndpoint:
             async def backup(self, context: BackupContext) -> Dict[str, Any]:
                 fd, path = tempfile.mkstemp(prefix="backup-test-", suffix=".txt")
                 return {"artifact_path": path}
-            async def restore(self, context: BackupContext) -> Dict[str, Any]:
+            async def restore(self, context: RestoreContext) -> Dict[str, Any]:
                 return {"ok": True}
             async def get_status(self, context: BackupContext) -> Dict[str, Any]:
                 return {"ok": True}

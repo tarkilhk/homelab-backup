@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 from typing import Any, Dict
 
 import httpx
-from app.core.plugins.base import BackupContext, BackupPlugin
+from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
+from app.core.plugins.restore_utils import copy_artifact_for_restore
 import logging
 
 
@@ -197,10 +198,24 @@ class PiHolePlugin(BackupPlugin):
 
         return {"artifact_path": artifact_path}
 
-    async def restore(self, context: BackupContext) -> Dict[str, Any]:  # pragma: no cover - not implemented
-        return {"status": "not_implemented"}
+    async def restore(self, context: RestoreContext) -> Dict[str, Any]:
+        """Restore a Pi-hole backup.
+        
+        Note: Pi-hole v6 Teleporter restoration. This function copies the backup file
+        to a restore directory. To complete the restore:
+        1. Access Pi-hole web interface
+        2. Navigate to Settings → Teleporter
+        3. Use the "Import" feature to upload the backup ZIP file
+        
+        The Teleporter import will restore settings, blocklists, and configurations.
+        """
+        return copy_artifact_for_restore(
+            context,
+            logger=self._logger,
+            restore_root="/backups",
+            prefix="pihole",
+        )
 
     async def get_status(self, context: BackupContext) -> Dict[str, Any]:  # pragma: no cover - trivial
         return {"status": "ok"}
-
 

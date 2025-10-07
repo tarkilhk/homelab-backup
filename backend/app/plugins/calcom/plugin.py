@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
-from app.core.plugins.base import BackupContext, BackupPlugin
+from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
+from app.core.plugins.restore_utils import copy_artifact_for_restore
 
 
 class CalcomPlugin(BackupPlugin):
@@ -81,8 +82,66 @@ class CalcomPlugin(BackupPlugin):
 
         return {"artifact_path": str(artifact_path)}
 
-    async def restore(self, context: BackupContext) -> Dict[str, Any]:  # pragma: no cover - not implemented
-        raise NotImplementedError("Restore is not supported for Cal.com")
+    async def restore(self, context: RestoreContext) -> Dict[str, Any]:
+        """Restore a Cal.com PostgreSQL database from a SQL dump file using psql."""
+        cfg = context.config or {}
+        db_url = str(cfg.get("database_url", ""))
+        
+        if not db_url:
+            raise ValueError("database_url is required for restore")
+        
+        artifact_path = context.artifact_path
+        if not artifact_path or not os.path.exists(artifact_path):
+            raise FileNotFoundError(f"Artifact not found: {artifact_path}")
+        
+        self._logger.info(
+            "calcom_restore_start | job_id=%s source=%s dest=%s artifact=%s",
+            context.job_id,
+            context.source_target_id,
+            context.destination_target_id,
+            artifact_path,
+        )
+        
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "psql",
+                db_url,
+                "-f",
+                artifact_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout_data, stderr_data = await proc.communicate()
+        except OSError as exc:
+            self._logger.error(
+                "calcom_restore_exec_error | job_id=%s source=%s dest=%s error=%s",
+                context.job_id,
+                context.source_target_id,
+                context.destination_target_id,
+                exc,
+            )
+            raise
+        
+        if proc.returncode != 0:
+            err = stderr_data.decode(errors="ignore").strip()
+            raise RuntimeError(f"psql restore failed: {err}")
+        
+        artifact_bytes = os.path.getsize(artifact_path)
+        
+        self._logger.info(
+            "calcom_restore_success | job_id=%s source=%s dest=%s artifact=%s bytes=%s",
+            context.job_id,
+            context.source_target_id,
+            context.destination_target_id,
+            artifact_path,
+            artifact_bytes,
+        )
+        
+        return {
+            "status": "success",
+            "artifact_path": artifact_path,
+            "artifact_bytes": artifact_bytes,
+        }
 
     async def get_status(self, context: BackupContext) -> Dict[str, Any]:  # pragma: no cover - trivial
         return {"status": "not implemented"}

@@ -1,35 +1,41 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import RunsPage from '../Runs'
 import React, { type ReactNode } from 'react'
 import { MemoryRouter } from 'react-router-dom'
 
-vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+let nowIso = new Date().toISOString()
+
+vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
   // List runs (with optional query)
   if (url.endsWith('/runs/') || String(url).includes('/runs/?')) {
     return new Response(JSON.stringify([
-      { id: 1, job_id: 1, status: 'success', started_at: new Date().toISOString(), finished_at: new Date().toISOString() },
+      { id: 1, job_id: 1, status: 'success', operation: 'backup', started_at: nowIso, finished_at: nowIso, display_job_name: 'Daily pihole backup', display_tag_name: 'Pihole', job: { id: 1, tag_id: 1, name: 'Daily pihole backup', schedule_cron: '* * * * *', enabled: true, created_at: nowIso, updated_at: nowIso }, target_runs: [] },
+      { id: 2, job_id: 2, status: 'success', operation: 'restore', started_at: nowIso, finished_at: nowIso, display_job_name: 'Secondary Pihole Restore', display_tag_name: 'Secondary Pihole', job: { id: 2, tag_id: 2, name: 'Secondary restore job', schedule_cron: '* * * * *', enabled: true, created_at: nowIso, updated_at: nowIso }, target_runs: [{ id: 22, run_id: 2, target_id: 43, status: 'success', operation: 'restore', started_at: nowIso, finished_at: nowIso }] },
     ]), { status: 200 })
   }
   // Get single run with target_runs for expansion
   if (String(url).match(/\/runs\/1$/)) {
-    const now = new Date().toISOString()
     return new Response(JSON.stringify({
       id: 1,
       job_id: 1,
       status: 'success',
-      started_at: now,
-      finished_at: now,
-      job: { id: 1, tag_id: 1, name: 'Daily pihole backup', schedule_cron: '* * * * *', enabled: true, created_at: now, updated_at: now },
+      operation: 'backup',
+      started_at: nowIso,
+      finished_at: nowIso,
+      job: { id: 1, tag_id: 1, name: 'Daily pihole backup', schedule_cron: '* * * * *', enabled: true, created_at: nowIso, updated_at: nowIso },
+      display_job_name: 'Primary Pihole Restore',
+      display_tag_name: 'Primary Pihole',
       target_runs: [
         {
           id: 11,
           run_id: 1,
           target_id: 42,
           status: 'success',
-          started_at: now,
-          finished_at: now,
+          operation: 'backup',
+          started_at: nowIso,
+          finished_at: nowIso,
           artifact_path: '/backups/pihole/2025-08-10/pihole.zip',
           artifact_bytes: 12345,
           sha256: '0f' + 'a'.repeat(62),
@@ -40,10 +46,51 @@ vi.stubGlobal('fetch', vi.fn(async (url: string) => {
   }
   // Targets list used for name mapping (can be empty)
   if (url.endsWith('/targets/')) {
-    return new Response(JSON.stringify([]), { status: 200 })
+    return new Response(JSON.stringify([
+      { id: 42, name: 'Primary Pihole', slug: 'primary-pihole', plugin_name: 'pihole', plugin_config_json: '{}', created_at: nowIso, updated_at: nowIso },
+      { id: 43, name: 'Secondary Pihole', slug: 'secondary-pihole', plugin_name: 'pihole', plugin_config_json: '{}', created_at: nowIso, updated_at: nowIso },
+    ]), { status: 200 })
+  }
+  if (url.endsWith('/tags/')) {
+    return new Response(JSON.stringify([
+      { id: 1, slug: 'primary-pihole', display_name: 'Primary Pihole', created_at: nowIso, updated_at: nowIso },
+      { id: 2, slug: 'secondary-pihole', display_name: 'Secondary Pihole', created_at: nowIso, updated_at: nowIso },
+    ]), { status: 200 })
+  }
+  if (url.endsWith('/restores/') && init?.method === 'POST') {
+    return new Response(JSON.stringify({
+      id: 99,
+      job_id: 1,
+      status: 'success',
+      operation: 'restore',
+      started_at: nowIso,
+      finished_at: nowIso,
+      job: { id: 1, tag_id: 1, name: 'Daily pihole backup', schedule_cron: '* * * * *', enabled: true, created_at: nowIso, updated_at: nowIso },
+      display_job_name: 'Secondary Pihole Restore',
+      display_tag_name: 'Secondary Pihole',
+      target_runs: [
+        {
+          id: 201,
+          run_id: 99,
+          target_id: 43,
+          status: 'success',
+          operation: 'restore',
+          started_at: nowIso,
+          finished_at: nowIso,
+          artifact_path: '/backups/pihole/2025-08-10/pihole.zip',
+        },
+      ],
+    }), { status: 201 })
   }
   return new Response('not found', { status: 404 })
 }))
+
+const fetchSpy = global.fetch as unknown as ReturnType<typeof vi.fn>
+
+beforeEach(() => {
+  nowIso = new Date().toISOString()
+  fetchSpy.mockClear()
+})
 
 function wrapper(children: ReactNode) {
   const qc = new QueryClient()
@@ -61,10 +108,10 @@ describe('RunsPage', () => {
     render(wrapper(<RunsPage />))
     await screen.findAllByText('Past Runs')
     await screen.findByText('success')
+    await screen.findByText('Secondary Pihole Restore')
   })
 
   it('applies filters and calls API with query', async () => {
-    const fetchSpy = global.fetch as unknown as ReturnType<typeof vi.fn>
     render(wrapper(<RunsPage />))
     // open status select and choose failed (first instance)
     const statusSel = (await screen.findAllByLabelText('Status'))[0]
@@ -76,7 +123,6 @@ describe('RunsPage', () => {
   })
 
   it('sets default times for date-only selections', async () => {
-    const fetchSpy = global.fetch as unknown as ReturnType<typeof vi.fn>
     fetchSpy.mockClear()
     render(wrapper(<RunsPage />))
 
@@ -116,4 +162,35 @@ describe('RunsPage', () => {
   })
 })
 
+it('allows restoring a target run to another target', async () => {
+  render(wrapper(<RunsPage />))
+  await screen.findAllByText('Past Runs')
 
+  const expandBtn = (await screen.findAllByRole('button', { name: 'Expand' }))[0]
+  fireEvent.click(expandBtn)
+
+  const viewBtn = await screen.findByText('View')
+  fireEvent.click(viewBtn)
+
+  const restoreBtn = await screen.findByText('Restore to Target')
+  fireEvent.click(restoreBtn)
+
+  const destSelect = await screen.findByLabelText('Destination Target')
+  fireEvent.change(destSelect, { target: { value: '43' } })
+
+  const confirmBtn = await screen.findByRole('button', { name: 'Confirm Restore' })
+  fireEvent.click(confirmBtn)
+
+  await waitFor(() => {
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/restores/'),
+      expect.objectContaining({ method: 'POST' }),
+    )
+  })
+
+  await waitFor(() => {
+    expect(screen.queryByRole('button', { name: 'Confirm Restore' })).toBeNull()
+  })
+
+  await screen.findByText(/Restore triggered successfully/i)
+})

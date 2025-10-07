@@ -7,7 +7,8 @@ import tempfile
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-from app.core.plugins.base import BackupContext, BackupPlugin
+from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
+from app.core.plugins.restore_utils import copy_artifact_for_restore
 import logging
 
 
@@ -128,8 +129,108 @@ class WordPressPlugin(BackupPlugin):
         )
         return {"artifact_path": artifact_path}
 
-    async def restore(self, context: BackupContext) -> Dict[str, Any]:  # pragma: no cover - not implemented
-        return {"status": "not_implemented"}
+    async def restore(self, context: RestoreContext) -> Dict[str, Any]:
+        """Restore a WordPress backup by extracting tar.gz and importing database using WP-CLI.
+        
+        The backup tar.gz contains:
+        - site/ (the WordPress site files)
+        - db.sql (the database dump)
+        """
+        cfg = context.config or {}
+        site_path = str(cfg.get("site_path", ""))
+        wp_path = str(cfg.get("wp_path", "wp"))
+        
+        if not site_path:
+            raise ValueError("WordPress config must include site_path")
+        
+        artifact_path = context.artifact_path
+        if not artifact_path or not os.path.exists(artifact_path):
+            raise FileNotFoundError(f"Artifact not found: {artifact_path}")
+        
+        self._logger.info(
+            "wordpress_restore_start | job_id=%s source=%s dest=%s site_path=%s artifact=%s",
+            context.job_id,
+            context.source_target_id,
+            context.destination_target_id,
+            site_path,
+            artifact_path,
+        )
+        
+        # Extract the tar.gz archive to a temporary directory
+        tmpdir = tempfile.mkdtemp()
+        try:
+            with tarfile.open(artifact_path, "r:gz") as tar:
+                tar.extractall(tmpdir)
+            
+            # The database file should be at tmpdir/db.sql
+            db_file = os.path.join(tmpdir, "db.sql")
+            if not os.path.exists(db_file):
+                raise FileNotFoundError(f"Database dump not found in backup archive: {db_file}")
+            
+            # Restore the database using wp-cli
+            self._logger.info(
+                "wordpress_restore_db | job_id=%s source=%s dest=%s db_file=%s",
+                context.job_id,
+                context.source_target_id,
+                context.destination_target_id,
+                db_file,
+            )
+            
+            proc = await asyncio.create_subprocess_exec(
+                wp_path,
+                "--path",
+                site_path,
+                "db",
+                "import",
+                db_file,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+            
+            if proc.returncode != 0:
+                self._logger.error(
+                    "wordpress_db_import_failed | code=%s stdout=%s stderr=%s",
+                    proc.returncode,
+                    stdout.decode(errors="ignore"),
+                    stderr.decode(errors="ignore"),
+                )
+                raise RuntimeError("wp db import failed")
+            
+            # Note: Site files restoration would require more careful handling
+            # to avoid overwriting the current WordPress installation.
+            # For now, we only restore the database which is the critical data.
+            # The site files (plugins, themes, uploads) are in tmpdir/site/
+            # but restoring them would need admin approval as it could break the site.
+            
+            artifact_bytes = os.path.getsize(artifact_path)
+            
+            self._logger.info(
+                "wordpress_restore_success | job_id=%s source=%s dest=%s artifact=%s bytes=%s note=database_only",
+                context.job_id,
+                context.source_target_id,
+                context.destination_target_id,
+                artifact_path,
+                artifact_bytes,
+            )
+            
+            return {
+                "status": "success",
+                "artifact_path": artifact_path,
+                "artifact_bytes": artifact_bytes,
+                "note": "Database restored. Site files are available in backup but not automatically restored to prevent overwriting current installation.",
+            }
+        finally:
+            # Clean up temporary directory
+            try:
+                import shutil
+                shutil.rmtree(tmpdir)
+            except Exception as cleanup_err:
+                self._logger.warning(
+                    "wordpress_restore_cleanup_failed | tmpdir=%s error=%s",
+                    tmpdir,
+                    cleanup_err,
+                )
 
     async def get_status(self, context: BackupContext) -> Dict[str, Any]:  # pragma: no cover - trivial
         return {"status": "ok"}

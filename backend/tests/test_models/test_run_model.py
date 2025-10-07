@@ -46,6 +46,7 @@ def test_run_model(db) -> None:
     assert run.id is not None
     assert run.job_id == job.id
     assert run.status == "success"
+    assert run.operation == "backup"
     assert run.message == "Backup completed successfully"
     # Parent Run no longer carries artifact metadata; artifacts live on TargetRun
     assert getattr(run, "artifact_path", None) is None
@@ -56,5 +57,4 @@ def test_run_model(db) -> None:
     assert run.finished_at is None
     assert run.job == job
     assert job.runs == [run]
-
 

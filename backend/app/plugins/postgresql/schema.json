@@ -1,11 +1,11 @@
 {
   "type": "object",
-  "required": ["host", "user", "password", "database"],
+  "required": ["host", "user", "password"],
   "properties": {
     "host": { "type": "string", "title": "Host", "default": "localhost" },
     "port": { "type": "integer", "title": "Port", "default": 5432 },
     "user": { "type": "string", "title": "User", "default": "postgres" },
     "password": { "type": "string", "title": "Password", "default": "secret" },
-    "database": { "type": "string", "title": "Database", "default": "postgres" }
+    "database": { "type": "string", "title": "Database (optional - leave empty for all databases)", "default": "" }
   }
 }

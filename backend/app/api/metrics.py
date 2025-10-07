@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import get_session
 from app.models import Job as JobModel, Run as RunModel
+from app.domain.enums import RunOperation
 
 
 router = APIRouter(tags=["metrics"])
@@ -46,7 +47,10 @@ def metrics(db: Session = Depends(get_session)) -> str:
         job_id: count
         for job_id, count in (
             db.query(RunModel.job_id, func.count())
-            .filter(RunModel.status == "success")
+            .filter(
+                RunModel.status == "success",
+                RunModel.operation == RunOperation.BACKUP.value,
+            )
             .group_by(RunModel.job_id)
             .all()
         )
@@ -55,7 +59,10 @@ def metrics(db: Session = Depends(get_session)) -> str:
         job_id: count
         for job_id, count in (
             db.query(RunModel.job_id, func.count())
-            .filter(RunModel.status == "failed")
+            .filter(
+                RunModel.status == "failed",
+                RunModel.operation == RunOperation.BACKUP.value,
+            )
             .group_by(RunModel.job_id)
             .all()
         )
@@ -69,6 +76,7 @@ def metrics(db: Session = Depends(get_session)) -> str:
             RunModel.job_id,
             func.max(func.coalesce(RunModel.finished_at, RunModel.started_at)),
         )
+        .filter(RunModel.operation == RunOperation.BACKUP.value)
         .group_by(RunModel.job_id)
         .all()
     ):
@@ -111,5 +119,4 @@ def metrics(db: Session = Depends(get_session)) -> str:
 
     body = "\n".join(lines) + "\n"
     return body
-
 

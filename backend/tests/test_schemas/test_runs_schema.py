@@ -43,10 +43,13 @@ def test_run_response_schema() -> None:
         "artifact_bytes": 100,
         "sha256": "a" * 64,
         "logs_text": "log",
+        "display_job_name": "Test Job",
+        "display_tag_name": "test-tag",
     }
     run = Run(**data)
     assert run.id == 1
     assert run.job_id == 1
+    assert run.display_job_name == "Test Job"
 
 
 def test_run_invalid_data_validation() -> None:

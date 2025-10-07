@@ -8,10 +8,22 @@ from typing import Any, Dict, Optional
 @dataclass
 class BackupContext:
     """Context information for backup operations."""
-    
+
     job_id: str
     target_id: str
     config: Dict[str, Any]
+    metadata: Optional[Dict[str, Any]] = None
+
+
+@dataclass
+class RestoreContext:
+    """Context information for restore operations."""
+
+    job_id: str
+    source_target_id: str
+    destination_target_id: str
+    config: Dict[str, Any]
+    artifact_path: str
     metadata: Optional[Dict[str, Any]] = None
 
 
@@ -39,7 +51,7 @@ class BackupPlugin(ABC):
         pass
     
     @abstractmethod
-    async def restore(self, context: BackupContext) -> Dict[str, Any]:
+    async def restore(self, context: RestoreContext) -> Dict[str, Any]:
         """Perform restore operation."""
         pass
     

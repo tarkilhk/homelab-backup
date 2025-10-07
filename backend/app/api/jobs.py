@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.db import get_session
 from app.models import Job as JobModel, Run as RunModel
 from app.schemas import Job, JobCreate, JobUpdate, Run, UpcomingJob
-from app.services import JobService
+from app.services import JobService, RunService
 from app.services.jobs import run_job_for_tag
 from app.models import Job as JobModel
 from sqlalchemy.orm import Session
@@ -84,10 +84,13 @@ def run_job_now(job_id: int, db: Session = Depends(get_session)) -> RunModel:
     logger.info("run_job_now called | job_id=%s", job_id)
     svc = JobService(db)
     try:
-        run = svc.run_now(job_id, triggered_by="manual_api")
+        run_model = svc.run_now(job_id, triggered_by="manual_api")
     except ValueError:
         logger.warning("run_job_now missing | job_id=%s", job_id)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
+    run = RunService(db).get(run_model.id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     logger.info(
         "run_job_now dispatched | job_id=%s run_id=%s status=%s",
         job_id,
@@ -107,4 +110,3 @@ def run_jobs_by_tag(tag_id: int, db: Session = Depends(get_session)) -> List[dic
         # Minimal response per TDD: list of per-target results
         results.extend(summary.get("results", []))
     return results
-

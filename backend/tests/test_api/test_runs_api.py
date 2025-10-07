@@ -64,6 +64,7 @@ def test_runs_filters_status_date_target(client: TestClient, db_session_override
     assert r.status_code == 200
     items = r.json()
     assert all(it["status"] == "success" for it in items)
+    assert all("display_job_name" in it for it in items)
 
     # Filter by date range (last 24h)
     start = (now - timedelta(days=1)).isoformat()
@@ -78,5 +79,4 @@ def test_runs_filters_status_date_target(client: TestClient, db_session_override
     items = r.json()
     # All items should belong to runs of jobs associated with T1's tag
     assert all(it["job"]["tag_id"] == t1_tag_id for it in items)
-
 

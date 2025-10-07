@@ -15,7 +15,7 @@ services:
     ports:
       - "8086:8080"
     restart: unless-stopped
-    # Run the backend with a host-matched UID:GID to avoid volume permission issues.
+    # Run as non-root user for better security
     # user: "1000:1000"
     healthcheck:
       # Python-based readiness probe (curl not present in backend image)

@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 import tempfile
 import pytest
 from typing import Any, Dict
-from app.core.plugins.base import BackupPlugin, BackupContext
+from app.core.plugins.base import BackupPlugin, BackupContext, RestoreContext
 from sqlalchemy.orm import Session
 
 
@@ -18,7 +18,7 @@ def test_jobs_crud_and_run_now(client: TestClient, monkeypatch: pytest.MonkeyPat
         async def backup(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
             fd, path = tempfile.mkstemp(prefix="backup-test-", suffix=".txt")
             return {"artifact_path": path}
-        async def restore(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
+        async def restore(self, context: RestoreContext) -> Dict[str, Any]:  # noqa: ARG002
             return {"ok": True}
         async def get_status(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
             return {"ok": True}
@@ -149,5 +149,4 @@ def test_failure_triggers_email_notifier(client: TestClient, monkeypatch: object
     payload = r.json()
     assert payload["status"] == "failed"
     assert sent["called"] == 1
-
 

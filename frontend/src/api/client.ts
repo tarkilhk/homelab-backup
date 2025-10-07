@@ -39,8 +39,11 @@ export type Run = {
   started_at: string
   finished_at?: string | null
   status: 'running' | 'success' | 'failed' | 'partial'
+  operation?: 'backup' | 'restore'
   message?: string | null
   logs_text?: string | null
+  display_job_name: string
+  display_tag_name?: string | null
 }
 
 export type TargetRun = {
@@ -50,6 +53,7 @@ export type TargetRun = {
   started_at: string
   finished_at?: string | null
   status: string
+  operation?: 'backup' | 'restore'
   message?: string | null
   artifact_path?: string | null
   artifact_bytes?: number | null
@@ -219,6 +223,7 @@ export const api = {
   runJobNow: (id: number) => request<Run>(`/jobs/${id}/run`, { method: 'POST' }),
   // Dashboard helpers
   upcomingJobs: () => request<Array<{ job_id: number; name: string; next_run_at: string }>>('/jobs/upcoming'),
+  // Restores
+  restoreTargetRun: (payload: { source_target_run_id: number; destination_target_id: number; triggered_by?: string }) =>
+    request<RunWithJob>('/restores/', { method: 'POST', body: JSON.stringify(payload) }),
 }
-
-
