@@ -8,7 +8,8 @@ import asyncio
 import httpx
 import logging
 
-from app.core.plugins.base import BackupContext, BackupPlugin
+from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
+from app.core.plugins.restore_utils import copy_artifact_for_restore
 
 
 class SonarrPlugin(BackupPlugin):
@@ -310,8 +311,24 @@ class SonarrPlugin(BackupPlugin):
 
         return {"artifact_path": artifact_path}
 
-    async def restore(self, context: BackupContext) -> Dict[str, Any]:
-        raise NotImplementedError("Restore is not implemented for Sonarr")
+    async def restore(self, context: RestoreContext) -> Dict[str, Any]:
+        """Restore a Sonarr backup.
+        
+        Note: Sonarr manages its own backup restoration. This function copies the
+        backup file to a restore directory. To complete the restore:
+        1. Access Sonarr UI → System → Backup
+        2. Upload the backup ZIP file from the restore location
+        3. Sonarr will handle the restoration process
+        
+        Alternatively, you can copy the backup to Sonarr's backup directory
+        (usually /config/Backups/) and it will appear in the UI for restoration.
+        """
+        return copy_artifact_for_restore(
+            context,
+            logger=self._logger,
+            restore_root=self.backup_root,
+            prefix="sonarr",
+        )
 
     async def get_status(self, context: BackupContext) -> Dict[str, Any]:
         return {}

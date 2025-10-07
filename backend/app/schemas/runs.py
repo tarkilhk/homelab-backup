@@ -4,7 +4,7 @@ from typing import Optional, List
 from datetime import datetime, timezone
 
 from pydantic import BaseModel, Field, ConfigDict
-from app.domain.enums import RunStatus
+from app.domain.enums import RunStatus, RunOperation, TargetRunOperation
 
 
 class RunBase(BaseModel):
@@ -12,6 +12,7 @@ class RunBase(BaseModel):
 
     job_id: int = Field(..., description="ID of the associated job")
     status: RunStatus = Field(..., description="Status of the run")
+    operation: RunOperation = Field(default=RunOperation.BACKUP, description="Operation performed by the run")
     message: Optional[str] = Field(None, description="Error message or success message")
     logs_text: Optional[str] = Field(None, description="Log output from the backup process")
 
@@ -27,6 +28,7 @@ class RunUpdate(BaseModel):
 
     job_id: Optional[int] = Field(None, description="ID of the associated job")
     status: Optional[RunStatus] = Field(None, description="Status of the run")
+    operation: Optional[RunOperation] = Field(None, description="Operation performed by the run")
     finished_at: Optional[datetime] = Field(None, description="Completion timestamp")
     message: Optional[str] = Field(None, description="Error message or success message")
     logs_text: Optional[str] = Field(None, description="Log output from the backup process")
@@ -38,6 +40,8 @@ class Run(RunBase):
     id: int = Field(..., description="Unique identifier")
     started_at: datetime = Field(..., description="Start timestamp")
     finished_at: Optional[datetime] = Field(None, description="Completion timestamp")
+    display_job_name: str = Field(..., description="Friendly job label for UI")
+    display_tag_name: Optional[str] = Field(None, description="Friendly tag label for UI")
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -50,6 +54,7 @@ class TargetRun(BaseModel):
     started_at: datetime
     finished_at: Optional[datetime] = None
     status: str
+    operation: TargetRunOperation = Field(default=TargetRunOperation.BACKUP, description="Operation performed for the target")
     message: Optional[str] = None
     artifact_path: Optional[str] = None
     artifact_bytes: Optional[int] = None
@@ -64,5 +69,3 @@ class RunWithJob(Run):
 
     job: "Job" = Field(..., description="Associated job")
     target_runs: List[TargetRun] = Field(default_factory=list, description="Per-target execution results")
-
-

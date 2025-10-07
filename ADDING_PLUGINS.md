@@ -16,12 +16,21 @@ This document is a complete, step-by-step guide for humans and coding agents to 
 
 Important: The canonical contract is defined by `base.py` and the working example plugin below.
 
-```startLine:8:endLine:58:backend/app/core/plugins/base.py
+```startLine:8:endLine:80:backend/app/core/plugins/base.py
 @dataclass
 class BackupContext:
     job_id: str
     target_id: str
     config: Dict[str, Any]
+    metadata: Optional[Dict[str, Any]] = None
+
+@dataclass
+class RestoreContext:
+    job_id: str
+    source_target_id: str
+    destination_target_id: str
+    config: Dict[str, Any]
+    artifact_path: str
     metadata: Optional[Dict[str, Any]] = None
 
 class BackupPlugin(ABC):
@@ -39,7 +48,7 @@ class BackupPlugin(ABC):
     async def backup(self, context: BackupContext) -> Dict[str, Any]: ...  # must return {"artifact_path": str}
 
     @abstractmethod
-    async def restore(self, context: BackupContext) -> Dict[str, Any]: ...
+    async def restore(self, context: RestoreContext) -> Dict[str, Any]: ...
 
     @abstractmethod
     async def get_status(self, context: BackupContext) -> Dict[str, Any]: ...
@@ -140,7 +149,7 @@ from datetime import datetime, timezone
 import logging
 
 import httpx
-from app.core.plugins.base import BackupPlugin, BackupContext
+from app.core.plugins.base import BackupPlugin, BackupContext, RestoreContext
 
 
 class <ClassName>Plugin(BackupPlugin):
@@ -195,7 +204,7 @@ class <ClassName>Plugin(BackupPlugin):
         # Must return artifact path
         return {"artifact_path": artifact_path}
 
-    async def restore(self, context: BackupContext) -> Dict[str, Any]:
+    async def restore(self, context: RestoreContext) -> Dict[str, Any]:
         return {"status": "not_implemented"}
 
     async def get_status(self, context: BackupContext) -> Dict[str, Any]:
@@ -422,5 +431,3 @@ See `backend/app/plugins/pihole/plugin.py` for a complete, working example using
 - If target API changes, update `test` to reflect the minimal success shape.
 - Keep versions updated in your plugin `__init__`.
 - When adding new inputs, update both `schema.json` and validate/test logic.
-
-

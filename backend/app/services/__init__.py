@@ -13,6 +13,7 @@ from .groups import GroupService
 from .targets import TargetService
 from .jobs import JobService
 from .runs import RunService
+from .restores import RestoreService
 
 __all__ = [
     "TagService",
@@ -20,6 +21,6 @@ __all__ = [
     "TargetService",
     "JobService",
     "RunService",
+    "RestoreService",
 ]
-
 

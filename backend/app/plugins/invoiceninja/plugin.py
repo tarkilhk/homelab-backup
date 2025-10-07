@@ -8,7 +8,8 @@ from typing import Any, Dict
 
 import httpx
 
-from app.core.plugins.base import BackupContext, BackupPlugin
+from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
+from app.core.plugins.restore_utils import copy_artifact_for_restore
 
 
 class InvoiceNinjaPlugin(BackupPlugin):
@@ -130,8 +131,23 @@ class InvoiceNinjaPlugin(BackupPlugin):
         )
         return {"artifact_path": artifact_path}
 
-    async def restore(self, context: BackupContext) -> Dict[str, Any]:  # pragma: no cover - not implemented
-        return {"ok": False, "error": "Restore not implemented"}
+    async def restore(self, context: RestoreContext) -> Dict[str, Any]:
+        """Restore an Invoice Ninja backup.
+        
+        Note: Invoice Ninja export/import restoration. This function copies the backup file
+        to a restore directory. To complete the restore:
+        1. Access Invoice Ninja web interface
+        2. Navigate to Settings → Import | Export
+        3. Use the "Import" feature to upload the backup ZIP file
+        
+        The import will restore company data, invoices, clients, and settings.
+        """
+        return copy_artifact_for_restore(
+            context,
+            logger=self._logger,
+            restore_root=self._base_dir(),
+            prefix="invoiceninja",
+        )
 
     async def get_status(self, context: BackupContext) -> Dict[str, Any]:  # pragma: no cover - minimal
         return {"ok": True}

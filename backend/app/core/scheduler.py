@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
 from app.models import Job as JobModel, Run as RunModel, Target as TargetModel
-from app.domain.enums import RunStatus, TargetRunStatus
+from app.domain.enums import RunStatus, TargetRunStatus, RunOperation, TargetRunOperation
 from app.core.plugins.base import BackupContext
 from app.core.plugins.loader import get_plugin
 from app.core.notifier import send_failure_email
@@ -116,6 +116,7 @@ def _create_run(db: Session, job: JobModel, triggered_by: str) -> RunModel:
         job_id=job.id,
         started_at=started_at,
         status=RunStatus.RUNNING.value,
+        operation=RunOperation.BACKUP.value,
         message=f"Run started (triggered_by={triggered_by})",
         logs_text=f"Run started at {started_at.isoformat()} (triggered_by={triggered_by})",
     )
@@ -143,6 +144,7 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
         target_id=target_id,
         started_at=started_at,
         status=TargetRunStatus.RUNNING.value,
+        operation=TargetRunOperation.BACKUP.value,
         message="Target run started",
         logs_text=f"Target run started at {started_at.isoformat()}",
     )
@@ -307,6 +309,7 @@ def _perform_run(db: Session, job: JobModel, triggered_by: str) -> RunModel:
         job_id=job.id,
         started_at=started_at,
         status=RunStatus.RUNNING.value,
+        operation=RunOperation.BACKUP.value,
         message=f"Run started (triggered_by={triggered_by})",
         logs_text=f"Run started at {started_at.isoformat()} (triggered_by={triggered_by})",
     )
@@ -798,4 +801,3 @@ def get_scheduler_jobs() -> list[dict]:
         return jobs
     except Exception:
         return []
-

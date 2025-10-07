@@ -7,7 +7,8 @@ from typing import Any, Dict
 import httpx
 import logging
 
-from app.core.plugins.base import BackupContext, BackupPlugin
+from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
+from app.core.plugins.restore_utils import copy_artifact_for_restore
 
 BACKUP_BASE = "/backups"
 
@@ -130,8 +131,23 @@ class JellyfinPlugin(BackupPlugin):
 
         return {"artifact_path": artifact_path}
 
-    async def restore(self, context: BackupContext) -> Dict[str, Any]:  # pragma: no cover - not implemented
-        return {"status": "not_implemented"}
+    async def restore(self, context: RestoreContext) -> Dict[str, Any]:
+        """Restore a Jellyfin backup.
+        
+        Note: Jellyfin's Backup plugin manages restoration. This function copies the
+        backup file to a restore directory. To complete the restore:
+        1. Stop the Jellyfin server
+        2. Extract the backup ZIP to the Jellyfin config directory
+        3. Restart Jellyfin server
+        
+        The backup ZIP contains configuration files and metadata but typically not media files.
+        """
+        return copy_artifact_for_restore(
+            context,
+            logger=self._logger,
+            restore_root=BACKUP_BASE,
+            prefix="jellyfin",
+        )
 
     async def get_status(self, context: BackupContext) -> Dict[str, Any]:  # pragma: no cover - trivial
         return {"status": "ok"}

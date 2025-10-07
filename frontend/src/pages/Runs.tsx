@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, Fragment } from 'react'
 import { ChevronRight, ChevronDown, CheckCircle2, AlertTriangle, XCircle, X } from 'lucide-react'
-import { useQuery } from '@tanstack/react-query'
-import { api, type RunWithJob, type TargetRun } from '../api/client'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { api, type RunWithJob, type TargetRun, type Target } from '../api/client'
 import { formatLocalDateTime, formatLocalDateTimeShort } from '../lib/dates'
 import { useLocation } from 'react-router-dom'
 import AppCard from '../components/ui/AppCard'
@@ -72,9 +72,9 @@ export default function RunsPage() {
 
   const { data: targets } = useQuery({ queryKey: ['targets'], queryFn: api.listTargets })
   const { data: tags } = useQuery({ queryKey: ['tags'], queryFn: api.listTags })
-  const targetIdToName = useMemo(() => {
-    const map = new Map<number, string>()
-    for (const t of targets ?? []) map.set(t.id, t.name)
+  const targetsById = useMemo(() => {
+    const map = new Map<number, Target>()
+    for (const t of targets ?? []) map.set(t.id, t)
     return map
   }, [targets])
 
@@ -246,8 +246,8 @@ export default function RunsPage() {
                         )}
                       </button>
                     </td>
-                    <td className="px-4 py-2">{r.job?.name ?? `Job #${r.job_id}`}</td>
-                    <td className="px-4 py-2">{tagIdToName.get(r.job?.tag_id as number) ?? '—'}</td>
+                    <td className="px-4 py-2">{r.display_job_name ?? (r.job?.name ?? `Job #${r.job_id}`)}</td>
+                    <td className="px-4 py-2">{r.display_tag_name ?? tagIdToName.get(r.job?.tag_id as number) ?? '—'}</td>
                     <td className="px-4 py-2">
                       {r.status === 'success' && <CheckCircle2 className="h-5 w-5 text-green-600" aria-label="success" />}
                       {r.status === 'failed' && <XCircle className="h-5 w-5 text-red-600" aria-label="failed" />}
@@ -268,7 +268,7 @@ export default function RunsPage() {
                     </td>
                   </tr>
                   {expandedRunIds.has(r.id) && (
-                    <ExpandedTargetRunRows runId={r.id} targetIdToName={targetIdToName} />
+                    <ExpandedTargetRunRows runId={r.id} targetsById={targetsById} isClickFromInteractive={isClickFromInteractive} />
                   )}
                 </Fragment>
               ))
@@ -281,7 +281,7 @@ export default function RunsPage() {
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center" onClick={() => setDetailsRun(null)}>
           <div className="bg-background border rounded-md shadow-xl max-w-2xl w-full mx-4" onClick={(e) => e.stopPropagation()}>
             <div className="p-3 border-b flex items-center">
-              <div className="font-semibold">Run #{detailsRun.id} — {detailsRun.job?.name ?? `Job #${detailsRun.job_id}`}</div>
+              <div className="font-semibold">Run #{detailsRun.id} — {detailsRun.display_job_name ?? (detailsRun.job?.name ?? `Job #${detailsRun.job_id}`)}</div>
               <button aria-label="Close" className="ml-auto text-sm cursor-pointer" onClick={() => setDetailsRun(null)}>
                 <X className="h-5 w-5 text-red-500" />
               </button>
@@ -310,6 +310,10 @@ export default function RunsPage() {
                   <span className="text-sm text-[hsl(var(--foreground))]">{detailsRun.status}</span>
                 </div>
               </div>
+              <div>
+                <div className="text-xs uppercase tracking-wide italic text-[hsl(var(--muted-foreground))]">Operation</div>
+                <div className="text-sm capitalize">{detailsRun.operation ?? 'backup'}</div>
+              </div>
               {detailsRun.message && (
                 <div>
                   <div className="text-xs uppercase tracking-wide italic text-[hsl(var(--muted-foreground))]">Message</div>
@@ -330,11 +334,16 @@ export default function RunsPage() {
   )
 }
 
-function ExpandedTargetRunRows({ runId, targetIdToName }: { runId: number; targetIdToName: Map<number, string> }) {
+function ExpandedTargetRunRows({ runId, targetsById, isClickFromInteractive }: { runId: number; targetsById: Map<number, Target>; isClickFromInteractive: (target: any) => boolean }) {
+  const queryClient = useQueryClient()
   const { data, isLoading, error } = useQuery({ queryKey: ['run', runId], queryFn: () => api.getRun(runId) })
   const items = data?.target_runs ?? []
   const [detailsTr, setDetailsTr] = useState<TargetRun | null>(null)
   const [copiedToast, setCopiedToast] = useState<string | null>(null)
+  const [restoreSource, setRestoreSource] = useState<TargetRun | null>(null)
+  const [selectedDestination, setSelectedDestination] = useState<number | ''>('')
+  const [restoreError, setRestoreError] = useState<string | null>(null)
+  const [isRestoring, setIsRestoring] = useState(false)
 
   async function copyTextToClipboard(text: string): Promise<boolean> {
     try {
@@ -362,6 +371,43 @@ function ExpandedTargetRunRows({ runId, targetIdToName }: { runId: number; targe
     }
   }
 
+  const restoreSourceTarget = restoreSource ? targetsById.get(restoreSource.target_id) : undefined
+  const eligibleRestoreTargets = useMemo(() => {
+    if (!restoreSourceTarget?.plugin_name) return []
+    return Array.from(targetsById.values())
+      .filter((t) => t.plugin_name === restoreSourceTarget.plugin_name)
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [restoreSourceTarget?.plugin_name, targetsById])
+
+  const resetRestoreState = () => {
+    setRestoreSource(null)
+    setSelectedDestination('')
+    setRestoreError(null)
+    setIsRestoring(false)
+  }
+
+  const handleConfirmRestore = async () => {
+    if (!restoreSource || typeof selectedDestination !== 'number') return
+    setIsRestoring(true)
+    setRestoreError(null)
+    try {
+      await api.restoreTargetRun({
+        source_target_run_id: restoreSource.id,
+        destination_target_id: selectedDestination,
+      })
+      await queryClient.invalidateQueries({ queryKey: ['run', runId] })
+      queryClient.invalidateQueries({ queryKey: ['runs'], exact: false })
+      setCopiedToast('Restore triggered successfully')
+      window.setTimeout(() => setCopiedToast(null), 1600)
+      resetRestoreState()
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      setRestoreError(message)
+    } finally {
+      setIsRestoring(false)
+    }
+  }
+
   if (isLoading) {
     return (
       <tr className="bg-muted/30 border-t"><td className="px-2 py-2" /><td className="px-4 py-2" colSpan={6}><div className="text-xs text-gray-600">Loading target runs…</div></td></tr>
@@ -386,14 +432,24 @@ function ExpandedTargetRunRows({ runId, targetIdToName }: { runId: number; targe
         <td className="px-4 py-1" colSpan={6} />
       </tr>
       {items.map((tr: TargetRun, idx: number) => (
-        <tr key={tr.id} className="bg-muted/30 border-t align-middle text-xs">
+        <tr 
+          key={tr.id} 
+          className="bg-muted/30 border-t align-middle text-xs cursor-pointer hover:bg-muted/50"
+          onClick={(e) => {
+            if (isClickFromInteractive(e.target)) return
+            // Open target run details modal if it has details to show (same condition as View button)
+            if (tr.status === 'failed' || !!tr.message || !!tr.logs_text) {
+              setDetailsTr(tr)
+            }
+          }}
+        >
           <td className="px-2 py-1" />
           <td className="px-0 py-1 text-center">
             <span className="inline-flex items-center justify-center rounded-md bg-[hsl(var(--accent))] text-white text-xs font-medium px-2 py-0.5 shadow-sm min-w-[2rem]">
               {idx + 1}/{items.length}
             </span>
           </td>
-          <td className="px-4 py-1">{targetIdToName.get(tr.target_id) ?? tr.target_id}</td>
+          <td className="px-4 py-1">{targetsById.get(tr.target_id)?.name ?? tr.target_id}</td>
           <td className="px-4 py-1">
             {tr.status === 'success' && <CheckCircle2 className="h-4 w-4 text-green-600" aria-label="success" />}
             {tr.status === 'failed' && <XCircle className="h-4 w-4 text-red-600" aria-label="failed" />}
@@ -418,11 +474,11 @@ function ExpandedTargetRunRows({ runId, targetIdToName }: { runId: number; targe
       ))}
 
       {detailsTr && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center" onClick={() => setDetailsTr(null)}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center" onClick={() => { setDetailsTr(null); resetRestoreState() }}>
           <div className="bg-background border rounded-md shadow-xl max-w-2xl w-full mx-4" onClick={(e) => e.stopPropagation()}>
             <div className="p-3 border-b flex items-center">
-              <div className="font-semibold">TargetRun #{detailsTr.id} — {targetIdToName.get(detailsTr.target_id) ?? detailsTr.target_id}</div>
-              <button aria-label="Close" className="ml-auto text-sm cursor-pointer" onClick={() => setDetailsTr(null)}>
+              <div className="font-semibold">TargetRun #{detailsTr.id} — {targetsById.get(detailsTr.target_id)?.name ?? detailsTr.target_id}</div>
+              <button aria-label="Close" className="ml-auto text-sm cursor-pointer" onClick={() => { setDetailsTr(null); resetRestoreState() }}>
                 <X className="h-5 w-5 text-red-500" />
               </button>
             </div>
@@ -446,6 +502,10 @@ function ExpandedTargetRunRows({ runId, targetIdToName }: { runId: number; targe
                   )} 
                   <span className="text-sm text-[hsl(var(--foreground))]">{detailsTr.status}</span>
                 </div>
+              </div>
+              <div>
+                <div className="text-xs uppercase tracking-wide italic text-[hsl(var(--muted-foreground))]">Operation</div>
+                <div className="text-sm capitalize">{detailsTr.operation ?? 'backup'}</div>
               </div>
               <div className="md:col-span-2">
                 <div className="text-xs uppercase tracking-wide italic text-[hsl(var(--muted-foreground))]">Artifact</div>
@@ -488,6 +548,92 @@ function ExpandedTargetRunRows({ runId, targetIdToName }: { runId: number; targe
                 </div>
               )}
             </div>
+            <div className="p-4 border-t flex justify-end gap-3">
+              {detailsTr.status === 'success' && (detailsTr.operation ?? 'backup') === 'backup' && detailsTr.artifact_path ? (
+                <button
+                  className="text-sm font-medium underline text-[hsl(var(--accent))]"
+                  onClick={() => {
+                    setRestoreSource(detailsTr)
+                    setSelectedDestination('')
+                    setRestoreError(null)
+                  }}
+                >
+                  Restore to Target
+                </button>
+              ) : null}
+              <button
+                className="text-sm font-medium underline text-[hsl(var(--accent))]"
+                onClick={() => { setDetailsTr(null); resetRestoreState() }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {restoreSource && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={resetRestoreState}>
+          <div className="bg-background border rounded-md shadow-xl max-w-xl w-full mx-4" onClick={(e) => e.stopPropagation()}>
+            <div className="p-3 border-b flex items-center">
+              <div className="font-semibold">Restore TargetRun #{restoreSource.id}</div>
+              <button aria-label="Close restore dialog" className="ml-auto text-sm cursor-pointer" onClick={resetRestoreState}>
+                <X className="h-5 w-5 text-red-500" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div className="text-sm">
+                Restore artifact from <strong>{targetsById.get(restoreSource.target_id)?.name ?? restoreSource.target_id}</strong> (taken at {formatLocalDateTime(restoreSource.finished_at ?? restoreSource.started_at)})
+              </div>
+              {eligibleRestoreTargets.length === 0 ? (
+                <div className="text-sm text-red-600">
+                  No targets share the same plugin configuration. Add another target using the <strong>{restoreSourceTarget?.plugin_name ?? 'same'}</strong> plugin first.
+                </div>
+              ) : (
+                <>
+                  <label className="grid gap-1 text-sm">
+                    <span className="text-xs uppercase tracking-wide italic text-[hsl(var(--muted-foreground))]">Destination Target</span>
+                    <select
+                      className="border rounded px-3 py-2 bg-background"
+                      value={selectedDestination}
+                      onChange={(e) => {
+                        const value = e.target.value
+                        setSelectedDestination(value ? Number(value) : '')
+                        setRestoreError(null)
+                      }}
+                    >
+                      <option value="">Select a target…</option>
+                      {eligibleRestoreTargets.map((t) => (
+                        <option key={t.id} value={t.id}>{t.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  {typeof selectedDestination === 'number' && (
+                    <div className="rounded border bg-muted/30 p-3 text-sm space-y-1">
+                      <div><span className="font-semibold">Source target:</span> {targetsById.get(restoreSource.target_id)?.name ?? restoreSource.target_id}</div>
+                      <div><span className="font-semibold">Destination target:</span> {targetsById.get(selectedDestination)?.name ?? selectedDestination}</div>
+                      <div><span className="font-semibold">Backup artifact:</span> {restoreSource.artifact_path ?? '—'}</div>
+                      <div><span className="font-semibold">Taken at:</span> {formatLocalDateTime(restoreSource.finished_at ?? restoreSource.started_at)}</div>
+                    </div>
+                  )}
+                </>
+              )}
+              {restoreError && <div className="text-sm text-red-600">{restoreError}</div>}
+            </div>
+            <div className="px-4 py-3 border-t flex justify-end gap-2">
+              <button
+                className="text-sm font-medium underline text-[hsl(var(--accent))]"
+                onClick={resetRestoreState}
+              >
+                Cancel
+              </button>
+              <button
+                className="px-4 py-2 rounded bg-[hsl(var(--accent))] text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={handleConfirmRestore}
+                disabled={typeof selectedDestination !== 'number' || isRestoring || eligibleRestoreTargets.length === 0}
+              >
+                {isRestoring ? 'Restoring…' : 'Confirm Restore'}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -499,4 +645,3 @@ function ExpandedTargetRunRows({ runId, targetIdToName }: { runId: number; targe
     </>
   )
 }
-

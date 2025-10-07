@@ -10,9 +10,18 @@ class RunStatus(str, Enum):
     PARTIAL = "partial"
 
 
+class RunOperation(str, Enum):
+    BACKUP = "backup"
+    RESTORE = "restore"
+
+
 class TargetRunStatus(str, Enum):
     RUNNING = "running"
     SUCCESS = "success"
     FAILED = "failed"
 
+
+class TargetRunOperation(str, Enum):
+    BACKUP = "backup"
+    RESTORE = "restore"
 

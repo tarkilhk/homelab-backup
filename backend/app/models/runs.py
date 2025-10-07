@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
-from app.domain.enums import RunStatus
+from app.domain.enums import RunStatus, RunOperation, TargetRunOperation
 from sqlalchemy.orm import relationship
 
 from app.core.db import Base
@@ -18,6 +18,7 @@ class Run(Base):
     started_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     finished_at = Column(DateTime, nullable=True)
     status = Column(String(20), nullable=False, index=True)  # values in RunStatus
+    operation = Column(String(20), nullable=False, default=RunOperation.BACKUP.value, index=True)
     message = Column(Text, nullable=True)  # Error message or success message
     logs_text = Column(Text, nullable=True)  # Log output from the backup process
 
@@ -39,6 +40,7 @@ class TargetRun(Base):
     started_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     finished_at = Column(DateTime, nullable=True)
     status = Column(String(20), nullable=False, index=True)
+    operation = Column(String(20), nullable=False, default=TargetRunOperation.BACKUP.value, index=True)
     message = Column(Text, nullable=True)
     artifact_path = Column(String(500), nullable=True)
     artifact_bytes = Column(Integer, nullable=True)
@@ -50,5 +52,4 @@ class TargetRun(Base):
 
     def __repr__(self) -> str:
         return f"<TargetRun(id={self.id}, run_id={self.run_id}, target_id={self.target_id}, status='{self.status}')>"
-
 
