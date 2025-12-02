@@ -1,0 +1,21 @@
+{
+  "type": "object",
+  "required": ["container_name"],
+  "properties": {
+    "container_name": {
+      "type": "string",
+      "title": "Container Name",
+      "default": "vaultwarden"
+    },
+    "docker_cli": {
+      "type": "string",
+      "title": "Docker/Podman CLI",
+      "default": "docker"
+    },
+    "data_path": {
+      "type": "string",
+      "title": "Data Path Inside Container",
+      "default": "/data"
+    }
+  }
+}
