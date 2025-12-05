@@ -82,6 +82,29 @@ async def test_test_missing_db(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_test_missing_config_ok(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/containers/vw/json":
+            return httpx.Response(200, json={"Id": "abc"})
+        if request.url.path == "/containers/vw/archive":
+            path = request.url.params.get("path", "")
+            if path.endswith("db.sqlite3"):
+                return httpx.Response(200, content=make_tar_bytes({"db.sqlite3": b"db"}))
+            if path.endswith("config.json"):
+                return httpx.Response(404)
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        VaultWardenPlugin, "_docker_client", lambda self: make_client(transport)  # type: ignore[misc]
+    )
+
+    plugin = VaultWardenPlugin(name="vaultwarden")
+    ok = await plugin.test({"container_name": "vw"})
+    assert ok is True
+
+
+@pytest.mark.asyncio
 async def test_backup_writes_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/containers/vw/json":
@@ -91,7 +114,7 @@ async def test_backup_writes_artifact(tmp_path: Path, monkeypatch: pytest.Monkey
             if path.endswith("db.sqlite3"):
                 return httpx.Response(200, content=make_tar_bytes({"db.sqlite3": b"db"}))
             if path.endswith("config.json"):
-                return httpx.Response(200, content=make_tar_bytes({"config.json": b"cfg"}))
+                return httpx.Response(404)
             if path.endswith("attachments"):
                 return httpx.Response(404)
         return httpx.Response(404)
@@ -116,7 +139,7 @@ async def test_backup_writes_artifact(tmp_path: Path, monkeypatch: pytest.Monkey
     with tarfile.open(artifact_path, "r:gz") as tar:
         names = tar.getnames()
         assert "db.sqlite3" in names
-        assert "config.json" in names
+        assert "config.json" not in names
 
 
 @pytest.mark.asyncio
@@ -124,11 +147,8 @@ async def test_restore_puts_archive(monkeypatch: pytest.MonkeyPatch, tmp_path: P
     artifact = tmp_path / "vaultwarden-backup.tar.gz"
     with tarfile.open(artifact, "w:gz") as tar:
         db_file = tmp_path / "db.sqlite3"
-        cfg_file = tmp_path / "config.json"
         db_file.write_bytes(b"db")
-        cfg_file.write_bytes(b"cfg")
         tar.add(db_file, arcname="db.sqlite3")
-        tar.add(cfg_file, arcname="config.json")
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/containers/vw/json" and request.method == "GET":
@@ -136,7 +156,7 @@ async def test_restore_puts_archive(monkeypatch: pytest.MonkeyPatch, tmp_path: P
         if request.url.path == "/containers/vw/archive" and request.method == "PUT":
             content = request.content or b""
             names = tarfile.open(fileobj=io.BytesIO(content), mode="r:").getnames()
-            assert "db.sqlite3" in names and "config.json" in names
+            assert "db.sqlite3" in names
             return httpx.Response(200)
         return httpx.Response(404)
 

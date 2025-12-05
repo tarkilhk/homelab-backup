@@ -22,8 +22,8 @@ class VaultWardenPlugin(BackupPlugin):
     Research summary (Vaultwarden wiki: Backing up your vault):
     - Simplest backup: `docker exec <container> /vaultwarden backup` and copy
       resulting archive, or tar the critical data directly.
-    - We back up exactly: `/data/db.sqlite3`, `/data/config.json`, and
-      `/data/attachments` (if present).
+    - We back up exactly: `/data/db.sqlite3`, `/data/config.json` (if present),
+      and `/data/attachments` (if present).
     - Accesses container files via Docker socket (`/var/run/docker.sock` mounted
       into the backend container); no docker CLI required.
     - Restores are performed by PUTting an archive back into `/data` and
@@ -63,14 +63,15 @@ class VaultWardenPlugin(BackupPlugin):
                         "vaultwarden_test_failed | container=%s error=%s", container, db_err
                     )
                     raise FileNotFoundError(f"db.sqlite3 not found in container: {db_err}")
-                cfg_ok, cfg_err = await self._path_exists(
-                    client, container, f"{data_path}/config.json"
+                cfg_ok, _ = await self._path_exists(
+                    client, container, f"{data_path}/config.json", optional=True
                 )
                 if not cfg_ok:
-                    self._logger.warning(
-                        "vaultwarden_test_failed | container=%s error=%s", container, cfg_err
+                    self._logger.info(
+                        "vaultwarden_test_warn_config_missing | container=%s path=%s",
+                        container,
+                        f"{data_path}/config.json",
                     )
-                    raise FileNotFoundError(f"config.json not found in container: {cfg_err}")
                 return True
         except ValueError:
             raise
@@ -122,7 +123,7 @@ class VaultWardenPlugin(BackupPlugin):
                     container,
                     os.path.join(data_path, "config.json"),
                     staging_dir,
-                    required=True,
+                    required=False,
                 )
                 await self._fetch_archive(
                     client,
@@ -136,12 +137,11 @@ class VaultWardenPlugin(BackupPlugin):
                 cfg_local = os.path.join(staging_dir, "config.json")
                 if not os.path.isfile(db_local):
                     raise FileNotFoundError(f"db.sqlite3 missing in {data_path}")
-                if not os.path.isfile(cfg_local):
-                    raise FileNotFoundError(f"config.json missing in {data_path}")
 
                 with tarfile.open(artifact_path, "w:gz") as tar:
                     tar.add(db_local, arcname="db.sqlite3")
-                    tar.add(cfg_local, arcname="config.json")
+                    if os.path.isfile(cfg_local):
+                        tar.add(cfg_local, arcname="config.json")
                     attachments_local = os.path.join(staging_dir, "attachments")
                     if os.path.isdir(attachments_local):
                         tar.add(attachments_local, arcname="attachments")
@@ -183,13 +183,12 @@ class VaultWardenPlugin(BackupPlugin):
                 cfg_local = os.path.join(extracted_dir, "config.json")
                 if not os.path.isfile(db_local):
                     raise FileNotFoundError("db.sqlite3 missing in artifact")
-                if not os.path.isfile(cfg_local):
-                    raise FileNotFoundError("config.json missing in artifact")
 
                 put_tar_path = os.path.join(staging_dir, "restore.tar")
                 with tarfile.open(put_tar_path, "w") as tar:
                     tar.add(db_local, arcname="db.sqlite3")
-                    tar.add(cfg_local, arcname="config.json")
+                    if os.path.isfile(cfg_local):
+                        tar.add(cfg_local, arcname="config.json")
                     attachments_local = os.path.join(extracted_dir, "attachments")
                     if os.path.isdir(attachments_local):
                         tar.add(attachments_local, arcname="attachments")
@@ -229,14 +228,14 @@ class VaultWardenPlugin(BackupPlugin):
         return True
 
     async def _path_exists(
-        self, client: httpx.AsyncClient, container: str, path: str
+        self, client: httpx.AsyncClient, container: str, path: str, optional: bool = False
     ) -> Tuple[bool, str]:
         try:
             resp = await client.get(f"/containers/{container}/archive", params={"path": path})
         except Exception as exc:  # pragma: no cover - defensive
             return False, str(exc)
         if resp.status_code == 404:
-            return False, f"{path} not found"
+            return (True, "") if optional else (False, f"{path} not found")
         if resp.status_code // 100 != 2:
             return False, f"status {resp.status_code}"
         await resp.aclose()
@@ -281,8 +280,8 @@ class VaultWardenPlugin(BackupPlugin):
             raise RuntimeError("vaultwarden backup did not produce artifact")
         with tarfile.open(artifact_path, "r:gz") as tar:
             names = tar.getnames()
-            if "db.sqlite3" not in names or "config.json" not in names:
-                raise RuntimeError("vaultwarden artifact missing required files")
+            if "db.sqlite3" not in names:
+                raise RuntimeError("vaultwarden artifact missing db.sqlite3")
 
     async def _iter_file_chunks(self, path: str):
         with open(path, "rb") as fh:
