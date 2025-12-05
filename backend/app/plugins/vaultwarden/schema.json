@@ -7,11 +7,6 @@
       "title": "Container Name",
       "default": "vaultwarden"
     },
-    "docker_cli": {
-      "type": "string",
-      "title": "Docker/Podman CLI",
-      "default": "docker"
-    },
     "data_path": {
       "type": "string",
       "title": "Data Path Inside Container",

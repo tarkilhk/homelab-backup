@@ -1,27 +1,32 @@
 from __future__ import annotations
 
-import asyncio
 import os
+import tarfile
+import tempfile
 from datetime import datetime, timezone
 from typing import Any, Dict, Tuple
 import logging
+
+import httpx
 
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
 
 BACKUP_BASE_PATH = "/backups"
 DEFAULT_DATA_PATH = "/data"
-DEFAULT_CLI = "docker"
+DOCKER_SOCKET_PATH = "/var/run/docker.sock"
 
 
 class VaultWardenPlugin(BackupPlugin):
-    """Vaultwarden backup plugin executed via container tar/copy commands.
+    """Vaultwarden backup plugin using Docker Engine API via unix socket.
 
     Research summary (Vaultwarden wiki: Backing up your vault):
     - Simplest backup: `docker exec <container> /vaultwarden backup` and copy
       resulting archive, or tar the critical data directly.
     - We back up exactly: `/data/db.sqlite3`, `/data/config.json`, and
       `/data/attachments` (if present).
-    - Restores are performed by extracting those files back into `/data` and
+    - Accesses container files via Docker socket (`/var/run/docker.sock` mounted
+      into the backend container); no docker CLI required.
+    - Restores are performed by PUTting an archive back into `/data` and
       restarting the service.
     """
 
@@ -38,44 +43,43 @@ class VaultWardenPlugin(BackupPlugin):
         data_path = config.get("data_path", DEFAULT_DATA_PATH)
         if not isinstance(data_path, str) or not data_path.strip():
             return False
-        docker_cli = config.get("docker_cli", DEFAULT_CLI)
-        if docker_cli is not None and (not isinstance(docker_cli, str) or not docker_cli.strip()):
-            return False
         return True
 
     async def test(self, config: Dict[str, Any]) -> bool:
         """Verify the container is reachable and core data files exist."""
         if not await self.validate_config(config):
             return False
-        cli = str(config.get("docker_cli", DEFAULT_CLI) or DEFAULT_CLI)
         container = str(config.get("container_name")).strip()
         data_path = str(config.get("data_path", DEFAULT_DATA_PATH)).rstrip("/") or "/"
-        check_cmd = [
-            cli,
-            "exec",
-            container,
-            "sh",
-            "-c",
-            f'test -x /vaultwarden && test -d "{data_path}" && test -f "{data_path}/db.sqlite3"',
-        ]
         try:
-            code, _, stderr = await self._run_cmd(check_cmd, timeout=20)
+            async with self._docker_client() as client:
+                exists = await self._container_exists(client, container)
+                if not exists:
+                    self._logger.warning("vaultwarden_test_failed | container=%s missing", container)
+                    return False
+                db_ok, db_err = await self._path_exists(client, container, f"{data_path}/db.sqlite3")
+                if not db_ok:
+                    self._logger.warning(
+                        "vaultwarden_test_failed | container=%s error=%s", container, db_err
+                    )
+                    return False
+                cfg_ok, cfg_err = await self._path_exists(
+                    client, container, f"{data_path}/config.json"
+                )
+                if not cfg_ok:
+                    self._logger.warning(
+                        "vaultwarden_test_failed | container=%s error=%s", container, cfg_err
+                    )
+                    return False
+                return True
         except Exception as exc:  # pragma: no cover - defensive
             self._logger.warning("vaultwarden_test_error | container=%s error=%s", container, exc)
             return False
-        if code == 0:
-            return True
-        err_msg = stderr.decode(errors="ignore").strip()
-        self._logger.warning(
-            "vaultwarden_test_failed | container=%s code=%s err=%s", container, code, err_msg
-        )
-        return False
 
     async def backup(self, context: BackupContext) -> Dict[str, Any]:
         cfg = getattr(context, "config", {}) or {}
         if not await self.validate_config(cfg):
             raise ValueError("vaultwarden config invalid; container_name and data_path required")
-        cli = str(cfg.get("docker_cli", DEFAULT_CLI) or DEFAULT_CLI)
         container = str(cfg.get("container_name")).strip()
         data_path = str(cfg.get("data_path", DEFAULT_DATA_PATH)).rstrip("/") or "/"
 
@@ -86,17 +90,6 @@ class VaultWardenPlugin(BackupPlugin):
         os.makedirs(base_dir, exist_ok=True)
         timestamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%dT%H%M%S")
         artifact_path = os.path.join(base_dir, f"vaultwarden-backup-{timestamp}.tar.gz")
-        container_tmp = f"/tmp/vaultwarden-backup-{timestamp}.tar.gz"
-
-        tar_script_parts = [
-            f'cd "{data_path}" || exit 1',
-            'if [ ! -f "db.sqlite3" ]; then echo "db.sqlite3 missing" >&2; exit 1; fi',
-            'if [ ! -f "config.json" ]; then echo "config.json missing" >&2; exit 1; fi',
-            'files="db.sqlite3 config.json"',
-            'if [ -d "attachments" ]; then files="$files attachments"; fi',
-        ]
-        tar_script_parts.append(f'tar -czf "{container_tmp}" $files')
-        tar_cmd = " ; ".join(tar_script_parts)
 
         self._logger.info(
             "vaultwarden_backup_start | job_id=%s target_id=%s container=%s data_path=%s artifact=%s",
@@ -107,46 +100,61 @@ class VaultWardenPlugin(BackupPlugin):
             artifact_path,
         )
 
-        code, _, stderr = await self._run_cmd(
-            [cli, "exec", container, "sh", "-c", tar_cmd],
-            timeout=120,
-        )
-        if code != 0:
-            err_msg = stderr.decode(errors="ignore").strip()
-            raise RuntimeError(f"vaultwarden backup failed to create archive: {err_msg}")
+        async with self._docker_client() as client:
+            exists = await self._container_exists(client, container)
+            if not exists:
+                raise FileNotFoundError(f"Container {container} not found")
 
-        code, _, stderr = await self._run_cmd(
-            [cli, "cp", f"{container}:{container_tmp}", artifact_path],
-            timeout=60,
-        )
-        if code != 0:
-            err_msg = stderr.decode(errors="ignore").strip()
-            raise RuntimeError(f"vaultwarden backup copy failed: {err_msg}")
-        if not os.path.exists(artifact_path):
-            raise RuntimeError("vaultwarden backup did not produce artifact")
+            with tempfile.TemporaryDirectory() as staging_dir:
+                await self._fetch_archive(
+                    client,
+                    container,
+                    os.path.join(data_path, "db.sqlite3"),
+                    staging_dir,
+                    required=True,
+                )
+                await self._fetch_archive(
+                    client,
+                    container,
+                    os.path.join(data_path, "config.json"),
+                    staging_dir,
+                    required=True,
+                )
+                await self._fetch_archive(
+                    client,
+                    container,
+                    os.path.join(data_path, "attachments"),
+                    staging_dir,
+                    required=False,
+                )
 
-        await self._run_cmd(
-            [cli, "exec", container, "rm", "-f", container_tmp],
-            timeout=20,
-            swallow_errors=True,
-        )
+                db_local = os.path.join(staging_dir, "db.sqlite3")
+                cfg_local = os.path.join(staging_dir, "config.json")
+                if not os.path.isfile(db_local):
+                    raise FileNotFoundError(f"db.sqlite3 missing in {data_path}")
+                if not os.path.isfile(cfg_local):
+                    raise FileNotFoundError(f"config.json missing in {data_path}")
 
-        return {"artifact_path": artifact_path}
+                with tarfile.open(artifact_path, "w:gz") as tar:
+                    tar.add(db_local, arcname="db.sqlite3")
+                    tar.add(cfg_local, arcname="config.json")
+                    attachments_local = os.path.join(staging_dir, "attachments")
+                    if os.path.isdir(attachments_local):
+                        tar.add(attachments_local, arcname="attachments")
+
+            self._verify_artifact(artifact_path)
+            return {"artifact_path": artifact_path}
 
     async def restore(self, context: RestoreContext) -> Dict[str, Any]:
         cfg = context.config or {}
         if not await self.validate_config(cfg):
             raise ValueError("vaultwarden config invalid; container_name and data_path required")
-        cli = str(cfg.get("docker_cli", DEFAULT_CLI) or DEFAULT_CLI)
         container = str(cfg.get("container_name")).strip()
         data_path = str(cfg.get("data_path", DEFAULT_DATA_PATH)).rstrip("/") or "/"
 
         artifact_path = context.artifact_path
         if not artifact_path or not os.path.exists(artifact_path):
             raise FileNotFoundError(f"Artifact not found: {artifact_path}")
-
-        timestamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%dT%H%M%S")
-        container_tmp = f"/tmp/vaultwarden-restore-{timestamp}.tar.gz"
 
         self._logger.info(
             "vaultwarden_restore_start | job_id=%s source=%s dest=%s container=%s artifact=%s",
@@ -157,26 +165,40 @@ class VaultWardenPlugin(BackupPlugin):
             artifact_path,
         )
 
-        code, _, stderr = await self._run_cmd(
-            [cli, "cp", artifact_path, f"{container}:{container_tmp}"],
-            timeout=60,
-        )
-        if code != 0:
-            err_msg = stderr.decode(errors="ignore").strip()
-            raise RuntimeError(f"vaultwarden restore copy failed: {err_msg}")
+        async with self._docker_client() as client:
+            exists = await self._container_exists(client, container)
+            if not exists:
+                raise FileNotFoundError(f"Container {container} not found")
 
-        restore_script = (
-            f'mkdir -p "{data_path}" && cd "{data_path}" || exit 1; '
-            f'tar -xzf "{container_tmp}" ; '
-            f'rm -f "{container_tmp}"'
-        )
-        code, _, stderr = await self._run_cmd(
-            [cli, "exec", container, "sh", "-c", restore_script],
-            timeout=120,
-        )
-        if code != 0:
-            err_msg = stderr.decode(errors="ignore").strip()
-            raise RuntimeError(f"vaultwarden restore failed to extract archive: {err_msg}")
+            with tempfile.TemporaryDirectory() as staging_dir:
+                extracted_dir = os.path.join(staging_dir, "extracted")
+                os.makedirs(extracted_dir, exist_ok=True)
+                self._safe_extract_tar(artifact_path, extracted_dir)
+
+                db_local = os.path.join(extracted_dir, "db.sqlite3")
+                cfg_local = os.path.join(extracted_dir, "config.json")
+                if not os.path.isfile(db_local):
+                    raise FileNotFoundError("db.sqlite3 missing in artifact")
+                if not os.path.isfile(cfg_local):
+                    raise FileNotFoundError("config.json missing in artifact")
+
+                put_tar_path = os.path.join(staging_dir, "restore.tar")
+                with tarfile.open(put_tar_path, "w") as tar:
+                    tar.add(db_local, arcname="db.sqlite3")
+                    tar.add(cfg_local, arcname="config.json")
+                    attachments_local = os.path.join(extracted_dir, "attachments")
+                    if os.path.isdir(attachments_local):
+                        tar.add(attachments_local, arcname="attachments")
+
+                resp = await client.put(
+                    f"/containers/{container}/archive",
+                    params={"path": data_path},
+                    content=self._iter_file_chunks(put_tar_path),
+                )
+                if resp.status_code // 100 != 2:
+                    raise RuntimeError(
+                        f"vaultwarden restore failed: {resp.status_code} {resp.text}"
+                    )
 
         return {
             "status": "success",
@@ -187,29 +209,81 @@ class VaultWardenPlugin(BackupPlugin):
     async def get_status(self, context: BackupContext) -> Dict[str, Any]:  # pragma: no cover - trivial
         return {"status": "ok"}
 
-    async def _run_cmd(
-        self,
-        cmd: list[str],
-        *,
-        timeout: float | None = None,
-        swallow_errors: bool = False,
-    ) -> Tuple[int, bytes, bytes]:
-        """Run a subprocess command and capture output."""
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+    def _docker_client(self) -> httpx.AsyncClient:
+        transport = httpx.AsyncHTTPTransport(uds=DOCKER_SOCKET_PATH)
+        return httpx.AsyncClient(
+            transport=transport,
+            base_url="http://docker",
+            timeout=httpx.Timeout(30.0, connect=10.0),
         )
+
+    async def _container_exists(self, client: httpx.AsyncClient, container: str) -> bool:
+        resp = await client.get(f"/containers/{container}/json")
+        if resp.status_code == 404:
+            return False
+        resp.raise_for_status()
+        return True
+
+    async def _path_exists(
+        self, client: httpx.AsyncClient, container: str, path: str
+    ) -> Tuple[bool, str]:
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-            return proc.returncode, stdout, stderr
-        except asyncio.TimeoutError:
-            proc.kill()
-            if swallow_errors:
-                return 1, b"", b"timeout"
-            raise
-        except Exception:
-            proc.kill()
-            if swallow_errors:
-                return 1, b"", b"error"
-            raise
+            resp = await client.get(f"/containers/{container}/archive", params={"path": path})
+        except Exception as exc:  # pragma: no cover - defensive
+            return False, str(exc)
+        if resp.status_code == 404:
+            return False, f"{path} not found"
+        if resp.status_code // 100 != 2:
+            return False, f"status {resp.status_code}"
+        await resp.aclose()
+        return True, ""
+
+    async def _fetch_archive(
+        self,
+        client: httpx.AsyncClient,
+        container: str,
+        path: str,
+        staging_dir: str,
+        *,
+        required: bool,
+    ) -> bool:
+        async with client.stream(
+            "GET", f"/containers/{container}/archive", params={"path": path}
+        ) as resp:
+            if resp.status_code == 404:
+                if required:
+                    raise FileNotFoundError(f"{path} not found in container")
+                return False
+            resp.raise_for_status()
+            tmp_tar_path = os.path.join(staging_dir, f"{os.path.basename(path)}.tar")
+            with open(tmp_tar_path, "wb") as fh:
+                async for chunk in resp.aiter_bytes():
+                    fh.write(chunk)
+        self._safe_extract_tar(tmp_tar_path, staging_dir)
+        return True
+
+    def _safe_extract_tar(self, tar_path: str, dest_dir: str) -> None:
+        with tarfile.open(tar_path, "r:*") as tar:
+            members = []
+            for member in tar.getmembers():
+                name = member.name
+                if name.startswith("/") or ".." in name.split(os.path.sep):
+                    continue
+                members.append(member)
+            tar.extractall(path=dest_dir, members=members, filter="data")
+
+    def _verify_artifact(self, artifact_path: str) -> None:
+        if not os.path.exists(artifact_path):
+            raise RuntimeError("vaultwarden backup did not produce artifact")
+        with tarfile.open(artifact_path, "r:gz") as tar:
+            names = tar.getnames()
+            if "db.sqlite3" not in names or "config.json" not in names:
+                raise RuntimeError("vaultwarden artifact missing required files")
+
+    async def _iter_file_chunks(self, path: str):
+        with open(path, "rb") as fh:
+            while True:
+                chunk = fh.read(1024 * 1024)
+                if not chunk:
+                    break
+                yield chunk
