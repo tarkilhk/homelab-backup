@@ -45,6 +45,8 @@ async def test_plugin_connectivity(key: str, config: Dict[str, Any] = Body(...))
         # Do not leak secrets; return generic failure with message
         return JSONResponse(content={"ok": False, "error": str(exc)})
 
-    return JSONResponse(content={"ok": bool(ok)})
+    if not ok:
+        return JSONResponse(content={"ok": False, "error": "Connection test failed"})
+    return JSONResponse(content={"ok": True})
 
 

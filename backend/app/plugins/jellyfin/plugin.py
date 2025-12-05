@@ -42,7 +42,7 @@ class JellyfinPlugin(BackupPlugin):
     async def test(self, config: Dict[str, Any]) -> bool:
         """Connectivity test against Jellyfin."""
         if not await self.validate_config(config):
-            return False
+            raise ValueError("Invalid configuration: base_url and api_key are required")
 
         base_url = str(config.get("base_url", "")).rstrip("/")
         api_key = str(config.get("api_key", ""))
@@ -55,15 +55,19 @@ class JellyfinPlugin(BackupPlugin):
                     self._logger.warning(
                         "jellyfin_test_non_2xx | url=%s status=%s", info_url, resp.status_code
                     )
-                    return False
+                    raise RuntimeError(f"Jellyfin API returned status {resp.status_code}")
                 data: Dict[str, Any] = resp.json()
+        except RuntimeError:
+            raise
         except (httpx.HTTPError, ValueError) as exc:
             self._logger.warning(
                 "jellyfin_test_error | url=%s error=%s", info_url, exc
             )
-            return False
+            raise ConnectionError(f"Failed to connect to Jellyfin server: {exc}") from exc
 
-        return isinstance(data, dict) and bool(data.get("Version"))
+        if not isinstance(data, dict) or not data.get("Version"):
+            raise ValueError("Jellyfin API response missing Version field")
+        return True
 
     async def backup(self, context: BackupContext) -> Dict[str, Any]:
         meta = context.metadata or {}

@@ -37,7 +37,7 @@ class WordPressPlugin(BackupPlugin):
 
     async def test(self, config: Dict[str, Any]) -> bool:
         if not await self.validate_config(config):
-            return False
+            raise ValueError("Invalid configuration: site_path is required")
         site_path = str(config.get("site_path"))
         wp_path = str(config.get("wp_path", "wp"))
         try:
@@ -51,10 +51,17 @@ class WordPressPlugin(BackupPlugin):
                 stderr=asyncio.subprocess.PIPE,
             )
             await proc.communicate()
-            return proc.returncode == 0
+            if proc.returncode != 0:
+                raise RuntimeError(f"WordPress installation check failed (return code {proc.returncode})")
+            return True
+        except FileNotFoundError as exc:
+            self._logger.warning("wordpress_test_error | error=%s", exc)
+            raise FileNotFoundError(f"WP-CLI not found at '{wp_path}'. Please ensure WP-CLI is installed and in PATH.") from exc
+        except RuntimeError:
+            raise
         except OSError as exc:
             self._logger.warning("wordpress_test_error | error=%s", exc)
-            return False
+            raise ConnectionError(f"Failed to execute WP-CLI command: {exc}") from exc
 
     async def backup(self, context: BackupContext) -> Dict[str, Any]:
         meta = context.metadata or {}

@@ -50,7 +50,7 @@ class PostgreSQLPlugin(BackupPlugin):
     async def test(self, config: Dict[str, Any]) -> bool:
         """Check database connectivity using an async PostgreSQL driver (no Docker/binaries)."""
         if not await self.validate_config(config):
-            return False
+            raise ValueError("Invalid configuration: host, user, and password are required")
         host = str(config.get("host"))
         port = int(config.get("port", 5432))
         user = str(config.get("user"))
@@ -63,7 +63,7 @@ class PostgreSQLPlugin(BackupPlugin):
             import asyncpg  # type: ignore
         except Exception as exc:  # pragma: no cover - environment dependent
             self._logger.warning("asyncpg_not_available | error=%s", exc)
-            return False
+            raise RuntimeError("PostgreSQL driver (asyncpg) is not available. Please install it.") from exc
 
         conn = None
         try:
@@ -78,7 +78,7 @@ class PostgreSQLPlugin(BackupPlugin):
             return value == 1
         except Exception as exc:
             self._logger.warning("postgresql_test_failed | host=%s error=%s", host, exc)
-            return False
+            raise ConnectionError(f"Failed to connect to PostgreSQL database: {exc}") from exc
         finally:
             if conn is not None:
                 try:

@@ -48,7 +48,7 @@ class VaultWardenPlugin(BackupPlugin):
     async def test(self, config: Dict[str, Any]) -> bool:
         """Verify the container is reachable and core data files exist."""
         if not await self.validate_config(config):
-            return False
+            raise ValueError("Invalid configuration: container_name and data_path are required")
         container = str(config.get("container_name")).strip()
         data_path = str(config.get("data_path", DEFAULT_DATA_PATH)).rstrip("/") or "/"
         try:
@@ -56,13 +56,13 @@ class VaultWardenPlugin(BackupPlugin):
                 exists = await self._container_exists(client, container)
                 if not exists:
                     self._logger.warning("vaultwarden_test_failed | container=%s missing", container)
-                    return False
+                    raise FileNotFoundError(f"Container '{container}' not found")
                 db_ok, db_err = await self._path_exists(client, container, f"{data_path}/db.sqlite3")
                 if not db_ok:
                     self._logger.warning(
                         "vaultwarden_test_failed | container=%s error=%s", container, db_err
                     )
-                    return False
+                    raise FileNotFoundError(f"db.sqlite3 not found in container: {db_err}")
                 cfg_ok, cfg_err = await self._path_exists(
                     client, container, f"{data_path}/config.json"
                 )
@@ -70,11 +70,13 @@ class VaultWardenPlugin(BackupPlugin):
                     self._logger.warning(
                         "vaultwarden_test_failed | container=%s error=%s", container, cfg_err
                     )
-                    return False
+                    raise FileNotFoundError(f"config.json not found in container: {cfg_err}")
                 return True
+        except (ValueError, FileNotFoundError):
+            raise
         except Exception as exc:  # pragma: no cover - defensive
             self._logger.warning("vaultwarden_test_error | container=%s error=%s", container, exc)
-            return False
+            raise ConnectionError(f"Failed to test VaultWarden container: {exc}") from exc
 
     async def backup(self, context: BackupContext) -> Dict[str, Any]:
         cfg = getattr(context, "config", {}) or {}

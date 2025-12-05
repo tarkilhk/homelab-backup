@@ -46,7 +46,7 @@ class MySQLPlugin(BackupPlugin):
     async def test(self, config: Dict[str, Any]) -> bool:
         """Check database connectivity using aiomysql."""
         if not await self.validate_config(config):
-            return False
+            raise ValueError("Invalid configuration: host, user, password, and database are required")
         host = str(config.get("host"))
         port = int(config.get("port", 3306))
         user = str(config.get("user"))
@@ -57,7 +57,7 @@ class MySQLPlugin(BackupPlugin):
             import aiomysql  # type: ignore
         except Exception as exc:  # pragma: no cover - environment dependent
             self._logger.warning("aiomysql_not_available | error=%s", exc)
-            return False
+            raise RuntimeError("MySQL driver (aiomysql) is not available. Please install it.") from exc
 
         conn = None
         try:
@@ -74,7 +74,7 @@ class MySQLPlugin(BackupPlugin):
             return bool(row) and row[0] == 1
         except Exception as exc:
             self._logger.warning("mysql_test_failed | host=%s error=%s", host, exc)
-            return False
+            raise ConnectionError(f"Failed to connect to MySQL database: {exc}") from exc
         finally:
             if conn is not None:
                 try:
