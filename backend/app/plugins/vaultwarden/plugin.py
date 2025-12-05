@@ -56,13 +56,13 @@ class VaultWardenPlugin(BackupPlugin):
                 exists = await self._container_exists(client, container)
                 if not exists:
                     self._logger.warning("vaultwarden_test_failed | container=%s missing", container)
-                    raise FileNotFoundError(f"Container '{container}' not found")
+                    return False
                 db_ok, db_err = await self._path_exists(client, container, f"{data_path}/db.sqlite3")
                 if not db_ok:
                     self._logger.warning(
                         "vaultwarden_test_failed | container=%s error=%s", container, db_err
                     )
-                    raise FileNotFoundError(f"db.sqlite3 not found in container: {db_err}")
+                    return False
                 cfg_ok, cfg_err = await self._path_exists(
                     client, container, f"{data_path}/config.json"
                 )
@@ -70,9 +70,9 @@ class VaultWardenPlugin(BackupPlugin):
                     self._logger.warning(
                         "vaultwarden_test_failed | container=%s error=%s", container, cfg_err
                     )
-                    raise FileNotFoundError(f"config.json not found in container: {cfg_err}")
+                    return False
                 return True
-        except (ValueError, FileNotFoundError):
+        except ValueError:
             raise
         except Exception as exc:  # pragma: no cover - defensive
             self._logger.warning("vaultwarden_test_error | container=%s error=%s", container, exc)

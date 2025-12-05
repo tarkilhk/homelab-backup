@@ -41,6 +41,7 @@ async def test_backup_writes_artifact(monkeypatch: pytest.MonkeyPatch, tmp_path:
         return DummyProcess(returncode=0)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setenv("BACKUP_BASE_PATH", str(tmp_path))
     plugin = WordPressPlugin(name="wordpress")
     ctx = BackupContext(
         job_id="1",
