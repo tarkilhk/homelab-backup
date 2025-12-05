@@ -237,28 +237,42 @@ Guidelines:
 - `validate_config`: lightweight presence/type checks only.
 - `test`: must be non-destructive. Use small timeouts (`timeout=10.0`), follow redirects if appropriate, handle non-2xx as failures, and never log secrets.
 
-Example patterns (see `PiHolePlugin.test`):
+**CRITICAL: Return True vs Raise Exceptions**
 
-```startLine:42:endLine:90:backend/app/plugins/pihole/plugin.py
+The `test()` method signature is `-> bool`, but **you MUST raise exceptions for failures** to provide meaningful error messages to users. The API endpoint catches exceptions and returns them as error messages.
+
+- **Return `True`** ONLY when the test succeeds completely.
+- **Raise exceptions** for ALL failures:
+  - `ValueError` for invalid configuration
+  - `FileNotFoundError` for missing resources (containers, files, etc.)
+  - `ConnectionError` for network/connection failures
+  - `RuntimeError` for driver/library issues or HTTP errors
+
+Example pattern (see `JellyfinPlugin.test` or `PostgreSQLPlugin.test`):
+
+```python
 async def test(self, config: Dict[str, Any]) -> bool:
     if not await self.validate_config(config):
-        return False
+        raise ValueError("Invalid configuration: base_url and api_key are required")
+    
     base_url = str(config.get("base_url", "")).rstrip("/")
-    password = config.get("password")
-    auth_url = f"{base_url}/api/auth"
+    api_key = str(config.get("api_key", ""))
+    url = f"{base_url}/api/status"
+    
     try:
         async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-            resp = await client.post(auth_url, json={"password": str(password)}, headers={"Accept": "application/json"})
-            if resp.status_code // 100 != 2:
-                return False
-            data: Dict[str, Any] = resp.json()
-    except (httpx.HTTPError, ValueError):
-        return False
-    session = data.get("session") if isinstance(data, dict) else None
-    if isinstance(session, dict):
-        return bool(session.get("valid") is True and session.get("csrf"))
-    return bool(isinstance(data, dict) and data.get("success") is True)
+            resp = await client.get(url, headers={"X-Api-Key": api_key})
+            if resp.status_code != 200:
+                raise RuntimeError(f"API returned status {resp.status_code}")
+            data = resp.json()
+            if not data.get("version"):
+                raise ValueError("API response missing version field")
+            return True
+    except httpx.HTTPError as exc:
+        raise ConnectionError(f"Failed to connect to server: {exc}") from exc
 ```
+
+**Why exceptions instead of `return False`?** The API endpoint (`backend/app/api/plugins.py`) catches exceptions and returns `{"ok": False, "error": str(exc)}` to the frontend. If you return `False`, users only see a generic "Connection test failed" message.
 
 ### 4) Implement backup
 - Build the directory `/backups/<target_slug>/<YYYY-MM-DD>/`.
@@ -327,6 +341,25 @@ async def test_test_success(monkeypatch):
     plugin = <ClassName>Plugin(name="<plugin_key>")
     ok = await plugin.test({"base_url": "http://example.local"})
     assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_test_failure_raises_exception(monkeypatch):
+    """Test that failures raise exceptions with specific error messages."""
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)  # Simulate failure
+
+    transport = httpx.MockTransport(handler)
+    orig_client = httpx.AsyncClient
+    def _client(*args, **kwargs):
+        kwargs["transport"] = transport
+        return orig_client(*args, **kwargs)
+    monkeypatch.setattr(httpx, "AsyncClient", _client)
+
+    plugin = <ClassName>Plugin(name="<plugin_key>")
+    # Expect an exception, not False
+    with pytest.raises((RuntimeError, ConnectionError), match=".*"):
+        await plugin.test({"base_url": "http://example.local"})
 
 
 @pytest.mark.asyncio
