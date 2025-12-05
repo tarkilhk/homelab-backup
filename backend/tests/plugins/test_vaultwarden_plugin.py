@@ -77,8 +77,8 @@ async def test_test_missing_db(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     plugin = VaultWardenPlugin(name="vaultwarden")
-    ok = await plugin.test({"container_name": "vw"})
-    assert ok is False
+    with pytest.raises(FileNotFoundError, match="db.sqlite3 not found"):
+        await plugin.test({"container_name": "vw"})
 
 
 @pytest.mark.asyncio
