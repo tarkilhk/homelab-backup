@@ -224,6 +224,6 @@ export const api = {
   // Dashboard helpers
   upcomingJobs: () => request<Array<{ job_id: number; name: string; next_run_at: string }>>('/jobs/upcoming'),
   // Restores
-  restoreTargetRun: (payload: { source_target_run_id: number; destination_target_id: number; triggered_by?: string }) =>
+  restoreTargetRun: (payload: { artifact_path: string; destination_target_id: number; source_target_run_id?: number; triggered_by?: string }) =>
     request<RunWithJob>('/restores/', { method: 'POST', body: JSON.stringify(payload) }),
 }

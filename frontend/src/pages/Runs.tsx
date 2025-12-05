@@ -388,12 +388,17 @@ function ExpandedTargetRunRows({ runId, targetsById, isClickFromInteractive }: {
 
   const handleConfirmRestore = async () => {
     if (!restoreSource || typeof selectedDestination !== 'number') return
+    if (!restoreSource.artifact_path) {
+      setRestoreError('Artifact path is missing')
+      return
+    }
     setIsRestoring(true)
     setRestoreError(null)
     try {
       await api.restoreTargetRun({
-        source_target_run_id: restoreSource.id,
+        artifact_path: restoreSource.artifact_path,
         destination_target_id: selectedDestination,
+        source_target_run_id: restoreSource.id, // Pass for metadata/backward compatibility
       })
       await queryClient.invalidateQueries({ queryKey: ['run', runId] })
       queryClient.invalidateQueries({ queryKey: ['runs'], exact: false })

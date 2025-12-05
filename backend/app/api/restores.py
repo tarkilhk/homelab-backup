@@ -10,8 +10,9 @@ from app.services import RestoreService
 
 
 class RestoreRequest(BaseModel):
-    source_target_run_id: int = Field(..., description="Target run ID containing the backup artifact")
+    artifact_path: str = Field(..., description="Path to the backup artifact file to restore from")
     destination_target_id: int = Field(..., description="Target to restore the artifact to")
+    source_target_run_id: int | None = Field(None, description="Optional source target run ID for metadata/backward compatibility")
     triggered_by: str | None = Field(None, description="Audit string for who initiated the restore")
 
 
@@ -22,9 +23,10 @@ router = APIRouter(prefix="/restores", tags=["restores"])
 def trigger_restore(payload: RestoreRequest, db: Session = Depends(get_session)) -> RunWithJob:
     svc = RestoreService(db)
     try:
-        run = svc.restore(
-            source_target_run_id=payload.source_target_run_id,
+        run = svc.restore_from_path(
+            artifact_path=payload.artifact_path,
             destination_target_id=payload.destination_target_id,
+            source_target_run_id=payload.source_target_run_id,
             triggered_by=payload.triggered_by or "manual_api",
         )
     except KeyError as exc:
@@ -36,7 +38,7 @@ def trigger_restore(payload: RestoreRequest, db: Session = Depends(get_session))
         raise
     except ValueError as exc:
         detail_map = {
-            "artifact_path_missing": "Source target run does not have an artifact",
+            "artifact_path_missing": "Artifact path is required",
             "artifact_path_not_found": "Artifact file not found on disk",
             "source_run_not_found": "Source run could not be loaded",
             "source_target_not_found": "Source target could not be loaded",

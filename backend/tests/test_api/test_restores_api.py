@@ -89,7 +89,7 @@ def test_restore_success(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Happy path: restore clones artifact metadata into a new run."""
+    """Happy path: restore from artifact path with source_target_run_id for metadata."""
     import asyncio
     
     class DummyProcess:
@@ -138,8 +138,9 @@ def test_restore_success(
     resp = client.post(
         "/api/v1/restores/",
         json={
-            "source_target_run_id": source_target_run.id,
+            "artifact_path": str(artifact_path),
             "destination_target_id": dest_target_id,
+            "source_target_run_id": source_target_run.id,  # For metadata
         },
     )
     assert resp.status_code == 201, resp.text
@@ -161,6 +162,11 @@ def test_restore_success(
     # because the restore actually executes via psql
     assert tr["artifact_path"] == str(artifact_path)
     assert tr["artifact_bytes"] == len("dummy backup data")
+    
+    # Verify the restore run has job_id from source (backward compatibility)
+    restore_run = db_session_override.query(RunModel).filter(RunModel.id == data["id"]).first()
+    assert restore_run is not None
+    assert restore_run.job_id == job.id  # Should use source run's job_id
 
 
 def test_restore_rejects_plugin_mismatch(client: TestClient, db_session_override: Session, tmp_path: Path) -> None:
@@ -192,8 +198,9 @@ def test_restore_rejects_plugin_mismatch(client: TestClient, db_session_override
     resp = client.post(
         "/api/v1/restores/",
         json={
-            "source_target_run_id": source_target_run.id,
+            "artifact_path": str(artifact_path),
             "destination_target_id": dest_target_id,
+            "source_target_run_id": source_target_run.id,  # For metadata
         },
     )
     assert resp.status_code == 400
@@ -232,9 +239,77 @@ def test_restore_missing_artifact_path(client: TestClient, db_session_override: 
     resp = client.post(
         "/api/v1/restores/",
         json={
-            "source_target_run_id": source_target_run.id,
+            "artifact_path": str(missing_path),  # File doesn't exist
             "destination_target_id": dest_target_id,
+            "source_target_run_id": source_target_run.id,  # For metadata
         },
     )
     assert resp.status_code == 400
     assert "Artifact file not found" in resp.json()["detail"]
+
+
+def test_restore_from_file_path_only(
+    client: TestClient,
+    db_session_override: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test restore from file path without source_target_run_id (disaster recovery scenario)."""
+    import asyncio
+    
+    class DummyProcess:
+        def __init__(self):
+            self.returncode = 0
+        async def communicate(self):
+            return b"", b""
+    
+    async def fake_exec(*args, **kwargs):
+        assert args[0] == "psql", f"Expected psql, got {args[0]}"
+        return DummyProcess()
+    
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(
+        "app.plugins.postgresql.plugin.BACKUP_BASE_PATH",
+        str(tmp_path / "backups"),
+        raising=True,
+    )
+    
+    dest_target_id = _create_target(
+        client,
+        "Destination Postgres",
+        "postgresql",
+        {"host": "db.other", "user": "postgres", "password": "secret"},
+    )
+
+    artifact_path = tmp_path / "orphaned-backup.sql"
+    artifact_path.write_text("orphaned backup data")
+
+    # Restore without source_target_run_id (disaster recovery)
+    resp = client.post(
+        "/api/v1/restores/",
+        json={
+            "artifact_path": str(artifact_path),
+            "destination_target_id": dest_target_id,
+            # No source_target_run_id - this is a file-based restore
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["operation"] == "restore"
+    assert data["status"] == "success"
+    target_runs = data["target_runs"]
+    assert isinstance(target_runs, list) and len(target_runs) == 1
+    tr = target_runs[0]
+    assert tr["operation"] == "restore"
+    assert tr["artifact_path"] == str(artifact_path)
+    assert tr["artifact_bytes"] == len("orphaned backup data")
+
+    dest_target = db_session_override.get(TargetModel, dest_target_id)
+    assert dest_target is not None
+    assert data["display_job_name"] == f"{dest_target.name} Restore"
+    assert data.get("display_tag_name") == dest_target.name
+    
+    # Verify the restore run has NULL job_id (file-based restore)
+    restore_run = db_session_override.query(RunModel).filter(RunModel.id == data["id"]).first()
+    assert restore_run is not None
+    assert restore_run.job_id is None  # Should be NULL for file-based restores

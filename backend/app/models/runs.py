@@ -9,12 +9,12 @@ from app.core.db import Base
 
 
 class Run(Base):
-    """Run model representing individual backup job executions."""
+    """Run model representing individual backup job executions or restore operations."""
 
     __tablename__ = "runs"
 
     id = Column(Integer, primary_key=True, index=True)
-    job_id = Column(Integer, ForeignKey("jobs.id"), nullable=False, index=True)
+    job_id = Column(Integer, ForeignKey("jobs.id"), nullable=True, index=True)
     started_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
     finished_at = Column(DateTime, nullable=True)
     status = Column(String(20), nullable=False, index=True)  # values in RunStatus

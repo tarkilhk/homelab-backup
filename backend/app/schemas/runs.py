@@ -10,7 +10,7 @@ from app.domain.enums import RunStatus, RunOperation, TargetRunOperation
 class RunBase(BaseModel):
     """Base schema for Run model."""
 
-    job_id: int = Field(..., description="ID of the associated job")
+    job_id: Optional[int] = Field(None, description="ID of the associated job (null for restore operations)")
     status: RunStatus = Field(..., description="Status of the run")
     operation: RunOperation = Field(default=RunOperation.BACKUP, description="Operation performed by the run")
     message: Optional[str] = Field(None, description="Error message or success message")
@@ -67,5 +67,5 @@ class TargetRun(BaseModel):
 class RunWithJob(Run):
     """Schema for Run with related Job."""
 
-    job: "Job" = Field(..., description="Associated job")
+    job: Optional["Job"] = Field(None, description="Associated job (null for restore operations)")
     target_runs: List[TargetRun] = Field(default_factory=list, description="Per-target execution results")
