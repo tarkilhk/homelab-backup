@@ -239,7 +239,9 @@ class TargetService:
             ok = await plugin.test(cfg)
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
-        return {"ok": bool(ok)}
+        if not ok:
+            return {"ok": False, "error": "Connection test failed"}
+        return {"ok": True}
 
     def move_to_group(self, target_id: int, group_id: int) -> Target:
         target = self.db.get(Target, target_id)

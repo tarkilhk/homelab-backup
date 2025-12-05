@@ -42,17 +42,21 @@ class RadarrPlugin(BackupPlugin):
     async def test(self, config: Dict[str, Any]) -> bool:
         """Verify connectivity by querying the system status endpoint."""
         if not await self.validate_config(config):
-            return False
+            raise ValueError("Invalid configuration: base_url and api_key are required")
         base_url = str(config.get("base_url", "")).rstrip("/")
         api_key = str(config.get("api_key", ""))
         status_url = f"{base_url}/api/v3/system/status"
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(status_url, headers={"X-Api-Key": api_key})
-                return resp.status_code == 200
+                if resp.status_code != 200:
+                    raise RuntimeError(f"Radarr API returned status {resp.status_code}")
+                return True
+        except RuntimeError:
+            raise
         except httpx.HTTPError as exc:  # pragma: no cover - network errors
             self._logger.warning("radarr_test_error | url=%s error=%s", status_url, exc)
-            return False
+            raise ConnectionError(f"Failed to connect to Radarr server: {exc}") from exc
 
     async def backup(self, context: BackupContext) -> Dict[str, Any]:
         meta = context.metadata or {}

@@ -12,6 +12,7 @@ services:
       - /tmp/backups:/backups
       - /home/dev/projects/homelab-backup/db:/app/db
       - /etc/localtime:/etc/localtime:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     ports:
       - "8086:8080"
     restart: unless-stopped

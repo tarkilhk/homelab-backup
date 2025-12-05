@@ -46,7 +46,7 @@ class InvoiceNinjaPlugin(BackupPlugin):
     async def test(self, config: Dict[str, Any]) -> bool:
         """Ping the Invoice Ninja API to verify credentials."""
         if not await self.validate_config(config):
-            return False
+            raise ValueError("Invalid configuration: base_url and token are required")
         base_url = str(config.get("base_url", "")).rstrip("/")
         token = config.get("token")
         url = f"{base_url}/api/v1/ping"
@@ -56,12 +56,12 @@ class InvoiceNinjaPlugin(BackupPlugin):
                 resp = await client.get(url, headers=headers)
         except httpx.HTTPError as exc:  # pragma: no cover - network failures
             self._logger.warning("invoiceninja_test_http_error | url=%s error=%s", url, exc)
-            return False
+            raise ConnectionError(f"Failed to connect to Invoice Ninja server: {exc}") from exc
         if resp.status_code // 100 != 2:
             self._logger.warning(
                 "invoiceninja_test_non_2xx | url=%s status=%s", url, resp.status_code
             )
-            return False
+            raise RuntimeError(f"Invoice Ninja API returned status {resp.status_code}")
         return True
 
     async def backup(self, context: BackupContext) -> Dict[str, Any]:

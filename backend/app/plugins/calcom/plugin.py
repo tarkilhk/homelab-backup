@@ -32,7 +32,7 @@ class CalcomPlugin(BackupPlugin):
 
     async def test(self, config: Dict[str, Any]) -> bool:
         if not await self.validate_config(config):
-            return False
+            raise ValueError("Invalid configuration: database_url is required")
         db_url = str(config["database_url"])
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -43,10 +43,14 @@ class CalcomPlugin(BackupPlugin):
                 stderr=asyncio.subprocess.PIPE,
             )
             await proc.communicate()
-            return proc.returncode == 0
+            if proc.returncode != 0:
+                raise ConnectionError(f"PostgreSQL database is not ready (return code {proc.returncode})")
+            return True
         except FileNotFoundError:
             self._logger.warning("pg_isready_not_found")
-            return False
+            raise FileNotFoundError("pg_isready command not found. Please ensure PostgreSQL client tools are installed.")
+        except ConnectionError:
+            raise
 
     async def backup(self, context: BackupContext) -> Dict[str, Any]:
         cfg = getattr(context, "config", {}) or {}
