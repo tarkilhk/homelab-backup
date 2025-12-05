@@ -15,12 +15,18 @@ from app.models import (
 
 
 def _assign_display_fields(run: RunModel) -> None:
-    job_name = run.job.name if getattr(run, "job", None) else f"Job #{run.job_id}"
+    # Handle nullable job_id - use job name if available, otherwise fallback
+    job_name = None
+    if getattr(run, "job", None) and run.job is not None:
+        job_name = run.job.name
+    elif run.job_id is not None:
+        job_name = f"Job #{run.job_id}"
+    
     tag_name = None
-    if getattr(run, "job", None) and getattr(run.job, "tag", None):
+    if getattr(run, "job", None) and run.job is not None and getattr(run.job, "tag", None):
         tag_name = run.job.tag.display_name
 
-    display_job_name = job_name
+    display_job_name = job_name or "Unknown Job"
     display_tag_name = tag_name
 
     if run.operation == RunOperation.RESTORE.value:
@@ -53,9 +59,10 @@ class RunService:
         target_id: Optional[int] = None,
         tag_id: Optional[int] = None,
     ) -> List[RunModel]:
+        # Use LEFT JOIN to include restore runs (which may have NULL job_id)
         query = (
             self.db.query(RunModel)
-            .join(JobModel, RunModel.job_id == JobModel.id)
+            .outerjoin(JobModel, RunModel.job_id == JobModel.id)
             .options(
                 joinedload(RunModel.job).joinedload(JobModel.tag),
                 joinedload(RunModel.target_runs).joinedload(TargetRunModel.target),
@@ -69,11 +76,13 @@ class RunService:
             query = query.filter(RunModel.started_at <= end_dt)
         if target_id:
             # Filter runs whose job is associated with the target via tag linkage
+            # This will exclude restore runs (which have NULL job_id)
             query = (
                 query.join(TargetTagModel, TargetTagModel.tag_id == JobModel.tag_id)
                 .filter(TargetTagModel.target_id == target_id)
             )
         if tag_id:
+            # Filter by tag_id - this will exclude restore runs (which have NULL job_id)
             query = query.filter(JobModel.tag_id == tag_id)
         query = query.order_by(RunModel.started_at.desc())
         runs = list(query.all())

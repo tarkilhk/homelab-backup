@@ -43,6 +43,7 @@ def metrics(db: Session = Depends(get_session)) -> str:
     jobs: Dict[int, str] = {j.id: j.name for j in db.query(JobModel).all()}
 
     # Success and failure counts per job
+    # Explicitly filter by operation and non-null job_id to exclude restore runs
     success_counts: Dict[int, int] = {
         job_id: count
         for job_id, count in (
@@ -50,6 +51,7 @@ def metrics(db: Session = Depends(get_session)) -> str:
             .filter(
                 RunModel.status == "success",
                 RunModel.operation == RunOperation.BACKUP.value,
+                RunModel.job_id.isnot(None),
             )
             .group_by(RunModel.job_id)
             .all()
@@ -62,6 +64,7 @@ def metrics(db: Session = Depends(get_session)) -> str:
             .filter(
                 RunModel.status == "failed",
                 RunModel.operation == RunOperation.BACKUP.value,
+                RunModel.job_id.isnot(None),
             )
             .group_by(RunModel.job_id)
             .all()
@@ -69,6 +72,7 @@ def metrics(db: Session = Depends(get_session)) -> str:
     }
 
     # Last run timestamp per job (unix seconds). Use finished_at; fallback to started_at
+    # Explicitly filter by operation and non-null job_id to exclude restore runs
     last_ts_rows: Tuple[int, float]
     last_ts: Dict[int, float] = {}
     for job_id, ts in (
@@ -76,7 +80,10 @@ def metrics(db: Session = Depends(get_session)) -> str:
             RunModel.job_id,
             func.max(func.coalesce(RunModel.finished_at, RunModel.started_at)),
         )
-        .filter(RunModel.operation == RunOperation.BACKUP.value)
+        .filter(
+            RunModel.operation == RunOperation.BACKUP.value,
+            RunModel.job_id.isnot(None),
+        )
         .group_by(RunModel.job_id)
         .all()
     ):
