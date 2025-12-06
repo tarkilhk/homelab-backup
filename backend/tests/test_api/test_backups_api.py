@@ -17,10 +17,10 @@ def backup_dir(tmp_path):
     base = tmp_path / "backups"
     base.mkdir()
     
-    # Create structure: backups/target1/2025-01-15/artifact1.tar.gz
+    # Create structure: backups/target1/2025-01-15/artifact1.zip
     target1_dir = base / "target1" / "2025-01-15"
     target1_dir.mkdir(parents=True)
-    artifact1 = target1_dir / "test-backup-20250115T120000.tar.gz"
+    artifact1 = target1_dir / "pihole-backup-20250115T120000.zip"
     artifact1.write_bytes(b"test backup content")
     
     # Create structure with sidecar
@@ -53,11 +53,11 @@ def test_list_backups_from_disk(client: TestClient, backup_dir, monkeypatch):
     assert len(data) == 2
     
     # Check first backup (inferred)
-    backup1 = next((b for b in data if "test-backup" in b["artifact_path"]), None)
+    backup1 = next((b for b in data if "pihole-backup" in b["artifact_path"]), None)
     assert backup1 is not None
     assert backup1["target_slug"] == "target1"
     assert backup1["date"] == "2025-01-15"
-    assert backup1["plugin_name"] == "test"
+    assert backup1["plugin_name"] == "pihole"
     assert backup1["metadata_source"] == "inferred"
     assert backup1["file_size"] > 0
     

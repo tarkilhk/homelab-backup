@@ -12,8 +12,8 @@ from app.core.plugins.sidecar import write_backup_sidecar, read_backup_sidecar
 from app.core.plugins.base import BackupContext, BackupPlugin
 
 
-class TestPlugin(BackupPlugin):
-    """Test plugin for sidecar tests."""
+class MockBackupPlugin(BackupPlugin):
+    """Mock plugin for sidecar tests."""
     
     def __init__(self):
         super().__init__(name="test_plugin", version="1.0.0")
@@ -41,7 +41,7 @@ def test_write_backup_sidecar(tmp_path):
     # Create a dummy artifact file
     Path(artifact_path).touch()
     
-    plugin = TestPlugin()
+    plugin = MockBackupPlugin()
     context = BackupContext(
         job_id="1",
         target_id="1",
@@ -69,7 +69,7 @@ def test_write_backup_sidecar_fallback_target_id(tmp_path):
     artifact_path = str(tmp_path / "backup.tar.gz")
     Path(artifact_path).touch()
     
-    plugin = TestPlugin()
+    plugin = MockBackupPlugin()
     context = BackupContext(
         job_id="1",
         target_id="42",
