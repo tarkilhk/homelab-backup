@@ -226,4 +226,14 @@ export const api = {
   // Restores
   restoreTargetRun: (payload: { artifact_path: string; destination_target_id: number; source_target_run_id?: number; triggered_by?: string }) =>
     request<RunWithJob>('/restores/', { method: 'POST', body: JSON.stringify(payload) }),
+  // Backups from disk
+  listBackupsFromDisk: () => request<Array<{
+    artifact_path: string
+    target_slug: string | null
+    date: string | null
+    plugin_name: string | null
+    file_size: number
+    modified_at: string
+    metadata_source: 'sidecar' | 'inferred'
+  }>>('/backups/from-disk'),
 }

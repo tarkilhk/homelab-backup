@@ -10,6 +10,7 @@ import logging
 
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
 from app.core.plugins.restore_utils import copy_artifact_for_restore
+from app.core.plugins.sidecar import write_backup_sidecar
 
 
 class SonarrPlugin(BackupPlugin):
@@ -117,6 +118,7 @@ class SonarrPlugin(BackupPlugin):
             if post_content and not post_looks_json:
                 with open(artifact_path, "wb") as fp:
                     fp.write(post_content)
+                write_backup_sidecar(artifact_path, self, context, logger=self._logger)
                 return {"artifact_path": artifact_path}
 
             # 2) Poll the backup list for the newly created entry
@@ -137,6 +139,7 @@ class SonarrPlugin(BackupPlugin):
                     if body and not is_json_like:
                         with open(artifact_path, "wb") as fp:
                             fp.write(body)
+                        write_backup_sidecar(artifact_path, self, context, logger=self._logger)
                         return {"artifact_path": artifact_path}
 
                     items: List[Dict[str, Any]] = list_resp.json() or []
@@ -215,6 +218,7 @@ class SonarrPlugin(BackupPlugin):
                     if dl_path_resp.status_code == 200 and (dl_path_resp.content or b""):
                         with open(artifact_path, "wb") as fp:
                             fp.write(dl_path_resp.content)
+                        write_backup_sidecar(artifact_path, self, context, logger=self._logger)
                         return {"artifact_path": artifact_path}
                 except httpx.HTTPError as exc:
                     self._logger.warning(
@@ -247,6 +251,7 @@ class SonarrPlugin(BackupPlugin):
                 if status == 200 and content:
                     with open(artifact_path, "wb") as fp:
                         fp.write(content)
+                    write_backup_sidecar(artifact_path, self, context, logger=self._logger)
                     return {"artifact_path": artifact_path}
             except httpx.HTTPError as exc:
                 self._logger.error(
@@ -304,6 +309,7 @@ class SonarrPlugin(BackupPlugin):
                     raise RuntimeError("Sonarr backup fallback download returned no content")
                 with open(artifact_path, "wb") as fp:
                     fp.write(content2)
+                write_backup_sidecar(artifact_path, self, context, logger=self._logger)
             except httpx.HTTPError as exc:
                 self._logger.error(
                     "sonarr_backup_download_fallback_error | job_id=%s target_id=%s error=%s",
@@ -312,6 +318,8 @@ class SonarrPlugin(BackupPlugin):
                     str(exc),
                 )
                 raise
+
+        write_backup_sidecar(artifact_path, self, context, logger=self._logger)
 
         return {"artifact_path": artifact_path}
 

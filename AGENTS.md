@@ -22,6 +22,7 @@ If you are asked to add a new backup plugin, follow `ADDING_PLUGINS.md` exactly.
 - Keep changes simple and deterministic; avoid unnecessary abstractions.
 - Do not log secrets; redact tokens/passwords in all logs and messages.
 - For backup artifacts, follow the convention `/backups/<target_slug>/<YYYY-MM-DD>/...` and return `{ "artifact_path": "..." }` from plugin backups.
+- **Sidecar metadata**: All plugins must write sidecar metadata files (`<artifact_path>.meta.json`) using `write_backup_sidecar()` from `app.core.plugins.sidecar` to enable disaster recovery scenarios.
 
 ### Backend specifics (high level)
 - Plugin contract and discovery are defined under `backend/app/core/plugins/` and `backend/app/plugins/`.
@@ -83,7 +84,7 @@ with pytest.raises(FileNotFoundError, match="Container.*not found"):
 - You followed `frontend/.cursorrules` and `backend/.cursorrules`.
 - New or changed behavior is covered by tests; all tests pass locally.
 - No secrets in code, logs, or docs.
-- For plugins: discovery works, schema is returned by the API, `test` is non-destructive, and `backup` writes an artifact to the correct path and returns it.
+- For plugins: discovery works, schema is returned by the API, `test` is non-destructive, `backup` writes an artifact to the correct path and returns it, and sidecar metadata is written for disaster recovery.
 
 ### Notes for automation
 - When invoking tools or commands programmatically, prefer absolute paths for reliability.

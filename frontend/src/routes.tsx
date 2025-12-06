@@ -5,6 +5,7 @@ import GroupsPage from './pages/Groups'
 import TagsPage from './pages/Tags'
 import JobsPage from './pages/Jobs'
 import RunsPage from './pages/Runs'
+import RestoreFromDiskPage from './pages/RestoreFromDisk'
 import OptionsPage from './pages/Options'
 import ErrorPage from './pages/ErrorPage'
 import NotFoundPage from './pages/NotFound'
@@ -23,6 +24,7 @@ export function getRoutes() {
         { path: 'targets/:id/jobs', element: <JobsPage /> },
         { path: 'jobs', element: <JobsPage /> },
         { path: 'runs', element: <RunsPage /> },
+        { path: 'restore', element: <RestoreFromDiskPage /> },
         { path: 'options', element: <OptionsPage /> },
         // Catch-all for unknown nested routes
         { path: '*', element: <NotFoundPage /> },

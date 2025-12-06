@@ -10,6 +10,7 @@ import httpx
 
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
 from app.core.plugins.restore_utils import copy_artifact_for_restore
+from app.core.plugins.sidecar import write_backup_sidecar
 
 
 class InvoiceNinjaPlugin(BackupPlugin):
@@ -129,6 +130,9 @@ class InvoiceNinjaPlugin(BackupPlugin):
             artifact_path,
             len(dl_resp.content),
         )
+        
+        write_backup_sidecar(artifact_path, self, context, logger=self._logger)
+        
         return {"artifact_path": artifact_path}
 
     async def restore(self, context: RestoreContext) -> Dict[str, Any]:

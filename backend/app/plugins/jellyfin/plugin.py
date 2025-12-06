@@ -9,6 +9,7 @@ import logging
 
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
 from app.core.plugins.restore_utils import copy_artifact_for_restore
+from app.core.plugins.sidecar import write_backup_sidecar
 
 BACKUP_BASE = "/backups"
 
@@ -132,6 +133,8 @@ class JellyfinPlugin(BackupPlugin):
             artifact_path,
             len(content),
         )
+
+        write_backup_sidecar(artifact_path, self, context, logger=self._logger)
 
         return {"artifact_path": artifact_path}
 

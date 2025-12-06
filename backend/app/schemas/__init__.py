@@ -47,6 +47,9 @@ from .runs import (
     TargetRun,
     RunWithJob,
 )  # noqa: F401
+from .backups import (
+    BackupFromDiskResponse,
+)  # noqa: F401
 
 # Resolve forward references across modules to satisfy Pydantic v2
 try:

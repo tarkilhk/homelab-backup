@@ -1,6 +1,6 @@
 import { Link, NavLink, useLocation } from 'react-router-dom'
 import { cn } from '../lib/cn'
-import { Home, Target, ListChecks, Timer, Settings, FolderTree } from 'lucide-react'
+import { Home, Target, ListChecks, Timer, Settings, FolderTree, HardDrive } from 'lucide-react'
 import logoUrl from '../assets/homelab-backup-logo.png'
 
 type Item = { to: string; label: string; icon: React.ComponentType<any> }
@@ -20,6 +20,7 @@ const groups: { header: string; items: Item[] }[] = [
       // { to: '/tags', label: 'Tags', icon: Tags },
       { to: '/jobs', label: 'Jobs', icon: ListChecks },
       { to: '/runs', label: 'Runs', icon: Timer },
+      { to: '/restore', label: 'Restore', icon: HardDrive },
     ],
   },
   {
