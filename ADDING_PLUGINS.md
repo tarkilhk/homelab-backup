@@ -91,6 +91,7 @@ def get_plugin(name: str) -> BackupPlugin:
 - Write backup artifacts under: `/backups/<target_slug>/<YYYY-MM-DD>/...`.
 - Use a timestamp in filenames for uniqueness, e.g., `service-export-YYYYmmddTHHMMSS.ext`.
 - Return `{"artifact_path": "/backups/..."}` from `backup`.
+- **Sidecar metadata**: After creating the artifact, call `write_backup_sidecar(artifact_path, self, context, logger=self._logger)` from `app.core.plugins.sidecar` to write a JSON sidecar file (`<artifact_path>.meta.json`) containing plugin name, target slug, and creation timestamp. This enables disaster recovery scenarios where backups can be restored even without database records.
 
 ### JSON schema expectations (frontend rendering behavior)
 - The UI fetches `/plugins/<key>/schema` and, if found, renders simple inputs from `properties`.
@@ -200,6 +201,10 @@ class <ClassName>Plugin(BackupPlugin):
         cfg = context.config or {}
         # Implement export and write artifact_path
         # ...
+
+        # Write sidecar metadata for disaster recovery
+        from app.core.plugins.sidecar import write_backup_sidecar
+        write_backup_sidecar(artifact_path, self, context, logger=self._logger)
 
         # Must return artifact path
         return {"artifact_path": artifact_path}

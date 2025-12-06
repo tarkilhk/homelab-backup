@@ -9,6 +9,7 @@ from typing import Any, Dict
 
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
 from app.core.plugins.restore_utils import copy_artifact_for_restore
+from app.core.plugins.sidecar import write_backup_sidecar
 
 
 class CalcomPlugin(BackupPlugin):
@@ -83,6 +84,8 @@ class CalcomPlugin(BackupPlugin):
 
         with open(artifact_path, "wb") as f:
             f.write(stdout)
+
+        write_backup_sidecar(str(artifact_path), self, context, logger=self._logger)
 
         return {"artifact_path": str(artifact_path)}
 
