@@ -14,8 +14,8 @@ from app.core.plugins.sidecar import write_backup_sidecar
 from app.core.plugins.base import BackupContext, BackupPlugin
 
 
-class TestPlugin(BackupPlugin):
-    """Test plugin for service tests."""
+class MockBackupPlugin(BackupPlugin):
+    """Mock plugin for service tests."""
     
     def __init__(self, name="test_plugin"):
         super().__init__(name=name, version="1.0.0")
@@ -45,7 +45,7 @@ def backup_dir(tmp_path):
     # Create structure: backups/target1/2025-01-15/artifact1.tar.gz
     target1_dir = base / "target1" / "2025-01-15"
     target1_dir.mkdir(parents=True)
-    artifact1 = target1_dir / "test-backup-20250115T120000.tar.gz"
+    artifact1 = target1_dir / "pihole-backup-20250115T120000.zip"
     artifact1.write_bytes(b"test backup content")
     
     # Create structure: backups/target2/2025-01-16/artifact2.sql
@@ -76,11 +76,11 @@ def test_scan_backups_basic(backup_dir, db_session: Session):
     assert len(backups) == 2
     
     # Check artifact1 (inferred)
-    backup1 = next((b for b in backups if "test-backup" in b.artifact_path), None)
+    backup1 = next((b for b in backups if "pihole-backup" in b.artifact_path), None)
     assert backup1 is not None
     assert backup1.target_slug == "target1"
     assert backup1.date == "2025-01-15"
-    assert backup1.plugin_name == "test"  # Inferred from filename
+    assert backup1.plugin_name == "pihole"  # Inferred from filename
     assert backup1.metadata_source == "inferred"
     
     # Check artifact2 (sidecar)
@@ -99,7 +99,7 @@ def test_scan_backups_excludes_tracked(backup_dir, db_session: Session):
     db_session.add(tag)
     db_session.flush()
     
-    job = Job(name="test-job", tag_id=tag.id, enabled=True, schedule="0 0 * * *")
+    job = Job(name="test-job", tag_id=tag.id, enabled=True, schedule_cron="0 0 * * *")
     db_session.add(job)
     db_session.flush()
     
@@ -111,7 +111,7 @@ def test_scan_backups_excludes_tracked(backup_dir, db_session: Session):
     db_session.add(run)
     db_session.flush()
     
-    artifact1_path = str(backup_dir / "target1" / "2025-01-15" / "test-backup-20250115T120000.tar.gz")
+    artifact1_path = str(backup_dir / "target1" / "2025-01-15" / "pihole-backup-20250115T120000.zip")
     target_run = TargetRun(
         run_id=run.id,
         target_id=target.id,
