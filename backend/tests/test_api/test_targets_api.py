@@ -69,19 +69,65 @@ def test_targets_test_endpoint(client: TestClient, monkeypatch) -> None:
     assert r.status_code == 200
     assert r.json()["ok"] is True
 
-    # Update target to make test false
+    # Update target to make test false - API provides default error message
     r = client.put(f"/api/v1/targets/{tid}", json={"plugin_config_json": "{\"a\":2}"})
     assert r.status_code == 200
 
     r = client.post(f"/api/v1/targets/{tid}/test")
     assert r.status_code == 200
-    assert r.json()["ok"] is False
+    body = r.json()
+    assert body["ok"] is False
+    assert body["error"] == "Connection test failed"
 
     # Invalid JSON -> 400
     r = client.put(f"/api/v1/targets/{tid}", json={"plugin_config_json": "{BAD JSON"})
     assert r.status_code == 200
     r = client.post(f"/api/v1/targets/{tid}/test")
     assert r.status_code == 400
+
+    # Raises ValueError -> ok false + specific error message
+    class _ValueErrorPlugin:
+        def __init__(self, name: str) -> None:
+            self.name = name
+        async def test(self, cfg):  # type: ignore[no-untyped-def]
+            raise ValueError("Invalid configuration: base_url and api_key are required")
+
+    r = client.put(f"/api/v1/targets/{tid}", json={"plugin_name": "vaultwarden", "plugin_config_json": "{}"})
+    assert r.status_code == 200
+    monkeypatch.setattr(plugins_loader, "get_plugin", lambda key: _ValueErrorPlugin(key))
+    r = client.post(f"/api/v1/targets/{tid}/test")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert body["error"] == "Invalid configuration: base_url and api_key are required"
+
+    # Raises FileNotFoundError -> ok false + specific error message
+    class _FileNotFoundPlugin:
+        def __init__(self, name: str) -> None:
+            self.name = name
+        async def test(self, cfg):  # type: ignore[no-untyped-def]
+            raise FileNotFoundError("Container 'xyz' not found")
+
+    monkeypatch.setattr(plugins_loader, "get_plugin", lambda key: _FileNotFoundPlugin(key))
+    r = client.post(f"/api/v1/targets/{tid}/test")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert body["error"] == "Container 'xyz' not found"
+
+    # Raises ConnectionError -> ok false + specific error message
+    class _ConnectionErrorPlugin:
+        def __init__(self, name: str) -> None:
+            self.name = name
+        async def test(self, cfg):  # type: ignore[no-untyped-def]
+            raise ConnectionError("Failed to connect to server: connection refused")
+
+    monkeypatch.setattr(plugins_loader, "get_plugin", lambda key: _ConnectionErrorPlugin(key))
+    r = client.post(f"/api/v1/targets/{tid}/test")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is False
+    assert body["error"] == "Failed to connect to server: connection refused"
 
     # Unknown plugin on target -> 404
     r = client.put(f"/api/v1/targets/{tid}", json={"plugin_name": "missing"})
