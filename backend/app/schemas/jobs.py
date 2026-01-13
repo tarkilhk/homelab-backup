@@ -13,6 +13,7 @@ class JobBase(BaseModel):
     name: str = Field(..., description="Human-readable name for the job")
     schedule_cron: str = Field(..., description="Cron expression for job scheduling")
     enabled: bool = Field(default=True, description="Whether the job is enabled")
+    retention_policy_json: Optional[str] = Field(None, description="Per-job retention policy JSON (null = use global)")
 
 
 class JobCreate(JobBase):
@@ -27,12 +28,18 @@ class JobUpdate(BaseModel):
     name: Optional[str] = Field(None, description="Human-readable name for the job")
     schedule_cron: Optional[str] = Field(None, description="Cron expression for job scheduling")
     enabled: Optional[bool] = Field(None, description="Whether the job is enabled")
+    retention_policy_json: Optional[str] = Field(None, description="Per-job retention policy JSON (null = use global)")
 
 
-class Job(JobBase):
+class Job(BaseModel):
     """Schema for Job responses."""
 
     id: int = Field(..., description="Unique identifier")
+    tag_id: int = Field(..., description="ID of the associated tag")
+    name: str = Field(..., description="Human-readable name for the job")
+    schedule_cron: str = Field(..., description="Cron expression for job scheduling")
+    enabled: bool = Field(default=True, description="Whether the job is enabled")
+    retention_policy_json: Optional[str] = Field(None, description="Per-job retention policy JSON (null = use global)")
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
 

@@ -76,6 +76,7 @@ export type Job = {
   name: string
   schedule_cron: string
   enabled: boolean
+  retention_policy_json?: string | null
   created_at: string
   updated_at: string
 }
@@ -85,6 +86,7 @@ export type JobCreate = {
   name: string
   schedule_cron: string
   enabled?: boolean
+  retention_policy_json?: string | null
 }
 
 export type JobUpdate = Partial<{
@@ -92,7 +94,37 @@ export type JobUpdate = Partial<{
   name: string
   schedule_cron: string
   enabled: boolean
+  retention_policy_json: string | null
 }>
+
+// Retention policy types
+export type RetentionRule = {
+  unit: 'day' | 'week' | 'month'
+  window: number
+  keep: number
+}
+
+export type RetentionPolicy = {
+  rules: RetentionRule[]
+}
+
+export type Settings = {
+  id: number
+  global_retention_policy_json?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type SettingsUpdate = {
+  global_retention_policy_json?: string | null
+}
+
+export type RetentionPreviewResult = {
+  keep_count: number
+  delete_count: number
+  deleted_paths: string[]
+  kept_paths: string[]
+}
 
 // Groups API types
 export type Group = {
@@ -236,4 +268,18 @@ export const api = {
     modified_at: string
     metadata_source: 'sidecar' | 'inferred'
   }>>('/backups/from-disk'),
+  // Settings
+  getSettings: () => request<Settings>('/settings/'),
+  updateSettings: (payload: SettingsUpdate) =>
+    request<Settings>('/settings/', { method: 'PUT', body: JSON.stringify(payload) }),
+  // Retention
+  previewRetention: (jobId: number, targetId: number) =>
+    request<RetentionPreviewResult>(`/settings/retention/preview?job_id=${jobId}&target_id=${targetId}`, { method: 'POST' }),
+  runRetention: (jobId?: number, targetId?: number) => {
+    const params = new URLSearchParams()
+    if (jobId != null) params.set('job_id', String(jobId))
+    if (targetId != null) params.set('target_id', String(targetId))
+    const q = params.toString()
+    return request<RetentionPreviewResult>(`/settings/retention/run${q ? `?${q}` : ''}`, { method: 'POST' })
+  },
 }

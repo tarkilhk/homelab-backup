@@ -84,7 +84,7 @@ app.add_middleware(
 
 # Include routers
 from app.api import health, targets, jobs, runs, plugins, metrics
-from app.api import tags, groups, restores, backups
+from app.api import tags, groups, restores, backups, settings
 
 # Mount health endpoints unversioned for infra probes (/health, /ready)
 app.include_router(health.router)
@@ -98,6 +98,7 @@ app.include_router(tags.router, prefix="/api/v1")
 app.include_router(groups.router, prefix="/api/v1")
 app.include_router(restores.router, prefix="/api/v1")
 app.include_router(backups.router, prefix="/api/v1")
+app.include_router(settings.router, prefix="/api/v1")
 
 # Prometheus metrics (unversioned)
 app.include_router(metrics.router)

@@ -1,16 +1,79 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { STORAGE_KEYS, type ThemeMode, applyAccent, applyTheme, getStoredAccent, setStoredAccent, getResolvedTheme } from '../lib/theme'
 import { HexColorPicker } from 'react-colorful'
 import AppCard from '../components/ui/AppCard'
 import { cn } from '../lib/cn'
+import { api, type RetentionPolicy, type RetentionRule } from '../api/client'
+import { Button } from '../components/ui/button'
+import { toast } from 'sonner'
 
 export default function OptionsPage() {
+  const qc = useQueryClient()
   const [theme, setTheme] = useState<ThemeMode>('system')
   const [accentLightHex, setAccentLightHex] = useState<string>('#7c3aed')
   const [accentDarkHex, setAccentDarkHex] = useState<string>('#7c3aed')
   const [accentEditingTheme, setAccentEditingTheme] = useState<'light' | 'dark'>(() => getResolvedTheme())
   const [tempAccentHex, setTempAccentHex] = useState<string | null>(null)
   const [showPicker, setShowPicker] = useState<boolean>(false)
+
+  // Retention policy state
+  const [retentionEnabled, setRetentionEnabled] = useState<boolean>(false)
+  const [dailyWindow, setDailyWindow] = useState<number>(7)
+  const [weeklyWindow, setWeeklyWindow] = useState<number>(4)
+  const [monthlyWindow, setMonthlyWindow] = useState<number>(6)
+
+  // Fetch current settings
+  const { data: settings, isLoading: settingsLoading } = useQuery({
+    queryKey: ['settings'],
+    queryFn: api.getSettings,
+  })
+
+  // Parse retention policy from settings
+  useEffect(() => {
+    if (settings?.global_retention_policy_json) {
+      try {
+        const policy: RetentionPolicy = JSON.parse(settings.global_retention_policy_json)
+        if (policy.rules && policy.rules.length > 0) {
+          setRetentionEnabled(true)
+          for (const rule of policy.rules) {
+            if (rule.unit === 'day') setDailyWindow(rule.window)
+            else if (rule.unit === 'week') setWeeklyWindow(rule.window)
+            else if (rule.unit === 'month') setMonthlyWindow(rule.window)
+          }
+        } else {
+          setRetentionEnabled(false)
+        }
+      } catch {
+        setRetentionEnabled(false)
+      }
+    } else {
+      setRetentionEnabled(false)
+    }
+  }, [settings])
+
+  // Build retention policy JSON from current state
+  const buildRetentionPolicyJson = (): string | null => {
+    if (!retentionEnabled) return null
+    const rules: RetentionRule[] = []
+    if (dailyWindow > 0) rules.push({ unit: 'day', window: dailyWindow, keep: 1 })
+    if (weeklyWindow > 0) rules.push({ unit: 'week', window: weeklyWindow, keep: 1 })
+    if (monthlyWindow > 0) rules.push({ unit: 'month', window: monthlyWindow, keep: 1 })
+    if (rules.length === 0) return null
+    return JSON.stringify({ rules })
+  }
+
+  // Save settings mutation
+  const saveSettingsMut = useMutation({
+    mutationFn: () => api.updateSettings({ global_retention_policy_json: buildRetentionPolicyJson() }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['settings'] })
+      toast.success('Retention settings saved')
+    },
+    onError: (err) => {
+      toast.error(`Failed to save settings: ${(err as Error).message}`)
+    },
+  })
 
   // Two curated palettes tuned for each theme (pastel for light, vivid for dark)
   const lightPalette = useMemo(() => ([
@@ -241,6 +304,109 @@ export default function OptionsPage() {
           )}
         </AppCard>
       </div>
+
+      {/* Retention Policy */}
+      <AppCard title="Backup Retention" description="Automatically clean up old backups to save disk space">
+        {settingsLoading ? (
+          <div className="text-sm text-muted-foreground">Loading...</div>
+        ) : (
+          <div className="space-y-4">
+            {/* Enable toggle */}
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-gray-300"
+                checked={retentionEnabled}
+                onChange={(e) => setRetentionEnabled(e.target.checked)}
+              />
+              <span className="text-sm font-medium">Enable retention cleanup</span>
+            </label>
+
+            {retentionEnabled && (
+              <div className="grid gap-4 sm:grid-cols-3">
+                {/* Daily */}
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Daily backups</label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground">Keep 1 per day for last</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={365}
+                      className="w-16 border rounded px-2 py-1 text-sm"
+                      value={dailyWindow}
+                      onChange={(e) => setDailyWindow(Math.max(0, parseInt(e.target.value) || 0))}
+                    />
+                    <span className="text-sm text-muted-foreground">days</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Set to 0 to skip daily tier</p>
+                </div>
+
+                {/* Weekly */}
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Weekly backups</label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground">Keep 1 per week for last</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={52}
+                      className="w-16 border rounded px-2 py-1 text-sm"
+                      value={weeklyWindow}
+                      onChange={(e) => setWeeklyWindow(Math.max(0, parseInt(e.target.value) || 0))}
+                    />
+                    <span className="text-sm text-muted-foreground">weeks</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Set to 0 to skip weekly tier</p>
+                </div>
+
+                {/* Monthly */}
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Monthly backups</label>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground">Keep 1 per month for last</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={120}
+                      className="w-16 border rounded px-2 py-1 text-sm"
+                      value={monthlyWindow}
+                      onChange={(e) => setMonthlyWindow(Math.max(0, parseInt(e.target.value) || 0))}
+                    />
+                    <span className="text-sm text-muted-foreground">months</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Set to 0 to skip monthly tier</p>
+                </div>
+              </div>
+            )}
+
+            {retentionEnabled && (
+              <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+                <p className="font-medium">Summary</p>
+                <p className="text-muted-foreground mt-1">
+                  {dailyWindow > 0 && `Keep 1 backup per day for the last ${dailyWindow} days. `}
+                  {weeklyWindow > 0 && `Keep 1 backup per week for the last ${weeklyWindow} weeks. `}
+                  {monthlyWindow > 0 && `Keep 1 backup per month for the last ${monthlyWindow} months. `}
+                  {dailyWindow === 0 && weeklyWindow === 0 && monthlyWindow === 0 && 'No retention rules configured — all backups will be kept.'}
+                </p>
+                <p className="text-muted-foreground mt-1 text-xs">
+                  A backup can satisfy multiple tiers. Cleanup runs after each backup and nightly at 3 AM.
+                </p>
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                disabled={saveSettingsMut.isPending}
+                onClick={() => saveSettingsMut.mutate()}
+              >
+                {saveSettingsMut.isPending ? 'Saving...' : 'Save Retention Settings'}
+              </Button>
+            </div>
+          </div>
+        )}
+      </AppCard>
     </div>
   )
 }
