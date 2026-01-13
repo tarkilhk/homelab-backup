@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, event
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, event
 from sqlalchemy.orm import relationship
 
 from app.core.db import Base
@@ -17,6 +17,7 @@ class Job(Base):
     name = Column(String(255), nullable=False, index=True)
     schedule_cron = Column(String(100), nullable=False)
     enabled = Column(Boolean, nullable=False, default=True)
+    retention_policy_json = Column(Text, nullable=True)  # NULL means use global
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
 

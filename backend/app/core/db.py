@@ -123,6 +123,7 @@ def init_db() -> None:
         Tag,
         GroupTag,
         TargetTag,
+        Settings,
     )  # noqa: F401
 
     # Only create missing tables; do not drop/alter existing schema here

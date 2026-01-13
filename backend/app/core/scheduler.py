@@ -31,6 +31,7 @@ from app.core.plugins.base import BackupContext
 from app.core.plugins.loader import get_plugin
 from app.core.notifier import send_failure_email
 from app.services.jobs import run_job_for_tag
+from app.services.retention import apply_retention, apply_retention_all
 
 
 logger = logging.getLogger(__name__)
@@ -242,6 +243,27 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
             plugin=plugin_key,
             artifact_path=artifact_path,
         )
+        
+        # Apply retention cleanup for this job/target after successful backup
+        try:
+            retention_result = apply_retention(db, job.id, target_id)
+            if retention_result.get("delete_count", 0) > 0:
+                _log_event(
+                    "retention_post_backup",
+                    job_id=job.id,
+                    target_id=target_id,
+                    deleted=retention_result["delete_count"],
+                    kept=retention_result["keep_count"],
+                )
+        except Exception as retention_exc:
+            # Log but don't fail the backup due to retention errors
+            _log_event(
+                "retention_post_backup_error",
+                job_id=job.id,
+                target_id=target_id,
+                error=str(retention_exc),
+            )
+        
         return {"target_id": target_id, "status": TargetRunStatus.SUCCESS.value, "error": None, "artifact_path": artifact_path}
     except KeyError as exc:
         finished_at = datetime.now(timezone.utc)
@@ -669,11 +691,34 @@ def _scheduled_job(job_id: int) -> None:  # legacy-compatible shim for tests
         db.close()
 
 
+def nightly_retention_cleanup() -> None:
+    """Nightly catch-up job that applies retention to all job/target pairs.
+    
+    Runs at 3:00 AM server timezone to clean up any backups missed by post-backup cleanup.
+    """
+    from app.core.db import get_session
+    db = next(get_session())
+    try:
+        _log_event("nightly_retention_start")
+        result = apply_retention_all(db)
+        _log_event(
+            "nightly_retention_done",
+            pairs=result.get("pairs_processed", 0),
+            deleted=result.get("delete_count", 0),
+            kept=result.get("keep_count", 0),
+        )
+    except Exception as exc:
+        _log_event("nightly_retention_error", error=str(exc))
+    finally:
+        db.close()
+
+
 def schedule_jobs_on_startup(scheduler: AsyncIOScheduler, db: Session) -> None:
     """Load enabled jobs from DB and schedule them with APScheduler.
 
     - Uses cron in `jobs.schedule_cron`
     - Ensures `max_instances=1` via scheduler job_defaults or per-job arg
+    - Also schedules nightly retention cleanup job
     """
     # In tests, a dummy scheduler may be provided without `add_job`.
     if not hasattr(scheduler, "add_job"):
@@ -714,6 +759,21 @@ def schedule_jobs_on_startup(scheduler: AsyncIOScheduler, db: Session) -> None:
             name=job.name,
             schedule_cron=job.schedule_cron,
         )
+
+    # Schedule nightly retention cleanup (3:00 AM server timezone)
+    try:
+        nightly_trigger = CronTrigger.from_crontab("0 3 * * *")
+        scheduler.add_job(
+            func=nightly_retention_cleanup,
+            trigger=nightly_trigger,
+            id="retention:nightly",
+            name="Nightly Retention Cleanup",
+            replace_existing=True,
+            max_instances=1,
+        )
+        _log_event("nightly_retention_scheduled", cron="0 3 * * *")
+    except Exception as exc:
+        _log_event("nightly_retention_schedule_failed", error=str(exc))
 
     _log_event(
         "scheduler_load_jobs_done",

@@ -1,7 +1,7 @@
 import { useParams, useLocation } from 'react-router-dom'
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient, useQueries } from '@tanstack/react-query'
-import { api, type JobCreate, type Job, type Tag, type TagTargetAttachment } from '../api/client'
+import { api, type JobCreate, type Job, type Tag, type TagTargetAttachment, type RetentionRule, type RetentionPolicy } from '../api/client'
 import { formatLocalDateTime } from '../lib/dates'
 import { Button } from '../components/ui/button'
 import { useConfirm } from '../components/ConfirmProvider'
@@ -78,6 +78,53 @@ export default function JobsPage() {
     schedule_cron: '',
     enabled: 'true',
   })
+
+  // Retention override state
+  const [retentionOverride, setRetentionOverride] = useState<'global' | 'custom'>('global')
+  const [retentionDaily, setRetentionDaily] = useState<number>(7)
+  const [retentionWeekly, setRetentionWeekly] = useState<number>(4)
+  const [retentionMonthly, setRetentionMonthly] = useState<number>(6)
+
+  // Build retention policy JSON for per-job override
+  const buildRetentionPolicyJson = (): string | null => {
+    if (retentionOverride === 'global') return null
+    const rules: RetentionRule[] = []
+    if (retentionDaily > 0) rules.push({ unit: 'day', window: retentionDaily, keep: 1 })
+    if (retentionWeekly > 0) rules.push({ unit: 'week', window: retentionWeekly, keep: 1 })
+    if (retentionMonthly > 0) rules.push({ unit: 'month', window: retentionMonthly, keep: 1 })
+    if (rules.length === 0) return null
+    return JSON.stringify({ rules } as RetentionPolicy)
+  }
+
+  // Parse retention policy from job
+  const loadRetentionFromJob = (job: Job) => {
+    if (job.retention_policy_json) {
+      try {
+        const policy: RetentionPolicy = JSON.parse(job.retention_policy_json)
+        if (policy.rules && policy.rules.length > 0) {
+          setRetentionOverride('custom')
+          for (const rule of policy.rules) {
+            if (rule.unit === 'day') setRetentionDaily(rule.window)
+            else if (rule.unit === 'week') setRetentionWeekly(rule.window)
+            else if (rule.unit === 'month') setRetentionMonthly(rule.window)
+          }
+          return
+        }
+      } catch { /* ignore */ }
+    }
+    setRetentionOverride('global')
+    setRetentionDaily(7)
+    setRetentionWeekly(4)
+    setRetentionMonthly(6)
+  }
+
+  // Reset retention state
+  const resetRetentionState = () => {
+    setRetentionOverride('global')
+    setRetentionDaily(7)
+    setRetentionWeekly(4)
+    setRetentionMonthly(6)
+  }
 
   // Track whether the user has opted-in to dynamic name suggestions via the
   // sparkles button. When false, we never modify a non-empty name.
@@ -263,16 +310,18 @@ export default function JobsPage() {
         setForm({ name: '', schedule_cron: '', enabled: 'true' })
         setSelectedTagId('')
       }
+      resetRetentionState()
       setShowEditor(false)
     },
   })
 
   const updateMut = useMutation({
-    mutationFn: ({ id, body }: { id: number; body: { name: string; schedule_cron: string; enabled: boolean; tag_id?: number } }) =>
+    mutationFn: ({ id, body }: { id: number; body: { name: string; schedule_cron: string; enabled: boolean; tag_id?: number; retention_policy_json?: string | null } }) =>
       api.updateJob(id, body),
     onSuccess: () => {
       setEditingId(null)
       qc.invalidateQueries({ queryKey: ['jobs'] })
+      resetRetentionState()
       setShowEditor(false)
     },
   })
@@ -291,6 +340,7 @@ export default function JobsPage() {
     if (j) {
       setEditingId(j.id)
       setForm({ name: j.name, schedule_cron: j.schedule_cron, enabled: String(j.enabled) as 'true' | 'false' })
+      loadRetentionFromJob(j)
       if (!Number.isFinite(targetId as number)) {
         setSelectedTagId(j.tag_id)
       }
@@ -358,6 +408,7 @@ export default function JobsPage() {
       setSelectedTagId('')
     }
     setNameSuggested(false)
+    resetRetentionState()
     setShowEditor(false)
   }
 
@@ -392,6 +443,7 @@ export default function JobsPage() {
             setForm({ name: '', schedule_cron: '', enabled: 'true' })
             setSelectedTagId('')
             setNameSuggested(false)
+            resetRetentionState()
             setShowEditor(true)
           }}
         >
@@ -408,7 +460,13 @@ export default function JobsPage() {
             if (editingId) {
               updateMut.mutate({
                 id: editingId,
-                body: { name: form.name, schedule_cron: form.schedule_cron, enabled: form.enabled === 'true', tag_id: Number.isFinite(targetId as number) ? (autoTagId ?? undefined) : (selectedTagId as number) },
+                body: {
+                  name: form.name,
+                  schedule_cron: form.schedule_cron,
+                  enabled: form.enabled === 'true',
+                  tag_id: Number.isFinite(targetId as number) ? (autoTagId ?? undefined) : (selectedTagId as number),
+                  retention_policy_json: buildRetentionPolicyJson(),
+                },
               })
             } else {
               const tagToUse = Number.isFinite(targetId as number)
@@ -420,6 +478,7 @@ export default function JobsPage() {
                 name: form.name,
                 schedule_cron: form.schedule_cron,
                 enabled: form.enabled === 'true',
+                retention_policy_json: buildRetentionPolicyJson(),
               }
               createMut.mutate(payload)
             }
@@ -572,6 +631,82 @@ export default function JobsPage() {
               <option value="false">false</option>
             </select>
           </label>
+
+          {/* Retention Override Section */}
+          <div className="sm:col-span-2 space-y-3 border-t pt-4 mt-2">
+            <div className="text-sm font-medium">Retention Policy</div>
+            <div className="flex gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="retention-mode"
+                  checked={retentionOverride === 'global'}
+                  onChange={() => setRetentionOverride('global')}
+                />
+                <span className="text-sm">Use global settings</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="retention-mode"
+                  checked={retentionOverride === 'custom'}
+                  onChange={() => setRetentionOverride('custom')}
+                />
+                <span className="text-sm">Override for this job</span>
+              </label>
+            </div>
+
+            {retentionOverride === 'custom' && (
+              <div className="grid gap-3 sm:grid-cols-3 bg-muted/30 rounded-lg p-3">
+                <div className="space-y-1">
+                  <label className="text-xs font-medium">Daily</label>
+                  <div className="flex items-center gap-1 text-xs">
+                    <span>Keep 1/day for</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={365}
+                      className="w-12 border rounded px-1 py-0.5 text-xs"
+                      value={retentionDaily}
+                      onChange={(e) => setRetentionDaily(Math.max(0, parseInt(e.target.value) || 0))}
+                    />
+                    <span>days</span>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium">Weekly</label>
+                  <div className="flex items-center gap-1 text-xs">
+                    <span>Keep 1/week for</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={52}
+                      className="w-12 border rounded px-1 py-0.5 text-xs"
+                      value={retentionWeekly}
+                      onChange={(e) => setRetentionWeekly(Math.max(0, parseInt(e.target.value) || 0))}
+                    />
+                    <span>weeks</span>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-medium">Monthly</label>
+                  <div className="flex items-center gap-1 text-xs">
+                    <span>Keep 1/month for</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={120}
+                      className="w-12 border rounded px-1 py-0.5 text-xs"
+                      value={retentionMonthly}
+                      onChange={(e) => setRetentionMonthly(Math.max(0, parseInt(e.target.value) || 0))}
+                    />
+                    <span>months</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="sm:col-span-2 flex items-center gap-2">
             <Button type="submit" disabled={createMut.isPending || updateMut.isPending}>
               {editingId ? (updateMut.isPending ? 'Saving…' : 'Save') : (createMut.isPending ? 'Creating…' : 'Create Job')}
@@ -671,6 +806,7 @@ export default function JobsPage() {
                       window.setTimeout(() => row.classList.remove('select-none'), 300)
                       setEditingId(j.id)
                       setForm({ name: j.name, schedule_cron: j.schedule_cron, enabled: String(j.enabled) as 'true' | 'false' })
+                      loadRetentionFromJob(j)
                       if (!Number.isFinite(targetId as number)) {
                         setSelectedTagId(j.tag_id)
                       }
@@ -699,6 +835,7 @@ export default function JobsPage() {
                           onClick={() => {
                             setEditingId(j.id)
                             setForm({ name: j.name, schedule_cron: j.schedule_cron, enabled: String(j.enabled) as 'true' | 'false' })
+                            loadRetentionFromJob(j)
                             if (!Number.isFinite(targetId as number)) {
                               setSelectedTagId(j.tag_id)
                             }

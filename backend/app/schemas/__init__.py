@@ -50,6 +50,13 @@ from .runs import (
 from .backups import (
     BackupFromDiskResponse,
 )  # noqa: F401
+from .settings import (
+    RetentionRule,
+    RetentionPolicy,
+    SettingsBase,
+    SettingsUpdate,
+    Settings,
+)  # noqa: F401
 
 # Resolve forward references across modules to satisfy Pydantic v2
 try:

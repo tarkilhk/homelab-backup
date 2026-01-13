@@ -14,5 +14,6 @@ from .targets import Target  # noqa: F401
 from .jobs import Job  # noqa: F401
 from .runs import Run, TargetRun  # noqa: F401
 from .tags import Tag, GroupTag, TargetTag  # noqa: F401
+from .settings import Settings  # noqa: F401
 
 

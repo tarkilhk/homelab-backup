@@ -15,6 +15,7 @@ from .jobs import JobService
 from .runs import RunService
 from .restores import RestoreService
 from .backups_from_disk import BackupsFromDiskService
+from .retention import RetentionService
 
 __all__ = [
     "TagService",
@@ -24,5 +25,6 @@ __all__ = [
     "RunService",
     "RestoreService",
     "BackupsFromDiskService",
+    "RetentionService",
 ]
 
