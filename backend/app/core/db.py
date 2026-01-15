@@ -113,7 +113,10 @@ def run_migrations() -> None:
     Migrations are applied in alphabetical order (by filename).
     Errors are logged but don't stop the process (migrations may already be applied).
     """
-    migrations_dir = Path(__file__).parent.parent.parent / "migrations"
+    # Migrations directory is at /app/migrations in the container
+    # Path from backend/app/core/db.py -> backend/migrations
+    # In container: /app/app/core/db.py -> /app/migrations
+    migrations_dir = Path("/app/migrations")
     if not migrations_dir.exists():
         logger.warning("Migrations directory not found: %s", migrations_dir)
         return

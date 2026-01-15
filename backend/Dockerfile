@@ -22,6 +22,8 @@ RUN pip install --no-cache-dir -e .
 
 # Copy application code
 COPY app/ ./app/
+# Copy migrations directory
+COPY migrations/ ./migrations/
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash app && chown -R app:app /app
