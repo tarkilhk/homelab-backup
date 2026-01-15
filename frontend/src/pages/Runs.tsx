@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, Fragment } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronRight, ChevronDown, CheckCircle2, AlertTriangle, XCircle, X } from 'lucide-react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type RunWithJob, type TargetRun, type Target } from '../api/client'
@@ -478,7 +479,7 @@ function ExpandedTargetRunRows({ runId, targetsById, isClickFromInteractive }: {
         </tr>
       ))}
 
-      {detailsTr && (
+      {detailsTr && createPortal(
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center" onClick={() => { setDetailsTr(null); resetRestoreState() }}>
           <div className="bg-background border rounded-md shadow-xl max-w-2xl w-full mx-4" onClick={(e) => e.stopPropagation()}>
             <div className="p-3 border-b flex items-center">
@@ -574,9 +575,10 @@ function ExpandedTargetRunRows({ runId, targetsById, isClickFromInteractive }: {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
-      {restoreSource && (
+      {restoreSource && createPortal(
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={resetRestoreState}>
           <div className="bg-background border rounded-md shadow-xl max-w-xl w-full mx-4" onClick={(e) => e.stopPropagation()}>
             <div className="p-3 border-b flex items-center">
@@ -640,12 +642,14 @@ function ExpandedTargetRunRows({ runId, targetsById, isClickFromInteractive }: {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
-      {copiedToast && (
+      {copiedToast && createPortal(
         <div className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-black/80 text-white text-xs px-3 py-2 rounded shadow">
           {copiedToast}
-        </div>
+        </div>,
+        document.body
       )}
     </>
   )
