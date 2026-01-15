@@ -79,7 +79,7 @@ export default function OptionsPage() {
   // Run retention cleanup mutation
   const runCleanupMut = useMutation({
     mutationFn: () => api.runRetention(),
-    onSuccess: (result) => {
+    onSuccess: () => {
       toast.success('Cleanup job started successfully')
       qc.invalidateQueries({ queryKey: ['settings'] })
     },
