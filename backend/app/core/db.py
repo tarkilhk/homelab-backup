@@ -11,7 +11,7 @@ from typing import Generator
 from pathlib import Path
 import logging
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 import os
 from sqlalchemy.orm import Session, sessionmaker, declarative_base
@@ -107,6 +107,65 @@ def get_session() -> Generator[Session, None, None]:
         db.close()
 
 
+def run_migrations() -> None:
+    """Run database migrations from SQL files.
+    
+    Migrations are applied in alphabetical order (by filename).
+    Errors are logged but don't stop the process (migrations may already be applied).
+    """
+    migrations_dir = Path(__file__).parent.parent.parent / "migrations"
+    if not migrations_dir.exists():
+        logger.warning("Migrations directory not found: %s", migrations_dir)
+        return
+    
+    engine = get_engine()
+    migration_files = sorted(migrations_dir.glob("*.sql"))
+    
+    if not migration_files:
+        logger.info("No migration files found")
+        return
+    
+    logger.info("Running %d migration(s)...", len(migration_files))
+    
+    for migration_file in migration_files:
+        logger.info("Applying migration: %s", migration_file.name)
+        try:
+            migration_sql = migration_file.read_text(encoding="utf-8")
+            # Execute the entire migration file as one transaction
+            with engine.begin() as conn:
+                # SQLite can handle multiple statements if we use executescript
+                # But we'll use execute for better error handling
+                for statement in migration_sql.split(";"):
+                    statement = statement.strip()
+                    # Skip empty statements and comments
+                    if statement and not statement.startswith("--"):
+                        try:
+                            conn.execute(text(statement))
+                        except Exception as e:
+                            error_msg = str(e).lower()
+                            # SQLite errors for already-existing columns/tables
+                            # SQLite returns "duplicate column name: <column>" for ADD COLUMN
+                            if any(keyword in error_msg for keyword in [
+                                "already exists", "duplicate column", "duplicate column name"
+                            ]):
+                                logger.debug("Migration statement already applied (skipping): %s", statement[:50])
+                                continue
+                            else:
+                                # Re-raise to see the actual error
+                                raise
+            logger.info("Migration applied successfully: %s", migration_file.name)
+        except Exception as e:
+            # Log but continue - migration may already be applied
+            error_msg = str(e).lower()
+            if "already exists" in error_msg or "duplicate column" in error_msg:
+                logger.info("Migration already applied: %s", migration_file.name)
+            else:
+                logger.warning("Migration encountered an error (may already be applied): %s - %s", 
+                             migration_file.name, str(e))
+    
+    logger.info("Migrations completed")
+
+
 def init_db() -> None:
     """Initialize database tables.
 
@@ -131,6 +190,9 @@ def init_db() -> None:
     engine = get_engine()
     Base.metadata.create_all(bind=engine)
     logger.info("init_db: ensured tables exist")
+    
+    # Run migrations to apply schema changes to existing databases
+    run_migrations()
 
 
 def drop_all_tables() -> None:  # pragma: no cover - utility, run manually only
