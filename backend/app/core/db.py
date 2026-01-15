@@ -132,39 +132,47 @@ def run_migrations() -> None:
     
     for migration_file in migration_files:
         logger.info("Applying migration: %s", migration_file.name)
-        try:
-            migration_sql = migration_file.read_text(encoding="utf-8")
-            # Execute the entire migration file as one transaction
-            with engine.begin() as conn:
-                # SQLite can handle multiple statements if we use executescript
-                # But we'll use execute for better error handling
-                for statement in migration_sql.split(";"):
-                    statement = statement.strip()
-                    # Skip empty statements and comments
-                    if statement and not statement.startswith("--"):
-                        try:
-                            conn.execute(text(statement))
-                        except Exception as e:
-                            error_msg = str(e).lower()
-                            # SQLite errors for already-existing columns/tables
-                            # SQLite returns "duplicate column name: <column>" for ADD COLUMN
-                            if any(keyword in error_msg for keyword in [
-                                "already exists", "duplicate column", "duplicate column name"
-                            ]):
-                                logger.debug("Migration statement already applied (skipping): %s", statement[:50])
-                                continue
-                            else:
-                                # Re-raise to see the actual error
-                                raise
-            logger.info("Migration applied successfully: %s", migration_file.name)
-        except Exception as e:
-            # Log but continue - migration may already be applied
-            error_msg = str(e).lower()
-            if "already exists" in error_msg or "duplicate column" in error_msg:
-                logger.info("Migration already applied: %s", migration_file.name)
-            else:
-                logger.warning("Migration encountered an error (may already be applied): %s - %s", 
-                             migration_file.name, str(e))
+        migration_sql = migration_file.read_text(encoding="utf-8")
+        statements_executed = 0
+        statements_skipped = 0
+        
+        # Execute each statement in its own transaction to allow partial success
+        for statement in migration_sql.split(";"):
+            statement = statement.strip()
+            # Skip empty statements and comments
+            if statement and not statement.startswith("--"):
+                try:
+                    with engine.begin() as conn:
+                        result = conn.execute(text(statement))
+                        # Force commit by exiting the context manager
+                    statements_executed += 1
+                    logger.info("Executed: %s", statement[:80])
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    # SQLite errors for already-existing columns/tables
+                    # Check for the exact SQLite error message format
+                    if any(keyword in error_msg for keyword in [
+                        "already exists", "duplicate column", "duplicate column name",
+                        "duplicate column name: retention_policy_json"
+                    ]):
+                        statements_skipped += 1
+                        logger.info("Statement already applied (skipping): %s", statement[:80])
+                    else:
+                        # Unknown error - log the full error and re-raise to see what's happening
+                        logger.error("Migration statement FAILED: %s", statement[:100])
+                        logger.error("Full error: %s", str(e))
+                        logger.error("Error type: %s", type(e).__name__)
+                        # Re-raise to see the actual error in logs
+                        raise
+        
+        if statements_executed > 0:
+            logger.info("Migration applied: %s (%d executed, %d skipped)", 
+                       migration_file.name, statements_executed, statements_skipped)
+        elif statements_skipped > 0:
+            logger.info("Migration already applied: %s (all %d statements skipped)", 
+                       migration_file.name, statements_skipped)
+        else:
+            logger.warning("Migration had no executable statements: %s", migration_file.name)
     
     logger.info("Migrations completed")
 
