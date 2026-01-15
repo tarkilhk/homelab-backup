@@ -92,8 +92,8 @@ def test_scan_backups_basic(backup_dir, db_session: Session):
     assert backup2.metadata_source == "sidecar"
 
 
-def test_scan_backups_excludes_tracked(backup_dir, db_session: Session):
-    """Test that tracked artifacts are excluded from results."""
+def test_scan_backups_includes_tracked(backup_dir, db_session: Session):
+    """Test that tracked artifacts are included in results."""
     # Create a tracked TargetRun for artifact1
     tag = Tag(display_name="test")
     db_session.add(tag)
@@ -124,9 +124,11 @@ def test_scan_backups_excludes_tracked(backup_dir, db_session: Session):
     svc = BackupsFromDiskService(db_session)
     backups = svc.scan_backups(backup_base_path=str(backup_dir))
     
-    # Should only find artifact2 (artifact1 is tracked)
-    assert len(backups) == 1
-    assert "postgresql-dump" in backups[0].artifact_path
+    # Should find both artifacts (tracked and untracked)
+    assert len(backups) == 2
+    backup_paths = [b.artifact_path for b in backups]
+    assert any("pihole-backup" in p for p in backup_paths)
+    assert any("postgresql-dump" in p for p in backup_paths)
 
 
 def test_scan_backups_missing_directory(db_session: Session):

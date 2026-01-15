@@ -50,6 +50,10 @@ class BackupsFromDiskService:
     ) -> List[BackupFromDisk]:
         """Scan the backup directory and return all backup artifacts found on disk.
         
+        This method returns ALL backup artifacts found on disk, regardless of whether
+        they are tracked in the database. This allows users to restore from any
+        backup file available on disk.
+        
         Args:
             backup_base_path: Base path for backups (defaults to /backups or BACKUP_BASE_PATH env)
             
@@ -95,17 +99,6 @@ class BackupsFromDiskService:
                             continue
                         
                         artifact_path = str(file_path)
-                        
-                        # Check if this artifact is already tracked in the database
-                        tracked = (
-                            self.db.query(TargetRun)
-                            .filter(TargetRun.artifact_path == artifact_path)
-                            .first()
-                        )
-                        
-                        if tracked is not None:
-                            # This artifact is tracked, skip it
-                            continue
                         
                         # Get file metadata
                         try:
