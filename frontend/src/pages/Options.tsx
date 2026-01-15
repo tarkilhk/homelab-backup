@@ -7,7 +7,7 @@ import { cn } from '../lib/cn'
 import { api, type RetentionPolicy, type RetentionRule } from '../api/client'
 import { Button } from '../components/ui/button'
 import { toast } from 'sonner'
-import { Palette, Archive } from 'lucide-react'
+import { Palette, Archive, Play } from 'lucide-react'
 
 export default function OptionsPage() {
   const qc = useQueryClient()
@@ -73,6 +73,18 @@ export default function OptionsPage() {
     },
     onError: (err) => {
       toast.error(`Failed to save settings: ${(err as Error).message}`)
+    },
+  })
+
+  // Run retention cleanup mutation
+  const runCleanupMut = useMutation({
+    mutationFn: () => api.runRetention(),
+    onSuccess: (result) => {
+      toast.success('Cleanup job started successfully')
+      qc.invalidateQueries({ queryKey: ['settings'] })
+    },
+    onError: (err) => {
+      toast.error(`Failed to run cleanup: ${(err as Error).message}`)
     },
   })
 
@@ -351,19 +363,33 @@ export default function OptionsPage() {
           ) : (
             <div className="space-y-5">
               {/* Enable toggle */}
-              <label className="inline-flex items-center gap-3 cursor-pointer group">
-                <div className="relative">
-                  <input
-                    type="checkbox"
-                    className="sr-only peer"
-                    checked={retentionEnabled}
-                    onChange={(e) => setRetentionEnabled(e.target.checked)}
-                  />
-                  <div className="w-11 h-6 bg-muted rounded-full peer peer-checked:bg-accent transition-colors"></div>
-                  <div className="absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform peer-checked:translate-x-5"></div>
-                </div>
-                <span className="text-sm font-medium group-hover:text-foreground transition-colors">Enable retention cleanup</span>
-              </label>
+              <div className="flex items-center justify-between">
+                <label className="inline-flex items-center gap-3 cursor-pointer group">
+                  <div className="relative">
+                    <input
+                      type="checkbox"
+                      className="sr-only peer"
+                      checked={retentionEnabled}
+                      onChange={(e) => setRetentionEnabled(e.target.checked)}
+                    />
+                    <div className="w-11 h-6 bg-muted rounded-full peer peer-checked:bg-accent transition-colors"></div>
+                    <div className="absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform peer-checked:translate-x-5"></div>
+                  </div>
+                  <span className="text-sm font-medium group-hover:text-foreground transition-colors">Enable retention cleanup</span>
+                </label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={runCleanupMut.isPending || !retentionEnabled}
+                  onClick={() => runCleanupMut.mutate()}
+                  className="inline-flex items-center gap-2"
+                  title="Run cleanup job now"
+                >
+                  <Play className="h-4 w-4" />
+                  {runCleanupMut.isPending ? 'Running...' : 'Run Cleanup'}
+                </Button>
+              </div>
 
               {retentionEnabled && (
                 <div className="grid gap-5 sm:grid-cols-3 pt-2">
