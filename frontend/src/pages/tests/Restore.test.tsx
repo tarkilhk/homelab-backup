@@ -2,7 +2,7 @@ import React, { type ReactNode } from 'react'
 import { describe, it, expect, beforeAll, afterEach, afterAll } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import RestoreFromDiskPage from '../RestoreFromDisk'
+import RestorePage from '../Restore'
 import { MemoryRouter } from 'react-router-dom'
 import { http, HttpResponse } from 'msw'
 import { server } from '../../mocks/server'
@@ -34,20 +34,20 @@ function wrapper(children: ReactNode) {
   )
 }
 
-describe('RestoreFromDiskPage', () => {
+describe('RestorePage', () => {
   it('renders loading state', async () => {
-    render(wrapper(<RestoreFromDiskPage />))
-    await screen.findByText('Scanning backup directory...')
+    render(wrapper(<RestorePage />))
+    await screen.findByText('Loading backups...')
   })
 
   it('renders backups list with sidecar and inferred metadata', async () => {
-    render(wrapper(<RestoreFromDiskPage />))
+    render(wrapper(<RestorePage />))
     
     await waitFor(() => {
-      expect(screen.queryByText('Scanning backup directory...')).toBeNull()
+      expect(screen.queryByText('Loading backups...')).toBeNull()
     })
     
-    await screen.findAllByText('Restore from Disk')
+    await screen.findAllByText('Restore')
     
     // Check that backup paths appear (may appear multiple times in table)
     const piholePaths = screen.getAllByText('/backups/pihole/2025-01-15/pihole-backup-20250115T120000.zip')
@@ -68,10 +68,10 @@ describe('RestoreFromDiskPage', () => {
   })
 
   it('displays file sizes correctly', async () => {
-    render(wrapper(<RestoreFromDiskPage />))
+    render(wrapper(<RestorePage />))
     
     await waitFor(() => {
-      expect(screen.queryByText('Scanning backup directory...')).toBeNull()
+      expect(screen.queryByText('Loading backups...')).toBeNull()
     })
     
     // Check that file sizes are displayed (formatBytes function formats them)
@@ -95,13 +95,13 @@ describe('RestoreFromDiskPage', () => {
       })
     )
     
-    render(wrapper(<RestoreFromDiskPage />))
+    render(wrapper(<RestorePage />))
     
     await waitFor(() => {
-      expect(screen.queryByText('Scanning backup directory...')).toBeNull()
+      expect(screen.queryByText('Loading backups...')).toBeNull()
     })
     
-    await screen.findByText('No backup files found on disk.')
+    await screen.findByText('No backups found.')
   })
 
   it('shows error state and allows retry', async () => {
@@ -111,22 +111,22 @@ describe('RestoreFromDiskPage', () => {
       })
     )
     
-    render(wrapper(<RestoreFromDiskPage />))
+    render(wrapper(<RestorePage />))
     
     await waitFor(() => {
-      expect(screen.queryByText('Scanning backup directory...')).toBeNull()
+      expect(screen.queryByText('Loading backups...')).toBeNull()
     })
     
-    await screen.findByText(/Error scanning backups/i)
+    await screen.findByText(/Error loading backups/i)
     const retryBtn = await screen.findByText('Retry')
     expect(retryBtn).toBeDefined()
   })
 
   it('opens restore dialog when Restore button is clicked', async () => {
-    render(wrapper(<RestoreFromDiskPage />))
+    render(wrapper(<RestorePage />))
     
     await waitFor(() => {
-      expect(screen.queryByText('Scanning backup directory...')).toBeNull()
+      expect(screen.queryByText('Loading backups...')).toBeNull()
     })
     
     // Find Restore buttons in the table (not in dialog)
@@ -138,7 +138,7 @@ describe('RestoreFromDiskPage', () => {
     expect(tableRestoreButton).toBeDefined()
     fireEvent.click(tableRestoreButton!)
     
-    await screen.findByText('Restore Backup from Disk')
+    await screen.findByText('Restore Backup')
     
     // Check that artifact path appears in dialog (may appear multiple times)
     const artifactPaths = screen.getAllByText('/backups/pihole/2025-01-15/pihole-backup-20250115T120000.zip')
@@ -146,10 +146,10 @@ describe('RestoreFromDiskPage', () => {
   })
 
   it('filters targets by plugin when plugin is known', async () => {
-    render(wrapper(<RestoreFromDiskPage />))
+    render(wrapper(<RestorePage />))
     
     await waitFor(() => {
-      expect(screen.queryByText('Scanning backup directory...')).toBeNull()
+      expect(screen.queryByText('Loading backups...')).toBeNull()
     })
     
     // Click Restore for pihole backup (known plugin)
@@ -161,7 +161,7 @@ describe('RestoreFromDiskPage', () => {
     expect(tableRestoreButton).toBeDefined()
     fireEvent.click(tableRestoreButton!)
     
-    await screen.findByText('Restore Backup from Disk')
+    await screen.findByText('Restore Backup')
     
     // Wait for targets to load - find select by finding the label text, then the select element
     await waitFor(() => {
@@ -183,10 +183,10 @@ describe('RestoreFromDiskPage', () => {
   })
 
   it('shows plugin selector when plugin is unknown', async () => {
-    render(wrapper(<RestoreFromDiskPage />))
+    render(wrapper(<RestorePage />))
     
     await waitFor(() => {
-      expect(screen.queryByText('Scanning backup directory...')).toBeNull()
+      expect(screen.queryByText('Loading backups...')).toBeNull()
     })
     
     // Click Restore for unknown backup (third backup)
@@ -198,7 +198,7 @@ describe('RestoreFromDiskPage', () => {
     expect(tableRestoreButtons.length).toBeGreaterThanOrEqual(3)
     fireEvent.click(tableRestoreButtons[2])
     
-    await screen.findByText('Restore Backup from Disk')
+    await screen.findByText('Restore Backup')
     
     // Should show plugin selector
     await screen.findByText('Select Plugin')
@@ -229,10 +229,10 @@ describe('RestoreFromDiskPage', () => {
   })
 
   it('successfully triggers restore and closes dialog', async () => {
-    render(wrapper(<RestoreFromDiskPage />))
+    render(wrapper(<RestorePage />))
     
     await waitFor(() => {
-      expect(screen.queryByText('Scanning backup directory...')).toBeNull()
+      expect(screen.queryByText('Loading backups...')).toBeNull()
     })
     
     const restoreButtons = await screen.findAllByText('Restore')
@@ -243,7 +243,7 @@ describe('RestoreFromDiskPage', () => {
     expect(tableRestoreButton).toBeDefined()
     fireEvent.click(tableRestoreButton!)
     
-    await screen.findByText('Restore Backup from Disk')
+    await screen.findByText('Restore Backup')
     
     // Wait for target select to appear and select target
     await waitFor(() => {
@@ -264,7 +264,7 @@ describe('RestoreFromDiskPage', () => {
     // Wait for success message (dialog should close on success)
     await waitFor(() => {
       // After successful restore, the dialog should close
-      expect(screen.queryByText('Restore Backup from Disk')).toBeNull()
+      expect(screen.queryByText('Restore Backup')).toBeNull()
     }, { timeout: 3000 })
   })
 
@@ -276,10 +276,10 @@ describe('RestoreFromDiskPage', () => {
       })
     )
     
-    render(wrapper(<RestoreFromDiskPage />))
+    render(wrapper(<RestorePage />))
     
     await waitFor(() => {
-      expect(screen.queryByText('Scanning backup directory...')).toBeNull()
+      expect(screen.queryByText('Loading backups...')).toBeNull()
     })
     
     const restoreButtons = await screen.findAllByText('Restore')
@@ -290,7 +290,7 @@ describe('RestoreFromDiskPage', () => {
     expect(tableRestoreButton).toBeDefined()
     fireEvent.click(tableRestoreButton!)
     
-    await screen.findByText('Restore Backup from Disk')
+    await screen.findByText('Restore Backup')
     
     // Wait for target select to appear and select a target
     await waitFor(() => {
@@ -314,15 +314,15 @@ describe('RestoreFromDiskPage', () => {
     }, { timeout: 3000 })
     
     // Dialog should remain open
-    expect(screen.getByText('Restore Backup from Disk')).toBeDefined()
+    expect(screen.getByText('Restore Backup')).toBeDefined()
   })
 
   it('allows refreshing the backups list', async () => {
-    render(wrapper(<RestoreFromDiskPage />))
+    render(wrapper(<RestorePage />))
     
     // Wait for loading to complete and table to appear
     await waitFor(() => {
-      expect(screen.queryByText('Scanning backup directory...')).toBeNull()
+      expect(screen.queryByText('Loading backups...')).toBeNull()
     })
     
     // Find and click refresh button using getAllByRole
@@ -333,7 +333,7 @@ describe('RestoreFromDiskPage', () => {
     
     // Wait for any loading state to complete again
     await waitFor(() => {
-      expect(screen.queryByText('Scanning backup directory...')).toBeNull()
+      expect(screen.queryByText('Loading backups...')).toBeNull()
     }, { timeout: 3000 })
     
     // Verify table is still present after refresh
@@ -342,10 +342,10 @@ describe('RestoreFromDiskPage', () => {
   })
 
   it('disables confirm button when no target selected', async () => {
-    render(wrapper(<RestoreFromDiskPage />))
+    render(wrapper(<RestorePage />))
     
     await waitFor(() => {
-      expect(screen.queryByText('Scanning backup directory...')).toBeNull()
+      expect(screen.queryByText('Loading backups...')).toBeNull()
     })
     
     const restoreButtons = await screen.findAllByText('Restore')
@@ -356,17 +356,17 @@ describe('RestoreFromDiskPage', () => {
     expect(tableRestoreButton).toBeDefined()
     fireEvent.click(tableRestoreButton!)
     
-    await screen.findByText('Restore Backup from Disk')
+    await screen.findByText('Restore Backup')
     
     const confirmBtn = screen.getByRole('button', { name: 'Confirm Restore' }) as HTMLButtonElement
     expect(confirmBtn.disabled).toBe(true)
   })
 
   it('disables confirm button when plugin unknown and not selected', async () => {
-    render(wrapper(<RestoreFromDiskPage />))
+    render(wrapper(<RestorePage />))
     
     await waitFor(() => {
-      expect(screen.queryByText('Scanning backup directory...')).toBeNull()
+      expect(screen.queryByText('Loading backups...')).toBeNull()
     })
     
     // Click Restore for unknown backup
@@ -378,7 +378,7 @@ describe('RestoreFromDiskPage', () => {
     expect(tableRestoreButtons.length).toBeGreaterThanOrEqual(3)
     fireEvent.click(tableRestoreButtons[2])
     
-    await screen.findAllByText('Restore Backup from Disk')
+    await screen.findAllByText('Restore Backup')
     
     // Wait for dialog to fully render
     await waitFor(() => {
@@ -411,10 +411,10 @@ describe('RestoreFromDiskPage', () => {
       })
     )
     
-    render(wrapper(<RestoreFromDiskPage />))
+    render(wrapper(<RestorePage />))
     
     await waitFor(() => {
-      expect(screen.queryByText('Scanning backup directory...')).toBeNull()
+      expect(screen.queryByText('Loading backups...')).toBeNull()
     })
     
     // Click Restore for first backup (pihole backup with known plugin)
@@ -424,7 +424,7 @@ describe('RestoreFromDiskPage', () => {
     fireEvent.click(tableRestoreButton!)
     
     // Wait for dialog to appear
-    await screen.findByText('Restore Backup from Disk')
+    await screen.findByText('Restore Backup')
     
     // Wait for targets to be fetched and processed, then check for warning
     // The warning appears when there are no matching targets for the plugin

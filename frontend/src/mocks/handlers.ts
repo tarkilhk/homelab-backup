@@ -51,7 +51,7 @@ const defaultPlugins = [
 ]
 
 export const handlers = [
-  // List backups from disk
+  // List available backups
   http.get('/api/v1/backups/from-disk', () => {
     return HttpResponse.json(defaultBackups)
   }),
@@ -78,7 +78,7 @@ export const handlers = [
         started_at: nowIso,
         finished_at: nowIso,
         job: null,
-        display_job_name: 'Restore from Disk',
+        display_job_name: 'Restore',
         display_tag_name: null,
         target_runs: [
           {

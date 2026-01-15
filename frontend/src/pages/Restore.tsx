@@ -8,7 +8,7 @@ import { X, RefreshCw, AlertCircle, CheckCircle2, Info, Database, HardDrive, Tar
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { toast } from 'sonner'
 
-type BackupFromDisk = {
+type Backup = {
   artifact_path: string
   target_slug: string | null
   date: string | null
@@ -30,16 +30,16 @@ const formatBytes = (value: number): string => {
   return `${rounded} ${units[unitIdx]}`
 }
 
-export default function RestoreFromDiskPage() {
+export default function RestorePage() {
   const queryClient = useQueryClient()
-  const [selectedBackup, setSelectedBackup] = useState<BackupFromDisk | null>(null)
+  const [selectedBackup, setSelectedBackup] = useState<Backup | null>(null)
   const [selectedDestination, setSelectedDestination] = useState<number | ''>('')
   const [selectedPlugin, setSelectedPlugin] = useState<string | ''>('')
   const [isRestoring, setIsRestoring] = useState(false)
   const [restoreError, setRestoreError] = useState<string | null>(null)
 
   const { data: backups, isLoading, error, refetch } = useQuery({
-    queryKey: ['backups-from-disk'],
+    queryKey: ['backups', 'available'],
     queryFn: api.listBackupsFromDisk,
   })
 
@@ -55,6 +55,16 @@ export default function RestoreFromDiskPage() {
     
     return (targets ?? []).filter((t) => t.plugin_name === pluginName)
   }, [selectedBackup, selectedPlugin, targets])
+
+  // Sort backups by modified_at (newest first)
+  const sortedBackups = useMemo(() => {
+    if (!backups || backups.length === 0) return []
+    return [...backups].sort((a, b) => {
+      const dateA = new Date(a.modified_at).getTime()
+      const dateB = new Date(b.modified_at).getTime()
+      return dateB - dateA // Descending order (newest first)
+    })
+  }, [backups])
 
   // Calculate statistics from backups
   const stats = useMemo(() => {
@@ -178,12 +188,12 @@ export default function RestoreFromDiskPage() {
       await api.restoreTargetRun({
         artifact_path: selectedBackup.artifact_path,
         destination_target_id: selectedDestination,
-        triggered_by: 'restore_from_disk',
+        triggered_by: 'restore',
       })
       
       toast.success('Restore triggered successfully')
       resetRestoreState()
-      // Refresh the backups list (restored backup should disappear if it creates a record)
+      // Refresh the backups list
       await refetch()
       queryClient.invalidateQueries({ queryKey: ['runs'], exact: false })
     } catch (err) {
@@ -200,7 +210,7 @@ export default function RestoreFromDiskPage() {
       <AppCard>
         <div className="text-center py-8">
           <RefreshCw className="h-8 w-8 animate-spin mx-auto text-gray-400 mb-4" />
-          <div className="text-sm text-gray-600">Scanning backup directory...</div>
+          <div className="text-sm text-gray-600">Loading backups...</div>
         </div>
       </AppCard>
     )
@@ -211,7 +221,7 @@ export default function RestoreFromDiskPage() {
       <AppCard>
         <div className="text-center py-8">
           <AlertCircle className="h-8 w-8 mx-auto text-red-500 mb-4" />
-          <div className="text-sm text-red-600">Error scanning backups: {String(error)}</div>
+          <div className="text-sm text-red-600">Error loading backups: {String(error)}</div>
           <button
             onClick={() => refetch()}
             className="mt-4 px-4 py-2 bg-[hsl(var(--accent))] text-white rounded-md hover:opacity-90"
@@ -228,7 +238,7 @@ export default function RestoreFromDiskPage() {
       <AppCard>
         <div className="text-center py-8">
           <Info className="h-8 w-8 mx-auto text-gray-400 mb-4" />
-          <div className="text-sm text-gray-600">No backup files found on disk.</div>
+          <div className="text-sm text-gray-600">No backups found.</div>
           <div className="text-xs text-gray-500 mt-2">
             Backup artifacts are typically stored in <code className="bg-muted px-1 rounded">/backups/&lt;target_slug&gt;/&lt;YYYY-MM-DD&gt;/</code>
           </div>
@@ -265,9 +275,9 @@ export default function RestoreFromDiskPage() {
       <AppCard>
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h1 className="text-2xl font-bold">Restore from Disk</h1>
+            <h1 className="text-2xl font-bold">Restore</h1>
             <p className="text-sm text-gray-600 mt-1">
-              Discover and restore backup artifacts found on disk. These backups may not have corresponding database records.
+              Browse and restore from available backups. All backups are shown here, whether they are tracked in the database or not.
             </p>
           </div>
           <button
@@ -394,7 +404,7 @@ export default function RestoreFromDiskPage() {
               </tr>
             </thead>
             <tbody>
-              {backups.map((backup) => (
+              {sortedBackups.map((backup) => (
                 <tr key={backup.artifact_path} className="border-b hover:bg-muted/30">
                   <td className="px-4 py-2 font-mono text-xs break-all max-w-md">{backup.artifact_path}</td>
                   <td className="px-4 py-2">{backup.target_slug || '—'}</td>
@@ -447,7 +457,7 @@ export default function RestoreFromDiskPage() {
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={resetRestoreState}>
           <div className="bg-background border rounded-md shadow-xl max-w-2xl w-full mx-4" onClick={(e) => e.stopPropagation()}>
             <div className="p-4 border-b flex items-center">
-              <div className="font-semibold">Restore Backup from Disk</div>
+              <div className="font-semibold">Restore Backup</div>
               <button
                 aria-label="Close restore dialog"
                 className="ml-auto text-sm cursor-pointer"
@@ -550,5 +560,3 @@ export default function RestoreFromDiskPage() {
     </div>
   )
 }
-
-
