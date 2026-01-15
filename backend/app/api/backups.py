@@ -15,9 +15,10 @@ router = APIRouter(prefix="/backups", tags=["backups"])
 def list_backups_from_disk(db: Session = Depends(get_session)) -> list[BackupFromDiskResponse]:
     """Scan the backup directory and return all backup artifacts found on disk.
     
-    This endpoint discovers backup artifacts that exist on disk but may not have
-    corresponding database records. Useful for disaster recovery scenarios where
-    the database is lost but backup files remain intact.
+    This endpoint discovers ALL backup artifacts that exist on disk, regardless of
+    whether they have corresponding database records. This allows users to restore
+    from any backup file available on disk, useful for both normal restore operations
+    and disaster recovery scenarios where the database is lost but backup files remain intact.
     
     Returns:
         List of backup artifacts with metadata (from sidecar files when available,
