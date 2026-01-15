@@ -321,7 +321,7 @@ def apply_retention_all(db: Session, dry_run: bool = False) -> Dict[str, Any]:
     Used for nightly catch-up cleanup.
     
     Returns:
-        Aggregate stats across all pairs.
+        Aggregate stats across all pairs, with targets_processed count.
     """
     # Get distinct (job_id, target_id) pairs
     pairs = (
@@ -337,6 +337,9 @@ def apply_retention_all(db: Session, dry_run: bool = False) -> Dict[str, Any]:
         .all()
     )
     
+    # Count distinct targets
+    distinct_targets = {target_id for _, target_id in pairs if target_id is not None}
+    
     total_keep = 0
     total_delete = 0
     all_deleted_paths: List[str] = []
@@ -350,12 +353,12 @@ def apply_retention_all(db: Session, dry_run: bool = False) -> Dict[str, Any]:
         all_deleted_paths.extend(result["deleted_paths"])
     
     logger.info(
-        "retention_all_applied | pairs=%s keep=%s delete=%s dry_run=%s",
-        len(pairs), total_keep, total_delete, dry_run
+        "retention_all_applied | targets=%s pairs=%s keep=%s delete=%s dry_run=%s",
+        len(distinct_targets), len(pairs), total_keep, total_delete, dry_run
     )
     
     return {
-        "pairs_processed": len(pairs),
+        "targets_processed": len(distinct_targets),
         "keep_count": total_keep,
         "delete_count": total_delete,
         "deleted_paths": all_deleted_paths,

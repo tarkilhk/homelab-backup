@@ -26,18 +26,54 @@ from sqlalchemy.orm import Session
 
 from app.core.db import SessionLocal
 from app.models import Job as JobModel, Run as RunModel, Target as TargetModel
-from app.domain.enums import RunStatus, TargetRunStatus, RunOperation, TargetRunOperation
+from app.models import MaintenanceJob as MaintenanceJobModel, MaintenanceRun as MaintenanceRunModel
+from app.domain.enums import RunStatus, TargetRunStatus, RunOperation, TargetRunOperation, MaintenanceJobType
 from app.core.plugins.base import BackupContext
 from app.core.plugins.loader import get_plugin
 from app.core.notifier import send_failure_email
 from app.services.jobs import run_job_for_tag
 from app.services.retention import apply_retention, apply_retention_all
+from typing import Literal
+from dataclasses import dataclass
 
 
 logger = logging.getLogger(__name__)
 
 # Global scheduler instance
 _scheduler: Optional[AsyncIOScheduler] = None
+
+
+# Unified scheduling abstraction (no DB inheritance)
+@dataclass
+class ScheduledItem:
+    """DTO for items that can be scheduled by APScheduler."""
+    kind: Literal["backup", "maintenance"]
+    id: int
+    name: str
+    schedule_cron: str
+    enabled: bool
+
+    @staticmethod
+    def from_backup_job(job: JobModel) -> "ScheduledItem":
+        """Adapt a backup Job to ScheduledItem."""
+        return ScheduledItem(
+            kind="backup",
+            id=job.id,
+            name=job.name,
+            schedule_cron=job.schedule_cron,
+            enabled=job.enabled,
+        )
+
+    @staticmethod
+    def from_maintenance_job(job: MaintenanceJobModel) -> "ScheduledItem":
+        """Adapt a MaintenanceJob to ScheduledItem."""
+        return ScheduledItem(
+            kind="maintenance",
+            id=job.id,
+            name=job.name,
+            schedule_cron=job.schedule_cron,
+            enabled=job.enabled,
+        )
 
 
 def get_scheduler() -> AsyncIOScheduler:
@@ -691,22 +727,128 @@ def _scheduled_job(job_id: int) -> None:  # legacy-compatible shim for tests
         db.close()
 
 
-def nightly_retention_cleanup() -> None:
-    """Nightly catch-up job that applies retention to all job/target pairs.
+def execute_maintenance_job(maintenance_job_id: int) -> None:
+    """Execute a maintenance job by ID.
     
-    Runs at 3:00 AM server timezone to clean up any backups missed by post-backup cleanup.
+    Creates a MaintenanceRun, executes the task based on job_type, and updates the run.
     """
     from app.core.db import get_session
+    from app.services.maintenance import MaintenanceService
+    import json
+    
     db = next(get_session())
     try:
-        _log_event("nightly_retention_start")
-        result = apply_retention_all(db)
-        _log_event(
-            "nightly_retention_done",
-            pairs=result.get("pairs_processed", 0),
-            deleted=result.get("delete_count", 0),
-            kept=result.get("keep_count", 0),
+        svc = MaintenanceService(db)
+        job = svc.get_job(maintenance_job_id)
+        if job is None:
+            _log_event("maintenance_job_missing", maintenance_job_id=maintenance_job_id)
+            return
+        
+        # Create MaintenanceRun in running state
+        started_at = datetime.now(timezone.utc)
+        run = MaintenanceRunModel(
+            maintenance_job_id=job.id,
+            started_at=started_at,
+            status=RunStatus.RUNNING.value,
+            message=f"Maintenance job started: {job.name}",
         )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        
+        _log_event(
+            "maintenance_run_started",
+            maintenance_job_id=job.id,
+            maintenance_run_id=run.id,
+            job_type=job.job_type,
+            job_name=job.name,
+        )
+        
+        # Execute based on job_type
+        try:
+            if job.job_type == MaintenanceJobType.RETENTION_CLEANUP.value:
+                result = apply_retention_all(db)
+                # Update run with success
+                run.finished_at = datetime.now(timezone.utc)
+                run.status = RunStatus.SUCCESS.value
+                run.message = f"Retention cleanup completed: {result.get('targets_processed', 0)} targets processed"
+                run.result_json = json.dumps({
+                    "targets_processed": result.get("targets_processed", 0),
+                    "deleted_count": result.get("delete_count", 0),
+                    "kept_count": result.get("keep_count", 0),
+                    "deleted_paths": result.get("deleted_paths", []),
+                })
+                _log_event(
+                    "maintenance_run_success",
+                    maintenance_job_id=job.id,
+                    maintenance_run_id=run.id,
+                    targets_processed=result.get("targets_processed", 0),
+                    deleted_count=result.get("delete_count", 0),
+                )
+            else:
+                raise ValueError(f"Unknown maintenance job_type: {job.job_type}")
+        except Exception as exc:
+            # Update run with failure
+            run.finished_at = datetime.now(timezone.utc)
+            run.status = RunStatus.FAILED.value
+            run.message = f"Maintenance job failed: {str(exc)}"
+            run.result_json = json.dumps({
+                "error": str(exc),
+            })
+            _log_event(
+                "maintenance_run_failed",
+                maintenance_job_id=job.id,
+                maintenance_run_id=run.id,
+                error=str(exc),
+            )
+        
+        db.add(run)
+        db.commit()
+    except Exception as exc:
+        _log_event("maintenance_job_execution_error", maintenance_job_id=maintenance_job_id, error=str(exc))
+    finally:
+        db.close()
+
+
+def scheduled_dispatch(kind: str, job_id: int) -> None:
+    """Unified dispatcher for scheduled jobs (backup or maintenance).
+    
+    Routes execution to the appropriate executor based on kind.
+    """
+    if kind == "backup":
+        scheduled_tick(job_id)
+    elif kind == "maintenance":
+        execute_maintenance_job(job_id)
+    else:
+        _log_event("scheduled_dispatch_unknown_kind", kind=kind, job_id=job_id)
+
+
+def nightly_retention_cleanup() -> None:
+    """Legacy nightly retention cleanup (deprecated - use MaintenanceJob instead).
+    
+    This function is kept for backward compatibility but should be replaced
+    by the MaintenanceJob with key='retention_cleanup_nightly'.
+    """
+    from app.core.db import get_session
+    from app.services.maintenance import MaintenanceService
+    
+    db = next(get_session())
+    try:
+        # Try to find the nightly maintenance job and execute it
+        svc = MaintenanceService(db)
+        job = svc.get_job_by_key("retention_cleanup_nightly")
+        if job and job.enabled:
+            execute_maintenance_job(job.id)
+        else:
+            # Fallback to old behavior if job doesn't exist
+            _log_event("nightly_retention_start")
+            result = apply_retention_all(db)
+            _log_event(
+                "nightly_retention_done",
+                targets=result.get("targets_processed", 0),
+                deleted=result.get("delete_count", 0),
+                kept=result.get("keep_count", 0),
+            )
     except Exception as exc:
         _log_event("nightly_retention_error", error=str(exc))
     finally:
@@ -714,70 +856,72 @@ def nightly_retention_cleanup() -> None:
 
 
 def schedule_jobs_on_startup(scheduler: AsyncIOScheduler, db: Session) -> None:
-    """Load enabled jobs from DB and schedule them with APScheduler.
+    """Load enabled jobs from DB (backup and maintenance) and schedule them with APScheduler.
 
-    - Uses cron in `jobs.schedule_cron`
+    - Uses unified scheduling abstraction (ScheduledItem + dispatcher)
+    - Uses cron in `jobs.schedule_cron` or `maintenance_jobs.schedule_cron`
     - Ensures `max_instances=1` via scheduler job_defaults or per-job arg
-    - Also schedules nightly retention cleanup job
     """
     # In tests, a dummy scheduler may be provided without `add_job`.
     if not hasattr(scheduler, "add_job"):
         return
 
-    # Only schedule jobs explicitly enabled (Boolean true)
-    enabled_jobs = db.query(JobModel).filter(JobModel.enabled.is_(True)).all()
+    # Load enabled backup jobs
+    enabled_backup_jobs = db.query(JobModel).filter(JobModel.enabled.is_(True)).all()
+    
+    # Load enabled maintenance jobs
+    enabled_maintenance_jobs = db.query(MaintenanceJobModel).filter(MaintenanceJobModel.enabled.is_(True)).all()
 
     _log_event(
         "scheduler_load_jobs_start",
-        enabled_jobs=len(enabled_jobs),
+        backup_jobs=len(enabled_backup_jobs),
+        maintenance_jobs=len(enabled_maintenance_jobs),
     )
+
+    # Adapt both types to ScheduledItem
+    scheduled_items: list[ScheduledItem] = []
+    for job in enabled_backup_jobs:
+        scheduled_items.append(ScheduledItem.from_backup_job(job))
+    for job in enabled_maintenance_jobs:
+        scheduled_items.append(ScheduledItem.from_maintenance_job(job))
 
     scheduled_count: int = 0
     invalid_count: int = 0
 
-    for job in enabled_jobs:
+    # Schedule all items using unified logic
+    for item in scheduled_items:
         try:
-            trigger = CronTrigger.from_crontab(job.schedule_cron)
+            trigger = CronTrigger.from_crontab(item.schedule_cron)
         except Exception:
-            _log_event("invalid_cron", job_id=job.id, schedule_cron=job.schedule_cron)
+            _log_event("invalid_cron", kind=item.kind, job_id=item.id, schedule_cron=item.schedule_cron)
             invalid_count += 1
             continue
 
+        # Use namespaced IDs to avoid collisions
+        scheduler_id = f"{item.kind}:{item.id}"
         scheduler.add_job(
-            func=scheduled_tick,
+            func=scheduled_dispatch,
             trigger=trigger,
-            id=f"job:{job.id}",
-            name=f"{job.name}",
+            id=scheduler_id,
+            name=item.name,
             replace_existing=True,
-            kwargs={"job_id": job.id},
+            kwargs={"kind": item.kind, "job_id": item.id},
             max_instances=1,
         )
         scheduled_count += 1
         _log_event(
             "job_scheduled",
-            job_id=job.id,
-            name=job.name,
-            schedule_cron=job.schedule_cron,
+            kind=item.kind,
+            job_id=item.id,
+            scheduler_id=scheduler_id,
+            name=item.name,
+            schedule_cron=item.schedule_cron,
         )
-
-    # Schedule nightly retention cleanup (3:00 AM server timezone)
-    try:
-        nightly_trigger = CronTrigger.from_crontab("0 3 * * *")
-        scheduler.add_job(
-            func=nightly_retention_cleanup,
-            trigger=nightly_trigger,
-            id="retention:nightly",
-            name="Nightly Retention Cleanup",
-            replace_existing=True,
-            max_instances=1,
-        )
-        _log_event("nightly_retention_scheduled", cron="0 3 * * *")
-    except Exception as exc:
-        _log_event("nightly_retention_schedule_failed", error=str(exc))
 
     _log_event(
         "scheduler_load_jobs_done",
-        enabled_jobs=len(enabled_jobs),
+        backup_jobs=len(enabled_backup_jobs),
+        maintenance_jobs=len(enabled_maintenance_jobs),
         scheduled=scheduled_count,
         invalid_cron=invalid_count,
     )

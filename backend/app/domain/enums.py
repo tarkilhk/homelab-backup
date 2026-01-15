@@ -25,3 +25,7 @@ class TargetRunOperation(str, Enum):
     BACKUP = "backup"
     RESTORE = "restore"
 
+
+class MaintenanceJobType(str, Enum):
+    RETENTION_CLEANUP = "retention_cleanup"
+

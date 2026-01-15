@@ -79,6 +79,7 @@ with pytest.raises(FileNotFoundError, match="Container.*not found"):
 - Add a new backup plugin: See `ADDING_PLUGINS.md` (includes scaffolding, schema, tests, and artifact conventions).
 - Update plugin schema/UI: Update the plugin's `schema.json` and validate rendering in `frontend/src/pages/Targets.tsx`.
 - Extend backend APIs: Follow patterns in `backend/app/api/` and ensure tests cover new routes.
+- Maintenance jobs: Scheduled maintenance tasks (e.g., retention cleanup) are tracked separately from backup jobs. See `backend/app/models/maintenance.py`, `backend/app/services/maintenance.py`, and `backend/app/api/maintenance.py`. Maintenance jobs use deterministic `key` identifiers (never hardcode numeric IDs).
 
 ### PR readiness checklist
 - You followed `frontend/.cursorrules` and `backend/.cursorrules`.

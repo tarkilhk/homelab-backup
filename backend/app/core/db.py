@@ -149,7 +149,13 @@ def run_migrations() -> None:
                         result = conn.execute(text(statement))
                         # Force commit by exiting the context manager
                     statements_executed += 1
-                    logger.info("Executed: %s", statement[:80])
+                    # For INSERT statements, log rowcount to verify data was inserted
+                    if statement.upper().strip().startswith('INSERT'):
+                        logger.info("Executed INSERT: %s (rowcount=%s)", statement[:80], result.rowcount)
+                        if result.rowcount == 0:
+                            logger.warning("INSERT statement returned rowcount=0 - no rows inserted: %s", statement[:100])
+                    else:
+                        logger.info("Executed: %s", statement[:80])
                 except Exception as e:
                     error_msg = str(e).lower()
                     # SQLite errors for already-existing columns/tables
@@ -197,6 +203,8 @@ def init_db() -> None:
         GroupTag,
         TargetTag,
         Settings,
+        MaintenanceJob,
+        MaintenanceRun,
     )  # noqa: F401
 
     # Only create missing tables; do not drop/alter existing schema here
