@@ -126,6 +126,39 @@ export type RetentionPreviewResult = {
   kept_paths: string[]
 }
 
+// Maintenance types
+export type MaintenanceJob = {
+  id: number
+  key: string
+  job_type: 'retention_cleanup' | string
+  name: string
+  schedule_cron: string
+  enabled: boolean
+  config_json: string | null
+  visible_in_ui: boolean
+  created_at: string
+  updated_at: string
+}
+
+export type MaintenanceRunResult = {
+  targets_processed?: number
+  deleted_count?: number
+  kept_count?: number
+  deleted_paths?: string[]
+  error?: string
+}
+
+export type MaintenanceRun = {
+  id: number
+  maintenance_job_id: number
+  started_at: string
+  finished_at: string | null
+  status: 'running' | 'success' | 'failed'
+  message: string | null
+  result: MaintenanceRunResult | null
+  job?: MaintenanceJob
+}
+
 // Groups API types
 export type Group = {
   id: number
@@ -282,4 +315,19 @@ export const api = {
     const q = params.toString()
     return request<RetentionPreviewResult>(`/settings/retention/run${q ? `?${q}` : ''}`, { method: 'POST' })
   },
+  // Maintenance
+  listMaintenanceJobs: (visibleInUi?: boolean) => {
+    const params = new URLSearchParams()
+    if (visibleInUi !== undefined) params.set('visible_in_ui', String(visibleInUi))
+    const q = params.toString()
+    return request<MaintenanceJob[]>(`/maintenance/jobs${q ? `?${q}` : ''}`)
+  },
+  getMaintenanceJob: (id: number) => request<MaintenanceJob>(`/maintenance/jobs/${id}`),
+  listMaintenanceRuns: (limit?: number) => {
+    const params = new URLSearchParams()
+    if (limit != null) params.set('limit', String(limit))
+    const q = params.toString()
+    return request<MaintenanceRun[]>(`/maintenance/runs${q ? `?${q}` : ''}`)
+  },
+  getMaintenanceRun: (id: number) => request<MaintenanceRun>(`/maintenance/runs/${id}`),
 }

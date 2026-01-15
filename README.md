@@ -6,6 +6,8 @@ Pluggable backup orchestrator for homelab services. Define targets (Pi-hole, dat
 - FastAPI backend with SQLite persistence and APScheduler
 - Pluggable architecture: add new backup plugins easily
 - React/Vite frontend for managing targets, jobs, and runs
+- Maintenance job scheduling and execution history tracking
+- Retention cleanup with configurable policies
 - Prometheus metrics at `/metrics` (success/failure counts, last run timestamp)
 
 ## Deployment (Docker Compose)

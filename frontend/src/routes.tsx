@@ -7,6 +7,7 @@ import JobsPage from './pages/Jobs'
 import RunsPage from './pages/Runs'
 import RestorePage from './pages/Restore'
 import OptionsPage from './pages/Options'
+import MaintenanceJobsPage from './pages/MaintenanceJobs'
 import ErrorPage from './pages/ErrorPage'
 import NotFoundPage from './pages/NotFound'
 
@@ -26,6 +27,7 @@ export function getRoutes() {
         { path: 'runs', element: <RunsPage /> },
         { path: 'restore', element: <RestorePage /> },
         { path: 'options', element: <OptionsPage /> },
+        { path: 'maintenance-jobs', element: <MaintenanceJobsPage /> },
         // Catch-all for unknown nested routes
         { path: '*', element: <NotFoundPage /> },
       ],

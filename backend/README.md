@@ -36,12 +36,14 @@ docker run --rm -p 8080:8080 tarkilhk/homelab-backup:backend-latest
 - `GET /api/docs` - Swagger UI
 - `GET /api/openapi.json` - OpenAPI schema
 
-Versioned application APIs are mounted under `/api/v1` (e.g., `/api/v1/targets`, `/api/v1/jobs`, `/api/v1/runs`).
+Versioned application APIs are mounted under `/api/v1` (e.g., `/api/v1/targets`, `/api/v1/jobs`, `/api/v1/runs`, `/api/v1/maintenance`).
 
 ## Features
 
 - FastAPI with automatic OpenAPI documentation
-- APScheduler with Asia/Singapore timezone
+- APScheduler with Asia/Singapore timezone (unified scheduling for backup and maintenance jobs)
 - SQLAlchemy with SQLite database
 - Plugin architecture for backup operations
+- Maintenance job scheduling and execution history tracking
+- Retention cleanup with configurable policies
 - CORS middleware enabled
