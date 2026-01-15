@@ -3,7 +3,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type Target } from '../api/client'
 import { formatLocalDateTime } from '../lib/dates'
 import AppCard from '../components/ui/AppCard'
-import { X, RefreshCw, AlertCircle, CheckCircle2, Info } from 'lucide-react'
+import StatCard from '../components/StatCard'
+import { X, RefreshCw, AlertCircle, CheckCircle2, Info, Database, HardDrive, Target as TargetIcon, ShieldCheck } from 'lucide-react'
+import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts'
 import { toast } from 'sonner'
 
 type BackupFromDisk = {
@@ -53,6 +55,111 @@ export default function RestoreFromDiskPage() {
     
     return (targets ?? []).filter((t) => t.plugin_name === pluginName)
   }, [selectedBackup, selectedPlugin, targets])
+
+  // Calculate statistics from backups
+  const stats = useMemo(() => {
+    if (!backups || backups.length === 0) {
+      return {
+        totalBackups: 0,
+        totalSize: 0,
+        uniqueTargets: 0,
+        uniquePlugins: 0,
+        sidecarCount: 0,
+        inferredCount: 0,
+        metadataQuality: 0,
+        perTarget: [] as Array<{
+          target_slug: string
+          backupCount: number
+          totalSize: number
+          sidecarCount: number
+          inferredCount: number
+        }>,
+      }
+    }
+
+    const totalBackups = backups.length
+    const totalSize = backups.reduce((sum, b) => sum + b.file_size, 0)
+    
+    const uniqueTargetSlugs = new Set<string>()
+    const uniquePluginNames = new Set<string>()
+    let sidecarCount = 0
+    let inferredCount = 0
+
+    const targetMap = new Map<string, {
+      backupCount: number
+      totalSize: number
+      sidecarCount: number
+      inferredCount: number
+    }>()
+
+    backups.forEach((backup) => {
+      if (backup.target_slug) {
+        uniqueTargetSlugs.add(backup.target_slug)
+        const existing = targetMap.get(backup.target_slug) || {
+          backupCount: 0,
+          totalSize: 0,
+          sidecarCount: 0,
+          inferredCount: 0,
+        }
+        existing.backupCount++
+        existing.totalSize += backup.file_size
+        if (backup.metadata_source === 'sidecar') {
+          existing.sidecarCount++
+        } else {
+          existing.inferredCount++
+        }
+        targetMap.set(backup.target_slug, existing)
+      } else {
+        // Handle null target_slug as "Unknown"
+        const existing = targetMap.get('Unknown') || {
+          backupCount: 0,
+          totalSize: 0,
+          sidecarCount: 0,
+          inferredCount: 0,
+        }
+        existing.backupCount++
+        existing.totalSize += backup.file_size
+        if (backup.metadata_source === 'sidecar') {
+          existing.sidecarCount++
+        } else {
+          existing.inferredCount++
+        }
+        targetMap.set('Unknown', existing)
+      }
+
+      if (backup.plugin_name) {
+        uniquePluginNames.add(backup.plugin_name)
+      }
+
+      if (backup.metadata_source === 'sidecar') {
+        sidecarCount++
+      } else {
+        inferredCount++
+      }
+    })
+
+    const perTarget = Array.from(targetMap.entries())
+      .map(([target_slug, data]) => ({
+        target_slug,
+        ...data,
+      }))
+      .sort((a, b) => b.backupCount - a.backupCount)
+
+    const metadataQuality = totalBackups > 0 
+      ? Math.round((sidecarCount / totalBackups) * 100) 
+      : 0
+
+    return {
+      totalBackups,
+      totalSize,
+      uniqueTargets: uniqueTargetSlugs.size,
+      uniquePlugins: uniquePluginNames.size,
+      sidecarCount,
+      inferredCount,
+      metadataQuality,
+      perTarget,
+    }
+  }, [backups])
 
   const resetRestoreState = () => {
     setSelectedBackup(null)
@@ -130,6 +237,29 @@ export default function RestoreFromDiskPage() {
     )
   }
 
+  // Prepare chart data
+  const metadataChartData = [
+    { name: 'Sidecar', value: stats.sidecarCount, color: '#16a34a' }, // green-600
+    { name: 'Inferred', value: stats.inferredCount, color: '#f59e0b' }, // amber-600
+  ].filter((item) => item.value > 0) // Filter out zero values for cleaner charts
+
+  const backupsPerTargetData = stats.perTarget
+    .slice(0, 10)
+    .map((item) => ({
+      name: item.target_slug,
+      value: item.backupCount,
+    }))
+    .filter((item) => item.value > 0)
+
+  const sizePerTargetData = stats.perTarget
+    .slice(0, 10)
+    .map((item) => ({
+      name: item.target_slug,
+      value: item.totalSize,
+    }))
+    .filter((item) => item.value > 0)
+    .sort((a, b) => b.value - a.value)
+
   return (
     <div className="space-y-4">
       <AppCard>
@@ -148,7 +278,107 @@ export default function RestoreFromDiskPage() {
             Refresh
           </button>
         </div>
+      </AppCard>
 
+      {/* Status Cards */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          label="Total Backups"
+          value={stats.totalBackups || '—'}
+          icon={Database}
+        />
+        <StatCard
+          label="Total Size"
+          value={stats.totalSize > 0 ? formatBytes(stats.totalSize) : '—'}
+          icon={HardDrive}
+        />
+        <StatCard
+          label="Unique Targets"
+          value={stats.uniqueTargets || '—'}
+          icon={TargetIcon}
+        />
+        <StatCard
+          label="Metadata Quality"
+          value={stats.totalBackups > 0 ? `${stats.metadataQuality}%` : '—'}
+          icon={ShieldCheck}
+        />
+      </div>
+
+      {/* Chart Visualizations */}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <AppCard title="Metadata Source">
+          {metadataChartData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={250}>
+              <PieChart>
+                <Pie
+                  data={metadataChartData}
+                  cx="50%"
+                  cy="50%"
+                  labelLine={false}
+                  label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                  outerRadius={80}
+                  fill="#8884d8"
+                  dataKey="value"
+                >
+                  {metadataChartData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="text-center py-8 text-sm text-gray-500">No data available</div>
+          )}
+        </AppCard>
+
+        <AppCard title="Backups per Target">
+          {backupsPerTargetData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={250}>
+              <BarChart
+                data={backupsPerTargetData}
+                layout="vertical"
+                margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+              >
+                <XAxis type="number" />
+                <YAxis dataKey="name" type="category" width={100} />
+                <Tooltip />
+                <Bar dataKey="value" fill="hsl(var(--accent))" />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="text-center py-8 text-sm text-gray-500">No data available</div>
+          )}
+        </AppCard>
+
+        <AppCard title="Storage per Target">
+          {sizePerTargetData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={250}>
+              <BarChart
+                data={sizePerTargetData}
+                layout="vertical"
+                margin={{ top: 5, right: 30, left: 20, bottom: 5 }}
+              >
+                <XAxis 
+                  type="number" 
+                  tickFormatter={(value) => formatBytes(value)}
+                />
+                <YAxis dataKey="name" type="category" width={100} />
+                <Tooltip 
+                  formatter={(value: number) => formatBytes(value)}
+                />
+                <Bar dataKey="value" fill="hsl(var(--accent))" />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="text-center py-8 text-sm text-gray-500">No data available</div>
+          )}
+        </AppCard>
+      </div>
+
+      {/* Backup Table */}
+      <AppCard>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
