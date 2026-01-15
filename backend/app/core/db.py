@@ -139,8 +139,11 @@ def run_migrations() -> None:
         # Execute each statement in its own transaction to allow partial success
         for statement in migration_sql.split(";"):
             statement = statement.strip()
-            # Skip empty statements and comments
-            if statement and not statement.startswith("--"):
+            # Remove comment lines from statement (they may precede actual SQL)
+            lines = [line for line in statement.split('\n') if not line.strip().startswith('--')]
+            statement = '\n'.join(lines).strip()
+            # Skip empty statements
+            if statement:
                 try:
                     with engine.begin() as conn:
                         result = conn.execute(text(statement))
