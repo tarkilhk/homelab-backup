@@ -25,6 +25,7 @@ If you are asked to add a new backup plugin, follow `ADDING_PLUGINS.md` exactly.
 - **Sidecar metadata**: All plugins must write sidecar metadata files (`<artifact_path>.meta.json`) using `write_backup_sidecar()` from `app.core.plugins.sidecar` to enable disaster recovery scenarios.
 
 ### Backend specifics (high level)
+- **Virtual environment required**: When running backend commands (e.g. `pip`, `pytest`), always use a venv to avoid externally-managed-environment errors. Create with `python3 -m venv .venv` in `backend/`, then use `.venv/bin/pip` and `.venv/bin/pytest`, or activate first. Full steps: `backend/README.md` (Development and testing).
 - Plugin contract and discovery are defined under `backend/app/core/plugins/` and `backend/app/plugins/`.
 - Tests live in `backend/tests/` and use `pytest`/`pytest-asyncio`. Prefer `httpx.MockTransport` for HTTP-based plugins.
 
