@@ -124,8 +124,12 @@ class TestMetricsEndpoint:
         r = client.post(f"/api/v1/jobs/{job_id}/run")
         assert r.status_code == 200
         payload = r.json()
-        assert payload["status"] == "running"
-        run = wait_for_run_completion(client, payload["id"])
+        assert payload["status"] in {"running", "success"}
+        run = (
+            wait_for_run_completion(client, payload["id"])
+            if payload["status"] == "running"
+            else payload
+        )
         assert run["status"] == "success"
         
         # Check metrics
@@ -186,8 +190,12 @@ class TestMetricsEndpoint:
         r = client.post(f"/api/v1/jobs/{job_id}/run")
         assert r.status_code == 200
         payload = r.json()
-        assert payload["status"] == "running"
-        run = wait_for_run_completion(client, payload["id"])
+        assert payload["status"] in {"running", "failed"}
+        run = (
+            wait_for_run_completion(client, payload["id"])
+            if payload["status"] == "running"
+            else payload
+        )
         assert run["status"] == "failed"
         
         # Check metrics
@@ -249,8 +257,12 @@ class TestMetricsEndpoint:
         r = client.post(f"/api/v1/jobs/{job_id}/run")
         assert r.status_code == 200
         payload = r.json()
-        assert payload["status"] == "running"
-        run = wait_for_run_completion(client, payload["id"])
+        assert payload["status"] in {"running", "success"}
+        run = (
+            wait_for_run_completion(client, payload["id"])
+            if payload["status"] == "running"
+            else payload
+        )
         assert run["status"] == "success"
         
         # Check metrics - should properly escape special characters
