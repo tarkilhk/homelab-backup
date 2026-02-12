@@ -3,11 +3,35 @@
 from __future__ import annotations
 
 import tempfile
-import pytest
+import time
 from typing import Any, Dict
+
+import pytest
 from fastapi.testclient import TestClient
-from app.core.plugins.base import BackupPlugin, BackupContext, RestoreContext
+
 from app.api.metrics import _sanitize_label_value
+from app.core.plugins.base import BackupPlugin, BackupContext, RestoreContext
+
+
+def wait_for_run_completion(
+    client: TestClient,
+    run_id: int,
+    *,
+    timeout_sec: float = 2.0,
+    interval_sec: float = 0.05,
+) -> Dict[str, Any]:
+    """Poll the run until it leaves the running state or timeout."""
+    deadline = time.monotonic() + timeout_sec
+    last_payload: Dict[str, Any] | None = None
+    while time.monotonic() < deadline:
+        r = client.get(f"/api/v1/runs/{run_id}")
+        if r.status_code == 200:
+            payload = r.json()
+            last_payload = payload
+            if payload.get("status") != "running":
+                return payload
+        time.sleep(interval_sec)
+    raise AssertionError(f"Run {run_id} did not complete. Last payload={last_payload}")
 
 
 class TestMetricsSanitization:
@@ -96,10 +120,13 @@ class TestMetricsEndpoint:
         assert r.status_code == 201
         job_id = r.json()["id"]
         
-        # Run job successfully
+        # Run job successfully (async)
         r = client.post(f"/api/v1/jobs/{job_id}/run")
         assert r.status_code == 200
-        assert r.json()["status"] == "success"
+        payload = r.json()
+        assert payload["status"] == "running"
+        run = wait_for_run_completion(client, payload["id"])
+        assert run["status"] == "success"
         
         # Check metrics
         response = client.get("/metrics")
@@ -155,10 +182,13 @@ class TestMetricsEndpoint:
         assert r.status_code == 201
         job_id = r.json()["id"]
         
-        # Run job and expect failure
+        # Run job and expect failure (async)
         r = client.post(f"/api/v1/jobs/{job_id}/run")
         assert r.status_code == 200
-        assert r.json()["status"] == "failed"
+        payload = r.json()
+        assert payload["status"] == "running"
+        run = wait_for_run_completion(client, payload["id"])
+        assert run["status"] == "failed"
         
         # Check metrics
         response = client.get("/metrics")
@@ -215,10 +245,13 @@ class TestMetricsEndpoint:
         assert r.status_code == 201
         job_id = r.json()["id"]
         
-        # Run job successfully
+        # Run job successfully (async)
         r = client.post(f"/api/v1/jobs/{job_id}/run")
         assert r.status_code == 200
-        assert r.json()["status"] == "success"
+        payload = r.json()
+        assert payload["status"] == "running"
+        run = wait_for_run_completion(client, payload["id"])
+        assert run["status"] == "success"
         
         # Check metrics - should properly escape special characters
         response = client.get("/metrics")

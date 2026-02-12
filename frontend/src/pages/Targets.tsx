@@ -305,19 +305,25 @@ export default function TargetsPage() {
                 const id = `plugin-field-${key}`
                 const value = (config as any)[key] ?? ''
                 const label = def && def.title ? def.title : key
+                const description = def && typeof def.description === 'string' ? def.description : ''
 
                 if (type === 'boolean') {
                   return (
-                    <label key={key} className="flex items-center gap-2">
-                      <input
-                        id={id}
-                        aria-label={label}
-                        type="checkbox"
-                        checked={Boolean(value)}
-                        onChange={(e) => setConfig({ ...config, [key]: e.target.checked })}
-                      />
-                      <span className="text-sm">{label}{required ? ' *' : ''}</span>
-                    </label>
+                    <div key={key} className="grid gap-1">
+                      <label className="flex items-center gap-2" htmlFor={id}>
+                        <input
+                          id={id}
+                          aria-label={label}
+                          type="checkbox"
+                          checked={Boolean(value)}
+                          onChange={(e) => setConfig({ ...config, [key]: e.target.checked })}
+                        />
+                        <span className="text-sm">{label}{required ? ' *' : ''}</span>
+                      </label>
+                      {description ? (
+                        <span className="text-xs text-muted-foreground">{description}</span>
+                      ) : null}
+                    </div>
                   )
                 }
 
@@ -339,6 +345,9 @@ export default function TargetsPage() {
                         })
                       }
                     />
+                    {description ? (
+                      <span className="text-xs text-muted-foreground">{description}</span>
+                    ) : null}
                   </label>
                 )
               })}
@@ -576,5 +585,4 @@ export default function TargetsPage() {
     </div>
   )
 }
-
 

@@ -4,9 +4,23 @@
   "properties": {
     "database_url": {
       "type": "string",
-      "title": "Database URL",
+      "title": "Database URL (Required)",
       "format": "uri",
-      "default": "postgresql://user:pass@host:5432/calcom"
+      "default": "postgresql://user:pass@host:5432/calcom",
+      "description": "Main Cal.com DATABASE_URL. This can be a pooled/proxied connection string."
+    },
+    "database_direct_url": {
+      "type": "string",
+      "title": "Direct Database URL (Optional, Preferred for Backups)",
+      "format": "uri",
+      "default": "postgresql://user:pass@postgres.internal:5432/calcom?sslmode=require",
+      "description": "Use the direct PostgreSQL host (DATABASE_DIRECT_URL) when DATABASE_URL goes through PgBouncer/proxy. Backup/test/restore will use this first when set."
+    },
+    "restore_grant_role": {
+      "type": "string",
+      "title": "Post-Restore Grant Role (Optional)",
+      "default": "calcom_app",
+      "description": "Role/user to grant permissions to after restore. Set this to the exact PostgreSQL username Cal.com uses at runtime (the DATABASE_URL username). This field is used only during restore to grant access on all non-system schemas detected from the backup SQL; it is not used for backup or connection testing."
     }
   }
 }

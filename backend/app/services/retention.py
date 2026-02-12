@@ -64,7 +64,7 @@ def _get_effective_policy(db: Session, job_id: int) -> Optional[Dict[str, Any]]:
 
 
 def _get_bucket_key(dt: datetime, unit: str) -> Tuple[int, ...]:
-    """Compute bucket key for a datetime based on unit (day/week/month).
+    """Compute bucket key for a datetime based on unit (day/week/month/year).
     
     Returns a tuple that uniquely identifies the bucket.
     """
@@ -79,6 +79,8 @@ def _get_bucket_key(dt: datetime, unit: str) -> Tuple[int, ...]:
         return (iso_year, iso_week)
     elif unit == "month":
         return (local_dt.year, local_dt.month)
+    elif unit == "year":
+        return (local_dt.year,)
     else:
         # Default to day if unknown
         return (local_dt.year, local_dt.month, local_dt.day)
@@ -95,23 +97,84 @@ def _get_window_start(now: datetime, unit: str, window: int) -> datetime:
     """Compute the start of the retention window.
     
     For 'keep 1 per day for last 7 days', window=7 and we look back 7 days.
+    Returns the start of the day/week/month/year (normalized to midnight/start of period).
     """
     now_aware = _ensure_tz_aware(now)
     local_now = now_aware.astimezone(SERVER_TZ)
     
     if unit == "day":
-        # Start of day N days ago
-        start = local_now - timedelta(days=window)
+        # Start of day N days ago (normalize to midnight)
+        target_date = (local_now - timedelta(days=window)).date()
+        start = datetime.combine(target_date, datetime.min.time(), tzinfo=SERVER_TZ)
     elif unit == "week":
-        # Start of week N weeks ago
-        start = local_now - timedelta(weeks=window)
+        # Start of week N weeks ago (normalize to start of week)
+        target_time = local_now - timedelta(weeks=window)
+        # Get the start of the ISO week (Monday)
+        days_since_monday = target_time.weekday()
+        week_start = target_time - timedelta(days=days_since_monday)
+        start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
     elif unit == "month":
-        # Approximate: go back N*30 days
-        start = local_now - timedelta(days=window * 30)
+        # Start of month N months ago (normalize to start of month)
+        # Use actual calendar months, not approximate 30-day periods
+        target_year = local_now.year
+        target_month = local_now.month
+        
+        # Subtract months
+        for _ in range(window):
+            target_month -= 1
+            if target_month < 1:
+                target_month = 12
+                target_year -= 1
+        
+        start = datetime(target_year, target_month, 1, 0, 0, 0, 0, tzinfo=SERVER_TZ)
+    elif unit == "year":
+        # Start of year N years ago (normalize to start of year)
+        target_year = local_now.year - window
+        start = datetime(target_year, 1, 1, 0, 0, 0, 0, tzinfo=SERVER_TZ)
     else:
-        start = local_now - timedelta(days=window)
+        # Default to day behavior
+        target_date = (local_now - timedelta(days=window)).date()
+        start = datetime.combine(target_date, datetime.min.time(), tzinfo=SERVER_TZ)
     
     return start
+
+
+def _get_unit_priority(unit: str) -> int:
+    """Get priority for unit ordering (lower = more granular, processed first).
+    
+    day < week < month < year
+    """
+    priorities = {
+        "day": 1,
+        "week": 2,
+        "month": 3,
+        "year": 4,
+    }
+    return priorities.get(unit, 99)
+
+
+def _get_most_granular_window_end(
+    granular_rules: List[Dict[str, Any]],
+    now: datetime,
+) -> Optional[datetime]:
+    """Get the end of the most granular rule's window.
+    
+    Returns the earliest window_start among all granular rules, or None if no rules.
+    This represents the cutoff point: backups newer than this are handled by
+    more granular rules.
+    """
+    if not granular_rules:
+        return None
+    
+    window_starts = []
+    for rule in granular_rules:
+        unit = rule.get("unit", "day")
+        window = rule.get("window", 1)
+        window_start = _get_window_start(now, unit, window)
+        window_starts.append(window_start)
+    
+    # Return the earliest (oldest) window start - this is the cutoff
+    return min(window_starts) if window_starts else None
 
 
 def compute_keep_set(
@@ -121,8 +184,17 @@ def compute_keep_set(
 ) -> Set[int]:
     """Compute which TargetRun IDs to keep based on retention policy.
     
-    Uses union semantics: a backup is kept if it matches ANY rule.
-    For each bucket, keeps the latest backup (by started_at).
+    Uses hierarchical semantics: rules are processed in order of granularity
+    (day < week < month < year). More granular rules are processed first, and
+    less granular rules only consider backups outside the windows of more
+    granular rules.
+    
+    For example:
+    - Daily rule (5 days): Keep 1 per day for last 5 days
+    - Monthly rule (3 months): Keep 1 per month for last 3 months, but only
+      consider backups outside the 5-day daily window
+    - Yearly rule (2 years): Keep 1 per year for last 2 years, but only
+      consider backups outside the monthly window
     
     Args:
         candidates: List of TargetRun objects with artifact_path set
@@ -140,24 +212,46 @@ def compute_keep_set(
         # No rules = keep everything (retention disabled)
         return {tr.id for tr in candidates}
     
-    keep_ids: Set[int] = set()
+    # Sort rules by granularity (most granular first)
+    sorted_rules = sorted(rules, key=lambda r: _get_unit_priority(r.get("unit", "day")))
     
-    for rule in rules:
+    keep_ids: Set[int] = set()
+    processed_candidates: Set[int] = set()  # Track which candidates we've already processed
+    
+    for rule in sorted_rules:
         unit = rule.get("unit", "day")
         window = rule.get("window", 1)
         keep_per_bucket = rule.get("keep", 1)
         
         window_start = _get_window_start(now, unit, window)
         
-        # Group candidates by bucket (only those within window)
+        # Get all more granular rules (already processed)
+        more_granular_rules = [
+            r for r in sorted_rules[:sorted_rules.index(rule)]
+            if _get_unit_priority(r.get("unit", "day")) < _get_unit_priority(unit)
+        ]
+        
+        # For less granular rules, only consider backups older than the most granular window
+        granular_cutoff = _get_most_granular_window_end(more_granular_rules, now)
+        
+        # Group candidates by bucket (only those within window and not already covered)
         buckets: Dict[Tuple[int, ...], List[TargetRunModel]] = {}
         for tr in candidates:
             if tr.started_at is None:
                 continue
+            if tr.id in processed_candidates:
+                continue  # Skip if already kept by a more granular rule
+            
             # Ensure timezone-aware comparison
             tr_started = _ensure_tz_aware(tr.started_at)
-            # Check if within window
+            
+            # Check if within this rule's window
             if tr_started < window_start:
+                continue
+            
+            # For less granular rules, exclude backups that fall within more granular windows
+            # This ensures we don't double-keep backups (e.g., a daily backup won't also be kept as monthly)
+            if granular_cutoff is not None and tr_started >= granular_cutoff:
                 continue
             
             bucket_key = _get_bucket_key(tr.started_at, unit)
@@ -171,6 +265,7 @@ def compute_keep_set(
             bucket_trs.sort(key=lambda x: _ensure_tz_aware(x.started_at) if x.started_at else datetime.min.replace(tzinfo=timezone.utc), reverse=True)
             for tr in bucket_trs[:keep_per_bucket]:
                 keep_ids.add(tr.id)
+                processed_candidates.add(tr.id)
     
     return keep_ids
 

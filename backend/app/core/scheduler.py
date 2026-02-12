@@ -18,11 +18,12 @@ from datetime import datetime, timezone
 import traceback
 import asyncio
 import threading
-from typing import Optional
+from typing import Callable, Literal, Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from sqlalchemy.orm import Session
+from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.db import SessionLocal
 from app.models import Job as JobModel, Run as RunModel, Target as TargetModel
@@ -33,7 +34,6 @@ from app.core.plugins.loader import get_plugin
 from app.core.notifier import send_failure_email
 from app.services.jobs import run_job_for_tag
 from app.services.retention import apply_retention, apply_retention_all
-from typing import Literal
 from dataclasses import dataclass
 
 
@@ -552,16 +552,29 @@ def run_job_immediately(db: Session, job_id: int, triggered_by: str = "manual") 
     results: list[dict] = []
     for t in targets:
         results.append(_perform_target_run(db, job, run, target_id=int(t.id)))
-    # Aggregate status to parent run
+    _finalize_run_from_results(db, run, results)
+    _emit_run_finished_event(job_id=job.id, run=run, triggered_by=triggered_by)
+    _log_event("manual_run_complete", job_id=job.id, run_id=run.id, status=run.status)
+    return run
+
+
+def _finalize_run_from_results(db: Session, run: RunModel, results: list[dict]) -> None:
+    """Finalize a run based on per-target results and persist updates."""
     try:
         run.finished_at = datetime.now(timezone.utc)
         total = len(results)
-        success_count = sum(1 for r in results if r.get("status") == TargetRunStatus.SUCCESS.value)
-        fail_count = sum(1 for r in results if r.get("status") == TargetRunStatus.FAILED.value)
+        success_count = sum(
+            1 for r in results if r.get("status") == TargetRunStatus.SUCCESS.value
+        )
+        fail_count = sum(
+            1 for r in results if r.get("status") == TargetRunStatus.FAILED.value
+        )
         any_fail = fail_count > 0
         any_success = success_count > 0
         run.status = (
-            RunStatus.PARTIAL.value if (any_fail and any_success) else (RunStatus.FAILED.value if any_fail else RunStatus.SUCCESS.value)
+            RunStatus.PARTIAL.value
+            if (any_fail and any_success)
+            else (RunStatus.FAILED.value if any_fail else RunStatus.SUCCESS.value)
         )
         if run.status == RunStatus.SUCCESS.value:
             run.message = f"Completed successfully for {success_count}/{total} targets"
@@ -574,25 +587,130 @@ def run_job_immediately(db: Session, job_id: int, triggered_by: str = "manual") 
         db.refresh(run)
     except Exception:
         pass
-    # Always emit run_finished for manual runs regardless of aggregation errors
+
+
+def _emit_run_finished_event(*, job_id: int, run: RunModel, triggered_by: str) -> None:
+    """Emit a run_finished event with duration metadata."""
     try:
+        duration_sec = None
+        if run.started_at and run.finished_at:
+            duration_sec = (run.finished_at - run.started_at).total_seconds()
         _log_event(
             "run_finished",
-            job_id=job.id,
+            job_id=job_id,
             run_id=run.id,
             triggered_by=triggered_by,
             finished_at=run.finished_at,
             status=run.status,
-            duration_sec=(
-                (run.finished_at - run.started_at).total_seconds()
-                if run.started_at and run.finished_at
-                else None
-            ),
+            duration_sec=duration_sec,
             message=run.message,
         )
     except Exception:
         pass
-    _log_event("manual_run_complete", job_id=job.id, run_id=run.id, status=run.status)
+
+
+def _fail_run(db: Session, run: RunModel, *, message: str) -> None:
+    """Mark a run failed with a terminal timestamp."""
+    finished_at = datetime.now(timezone.utc)
+    run.finished_at = finished_at
+    run.status = RunStatus.FAILED.value
+    run.message = message
+    run.logs_text = (
+        (run.logs_text or "") + f"\nFailed at {finished_at.isoformat()}: {message}"
+    )
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+
+
+def _run_manual_job_in_background(
+    session_factory: Callable[[], Session],
+    job_id: int,
+    run_id: int,
+    triggered_by: str,
+) -> None:
+    db = session_factory()
+    run: RunModel | None = None
+    job: JobModel | None = None
+    try:
+        job = db.get(JobModel, job_id)
+        run = db.get(RunModel, run_id)
+        if job is None or run is None:
+            _log_event("manual_run_missing", job_id=job_id, run_id=run_id)
+            return
+        from app.services.jobs import resolve_tag_to_targets
+        targets = resolve_tag_to_targets(db, job.tag_id)
+        results: list[dict] = []
+        for t in targets:
+            results.append(_perform_target_run(db, job, run, target_id=int(t.id)))
+        _finalize_run_from_results(db, run, results)
+        _emit_run_finished_event(job_id=job.id, run=run, triggered_by=triggered_by)
+        _log_event("manual_run_complete", job_id=job.id, run_id=run.id, status=run.status)
+    except Exception:
+        logger.exception(
+            "Manual run failed in background | job_id=%s run_id=%s",
+            job_id,
+            run_id,
+        )
+        if run is not None and job is not None:
+            try:
+                _fail_run(db, run, message="Run failed in background execution")
+                _emit_run_finished_event(job_id=job.id, run=run, triggered_by=triggered_by)
+                _log_event(
+                    "manual_run_complete",
+                    job_id=job.id,
+                    run_id=run.id,
+                    status=run.status,
+                )
+            except Exception:
+                pass
+    finally:
+        db.close()
+
+
+def trigger_job_async(db: Session, job_id: int, triggered_by: str = "manual") -> RunModel:
+    """Create a Run and dispatch job execution in a background thread."""
+    _log_event("manual_run_trigger", job_id=job_id, triggered_by=triggered_by)
+    job = db.get(JobModel, job_id)
+    if job is None:
+        _log_event("manual_job_missing", job_id=job_id)
+        raise ValueError("Job not found")
+    run = _create_run(db, job, triggered_by)
+    try:
+        bind = db.get_bind()
+        engine: Engine | None
+        if bind is None:
+            engine = None
+        elif isinstance(bind, Connection):
+            engine = bind.engine
+        else:
+            engine = bind
+        session_factory = (
+            SessionLocal
+            if engine is None
+            else sessionmaker(autocommit=False, autoflush=False, bind=engine)
+        )
+        th = threading.Thread(
+            target=_run_manual_job_in_background,
+            args=(session_factory, job.id, run.id, triggered_by),
+            daemon=True,
+        )
+        th.start()
+        _log_event(
+            "manual_run_dispatched",
+            job_id=job.id,
+            run_id=run.id,
+            triggered_by=triggered_by,
+        )
+    except Exception as exc:
+        _log_event(
+            "manual_run_dispatch_failed",
+            job_id=job.id,
+            run_id=run.id,
+            error=str(exc),
+        )
+        _fail_run(db, run, message="Run dispatch failed")
+        raise
     return run
 
 

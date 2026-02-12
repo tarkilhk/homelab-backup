@@ -5,7 +5,17 @@ import { api, type JobCreate, type Job, type Tag, type TagTargetAttachment, type
 import { formatLocalDateTime } from '../lib/dates'
 import { Button } from '../components/ui/button'
 import { useConfirm } from '../components/ConfirmProvider'
-import { Trash2, Pencil, Play, Check, X, Plus, Target as TargetIcon, Sparkles } from 'lucide-react'
+import {
+  Trash2,
+  Pencil,
+  Play,
+  Check,
+  X,
+  Plus,
+  Target as TargetIcon,
+  Sparkles,
+  Loader2,
+} from 'lucide-react'
 import AppCard from '../components/ui/AppCard'
 import IconButton from '../components/IconButton'
 
@@ -135,9 +145,12 @@ export default function JobsPage() {
   // Controls visibility of the create/edit card; hidden by default
   const [showEditor, setShowEditor] = useState<boolean>(false)
 
-  // Transient per-job status after clicking Run Now: success/error for 2s
+  // Transient per-job status after clicking Run Now: pending/success/error
   const [runStatusByJobId, setRunStatusByJobId] = useState<
     Partial<Record<number, 'success' | 'error'>>
+  >({})
+  const [runPendingByJobId, setRunPendingByJobId] = useState<
+    Partial<Record<number, boolean>>
   >({})
 
   // Filters for jobs table
@@ -846,14 +859,16 @@ export default function JobsPage() {
                         </button>
                         <button
                           aria-label="Run now"
-                          className="p-2 rounded hover:bg-muted cursor-pointer"
+                          className="p-2 rounded hover:bg-muted cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
                           onClick={async () => {
                             try {
+                              setRunPendingByJobId((prev) => ({ ...prev, [j.id]: true }))
                               await runNowMut.mutateAsync(j.id)
                               setRunStatusByJobId((prev) => ({ ...prev, [j.id]: 'success' }))
                             } catch (err) {
                               setRunStatusByJobId((prev) => ({ ...prev, [j.id]: 'error' }))
                             } finally {
+                              setRunPendingByJobId((prev) => ({ ...prev, [j.id]: false }))
                               // Revert icon after 1.3 seconds
                               setTimeout(() => {
                                 setRunStatusByJobId((prev) => {
@@ -864,14 +879,22 @@ export default function JobsPage() {
                               }, 1300)
                             }
                           }}
+                          disabled={Boolean(runPendingByJobId[j.id])}
                           title="Run now"
                         >
                           <span className="relative inline-flex h-4 w-4">
+                            {/* Pending */}
+                            <Loader2
+                              className={
+                                `absolute inset-0 h-4 w-4 text-green-600 transition-all duration-200 ease-out animate-spin ` +
+                                `${runPendingByJobId[j.id] ? 'opacity-100 scale-100' : 'opacity-0 scale-75'}`
+                              }
+                            />
                             {/* Play (idle) */}
                             <Play
                               className={
                                 `absolute inset-0 h-4 w-4 text-green-600 transition-all duration-200 ease-out ` +
-                                `${runStatusByJobId[j.id] ? 'opacity-0 scale-75' : 'opacity-100 scale-100'}`
+                                `${runStatusByJobId[j.id] || runPendingByJobId[j.id] ? 'opacity-0 scale-75' : 'opacity-100 scale-100'}`
                               }
                             />
                             {/* Success */}
@@ -917,5 +940,3 @@ export default function JobsPage() {
     </div>
   )
 }
-
-
