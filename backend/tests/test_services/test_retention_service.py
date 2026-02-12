@@ -243,38 +243,113 @@ class TestComputeKeepSet:
         assert tr_recent.id in result
         assert tr_old.id not in result
     
-    def test_overlapping_rules_union(self, db_session: Session):
-        """Multiple rules create union of kept backups."""
+    def test_window_start_normalizes_to_midnight(self, db_session: Session):
+        """Window start is normalized to midnight, so backups from early in the day are included."""
+        tag = _create_tag(db_session)
+        target = _create_target(db_session)
+        job = _create_job(db_session, tag)
+        
+        # Set now to afternoon (e.g., 3 PM) to test normalization
+        now = datetime.now(SERVER_TZ).replace(hour=15, minute=0, second=0, microsecond=0)
+        
+        # Backup from 5 days ago at 2 AM (should be included if window_start is normalized to midnight)
+        five_days_ago = now - timedelta(days=5)
+        backup_early = five_days_ago.replace(hour=2, minute=0, second=0, microsecond=0)
+        _, tr_early = _create_run_with_target_run(
+            db_session, job, target,
+            backup_early,
+            "/backup_early",
+        )
+        
+        # Backup from 6 days ago (should be excluded)
+        six_days_ago = now - timedelta(days=6)
+        _, tr_old = _create_run_with_target_run(
+            db_session, job, target,
+            six_days_ago,
+            "/backup_old",
+        )
+        
+        policy = {"rules": [{"unit": "day", "window": 5, "keep": 1}]}
+        result = compute_keep_set([tr_early, tr_old], policy, now=now)
+        
+        # The early backup from 5 days ago should be kept (window_start normalized to midnight)
+        assert tr_early.id in result
+        # The backup from 6 days ago should not be kept
+        assert tr_old.id not in result
+    
+    def test_hierarchical_retention_excludes_overlapping_windows(self, db_session: Session):
+        """Hierarchical retention: less granular rules exclude backups in more granular windows."""
         tag = _create_tag(db_session)
         target = _create_target(db_session)
         job = _create_job(db_session, tag)
         
         now = datetime.now(SERVER_TZ)
         
-        # Recent backup (within daily window)
+        # Backup within daily window (should be kept by daily rule)
         _, tr_daily = _create_run_with_target_run(
             db_session, job, target,
             now - timedelta(days=1),
             "/backup_daily",
         )
-        # Older backup (only within monthly window)
+        # Backup older than daily window but within monthly window (should be kept by monthly rule)
         _, tr_monthly = _create_run_with_target_run(
             db_session, job, target,
             now - timedelta(days=20),
             "/backup_monthly",
         )
+        # Backup older than monthly window but within yearly window (should be kept by yearly rule)
+        _, tr_yearly = _create_run_with_target_run(
+            db_session, job, target,
+            now - timedelta(days=400),
+            "/backup_yearly",
+        )
         
         policy = {
             "rules": [
                 {"unit": "day", "window": 7, "keep": 1},
+                {"unit": "month", "window": 3, "keep": 1},
+                {"unit": "year", "window": 2, "keep": 1},
+            ]
+        }
+        result = compute_keep_set([tr_daily, tr_monthly, tr_yearly], policy, now=now)
+        
+        # All should be kept, but by different rules (hierarchical)
+        assert tr_daily.id in result, "Daily backup should be kept by daily rule"
+        assert tr_monthly.id in result, "Monthly backup should be kept by monthly rule (outside daily window)"
+        assert tr_yearly.id in result, "Yearly backup should be kept by yearly rule (outside monthly window)"
+    
+    def test_hierarchical_retention_daily_excludes_from_monthly(self, db_session: Session):
+        """Daily backups are not also kept by monthly rule (hierarchical exclusion)."""
+        tag = _create_tag(db_session)
+        target = _create_target(db_session)
+        job = _create_job(db_session, tag)
+        
+        now = datetime.now(SERVER_TZ)
+        
+        # Backup within daily window
+        _, tr_recent = _create_run_with_target_run(
+            db_session, job, target,
+            now - timedelta(days=2),
+            "/backup_recent",
+        )
+        # Backup just outside daily window but in same month
+        _, tr_older = _create_run_with_target_run(
+            db_session, job, target,
+            now - timedelta(days=8),
+            "/backup_older",
+        )
+        
+        policy = {
+            "rules": [
+                {"unit": "day", "window": 5, "keep": 1},
                 {"unit": "month", "window": 1, "keep": 1},
             ]
         }
-        result = compute_keep_set([tr_daily, tr_monthly], policy, now=now)
+        result = compute_keep_set([tr_recent, tr_older], policy, now=now)
         
-        # Both should be kept (union of daily and monthly rules)
-        assert tr_daily.id in result
-        assert tr_monthly.id in result
+        # Both should be kept, but tr_recent by daily rule, tr_older by monthly rule
+        assert tr_recent.id in result
+        assert tr_older.id in result
 
     def test_weekly_rule_keeps_one_per_week(self, db_session: Session):
         """Weekly rule keeps only the latest backup per ISO week."""

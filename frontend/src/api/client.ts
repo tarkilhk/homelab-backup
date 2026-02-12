@@ -99,7 +99,7 @@ export type JobUpdate = Partial<{
 
 // Retention policy types
 export type RetentionRule = {
-  unit: 'day' | 'week' | 'month'
+  unit: 'day' | 'week' | 'month' | 'year'
   window: number
   keep: number
 }

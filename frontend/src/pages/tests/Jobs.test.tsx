@@ -71,8 +71,8 @@ async function defaultFetchStub(url: string, init?: RequestInit) {
       id: 101,
       job_id: 9,
       started_at: new Date().toISOString(),
-      finished_at: new Date().toISOString(),
-      status: 'success',
+      finished_at: null,
+      status: 'running',
       message: 'manual run ok',
     }), { status: 200 })
   }
@@ -349,5 +349,4 @@ describe('JobsPage', () => {
     ;(fetch as any).mockImplementation(origImpl)
   })
 })
-
 

@@ -203,8 +203,8 @@ class JobService:
         job = self.db.get(JobModel, job_id)
         if job is None:
             raise ValueError("Job not found")
-        from app.core.scheduler import run_job_immediately
-        return run_job_immediately(self.db, job_id=job.id, triggered_by=triggered_by)
+        from app.core.scheduler import trigger_job_async
+        return trigger_job_async(self.db, job_id=job.id, triggered_by=triggered_by)
 
 
 _log = logging.getLogger(__name__)

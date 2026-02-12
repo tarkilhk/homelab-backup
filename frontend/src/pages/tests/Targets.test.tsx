@@ -12,7 +12,28 @@ vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     return new Response(JSON.stringify([
       { key: 'pihole', name: 'Pi-hole', version: '1.0.0' },
       { key: 'postgres', name: 'Postgres', version: '1.0.0' },
+      { key: 'calcom', name: 'Cal.com', version: '1.0.0' },
     ]), { status: 200 })
+  }
+  if (u.endsWith('/plugins/calcom/schema')) {
+    return new Response(JSON.stringify({
+      type: 'object',
+      required: ['database_url'],
+      properties: {
+        database_url: {
+          type: 'string',
+          title: 'Database URL (Required)',
+          format: 'uri',
+          description: 'Main Cal.com DATABASE_URL. This can be a pooled/proxied connection string.',
+        },
+        database_direct_url: {
+          type: 'string',
+          title: 'Direct Database URL (Optional, Preferred for Backups)',
+          format: 'uri',
+          description: 'Use the direct PostgreSQL host (DATABASE_DIRECT_URL) when DATABASE_URL goes through PgBouncer/proxy.',
+        },
+      },
+    }), { status: 200 })
   }
   if (u.endsWith('/targets/')) {
     if (init?.method === 'POST') {
@@ -63,6 +84,14 @@ describe('TargetsPage', () => {
     fireEvent.submit(screen.getByText('Create').closest('form')!)
     await waitFor(() => expect(fetch).toHaveBeenCalled())
   })
-})
 
+  it('shows schema field help text in plugin config form', async () => {
+    render(wrapper(<TargetsPage />))
+    fireEvent.click(await screen.findByLabelText('Add Target'))
+    fireEvent.change(await screen.findByLabelText('Plugin'), { target: { value: 'calcom' } })
+
+    expect(await screen.findByText(/main cal\.com database_url/i)).toBeInTheDocument()
+    expect(await screen.findByText(/direct postgresql host/i)).toBeInTheDocument()
+  })
+})
 

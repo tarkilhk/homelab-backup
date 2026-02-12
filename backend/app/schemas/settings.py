@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field, ConfigDict
 class RetentionRule(BaseModel):
     """A single retention rule specifying how many backups to keep per time unit."""
 
-    unit: str = Field(..., description="Time unit: 'day', 'week', or 'month'")
+    unit: str = Field(..., description="Time unit: 'day', 'week', 'month', or 'year'")
     window: int = Field(..., ge=1, description="How many units back to consider (e.g., 7 for last 7 days)")
     keep: int = Field(default=1, ge=1, description="How many backups to keep per bucket (usually 1)")
 

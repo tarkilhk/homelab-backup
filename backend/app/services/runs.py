@@ -93,6 +93,7 @@ class RunService:
     def get(self, run_id: int) -> Optional[RunModel]:
         run = (
             self.db.query(RunModel)
+            .populate_existing()
             .options(
                 joinedload(RunModel.job).joinedload(JobModel.tag),
                 joinedload(RunModel.target_runs).joinedload(TargetRunModel.target),
