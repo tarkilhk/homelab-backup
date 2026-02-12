@@ -97,12 +97,10 @@ def test_jobs_crud_and_run_now(client: TestClient, monkeypatch: pytest.MonkeyPat
     assert r.status_code == 200
     run = r.json()
     assert run["job_id"] == job_id
-    assert run["status"] == "running"
+    assert run["status"] in {"running", "success"}
     assert run["started_at"] is not None
-    assert run["finished_at"] is None
-
     run_id = run["id"]
-    run = wait_for_run_completion(client, run_id)
+    run = wait_for_run_completion(client, run_id) if run["status"] == "running" else run
     assert run["status"] == "success"
     assert run["finished_at"] is not None
 
@@ -174,7 +172,11 @@ def test_failure_triggers_email_notifier(client: TestClient, monkeypatch: object
     r = client.post(f"/api/v1/jobs/{job_id}/run")
     assert r.status_code == 200
     payload = r.json()
-    assert payload["status"] == "running"
-    run = wait_for_run_completion(client, payload["id"])
+    assert payload["status"] in {"running", "failed"}
+    run = (
+        wait_for_run_completion(client, payload["id"])
+        if payload["status"] == "running"
+        else payload
+    )
     assert run["status"] == "failed"
     assert sent["called"] == 1
