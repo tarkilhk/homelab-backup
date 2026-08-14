@@ -60,6 +60,7 @@ docker run --rm -p 8080:8080 tarkilhk/homelab-backup:backend-latest
 - `GET /health` - Health check
 - `GET /ready` - Readiness check
 - `GET /metrics` - Prometheus metrics
+- `GET /api/v1/protection/targets` - Derived protection facts for every target
 - `GET /api/docs` - Swagger UI
 - `GET /api/openapi.json` - OpenAPI schema
 
@@ -73,4 +74,6 @@ Versioned application APIs are mounted under `/api/v1` (e.g., `/api/v1/targets`,
 - Plugin architecture for backup operations
 - Maintenance job scheduling and execution history tracking
 - Retention cleanup with configurable policies
+- Durable scheduled overlap and no-target outcomes in the run ledger
+- One target protection model shared by the API, Dashboard, and Prometheus metrics
 - CORS middleware enabled

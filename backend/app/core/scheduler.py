@@ -671,6 +671,18 @@ def _fail_run(db: Session, run: RunModel, *, message: str) -> None:
     db.refresh(run)
 
 
+def _skip_run(db: Session, run: RunModel, *, message: str) -> None:
+    """Mark a dispatch as skipped without presenting it as a backup attempt."""
+    finished_at = datetime.now(timezone.utc)
+    run.finished_at = finished_at
+    run.status = RunStatus.SKIPPED.value
+    run.message = message
+    run.logs_text = (run.logs_text or "") + f"\nSkipped at {finished_at.isoformat()}: {message}"
+    db.add(run)
+    db.commit()
+    db.refresh(run)
+
+
 def _run_manual_job_in_background(
     session_factory: Callable[[], Session],
     job_id: int,
@@ -808,6 +820,18 @@ def scheduled_tick_with_session(db: Session, job_id: int) -> dict:
         on_started=start_run,
     )
     if not summary.get("started"):
+        if summary.get("reason") == "overlap":
+            skipped_run = _create_run(db, job, triggered_by="scheduler")
+            _skip_run(
+                db,
+                skipped_run,
+                message="Skipped: previous run is still in progress",
+            )
+            _emit_run_finished_event(
+                job_id=job.id,
+                run=skipped_run,
+                triggered_by="scheduler",
+            )
         _log_event(
             "scheduled_tick_skipped",
             job_id=job_id,

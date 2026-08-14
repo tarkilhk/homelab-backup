@@ -8,7 +8,7 @@ Pluggable backup orchestrator for homelab services. Define targets (Pi-hole, dat
 - React/Vite frontend for managing targets, jobs, and runs
 - Maintenance job scheduling and execution history tracking
 - Retention cleanup with configurable policies
-- Prometheus metrics at `/metrics` (success/failure counts, last run timestamp)
+- Dashboard protection summary and matching target-level Prometheus metrics
 
 ## Deployment (Docker Compose)
 
@@ -110,7 +110,11 @@ services:
 4. Run the Job manually or wait for the scheduler.
 5. Verify artifacts in your host backup directory.
 
-Prometheus metrics include per-job successes/failures and last-run timestamp. See `/metrics` for details.
+The Dashboard shows schedule coverage, latest attempt, latest validated backup and
+artifact age, next run, consecutive failures, and any current protection gap for
+every target. The same facts are available from `/api/v1/protection/targets` and
+as Prometheus metrics at `/metrics`. See [docs/PROTECTION.md](docs/PROTECTION.md)
+for the exact semantics and metric names.
 
 ## Backup safety and recovery
 

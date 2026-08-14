@@ -98,8 +98,8 @@ def test_scheduled_multi_target_run_persists_every_result(
         assert all(target_run.status == TargetRunStatus.SUCCESS.value for target_run in target_runs)
 
 
-def test_overlapping_schedule_does_not_create_a_false_run(tmp_path: Path) -> None:
-    """An APScheduler overlap is a skipped tick, not a successful run."""
+def test_overlapping_schedule_persists_a_skipped_run(tmp_path: Path) -> None:
+    """An overlapping scheduler dispatch must remain visible in the audit ledger."""
 
     engine = create_engine(f"sqlite:///{tmp_path / 'overlap.db'}")
     session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -128,4 +128,103 @@ def test_overlapping_schedule_does_not_create_a_false_run(tmp_path: Path) -> Non
 
     assert summary == {"started": False, "reason": "overlap", "results": []}
     with session_factory() as audit:
-        assert audit.query(Run).count() == 0
+        runs = audit.query(Run).all()
+        assert len(runs) == 1
+        assert runs[0].status == RunStatus.SKIPPED.value
+        assert runs[0].finished_at is not None
+        assert runs[0].message == "Skipped: previous run is still in progress"
+
+
+def test_scheduled_job_with_no_targets_persists_a_failed_run(tmp_path: Path) -> None:
+    """An empty schedule must be a durable failure rather than a green no-op."""
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'no-targets.db'}")
+    session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+    with session_factory() as setup:
+        tag = Tag(display_name="empty")
+        setup.add(tag)
+        setup.flush()
+        job = Job(
+            tag_id=tag.id,
+            name="Empty backup",
+            schedule_cron="* * * * *",
+            enabled=True,
+        )
+        setup.add(job)
+        setup.commit()
+        job_id = int(job.id)
+
+    with session_factory() as scheduler_session:
+        summary = scheduled_tick_with_session(scheduler_session, job_id)
+
+    assert summary == {"started": True, "reason": "no_targets", "results": []}
+    with session_factory() as audit:
+        run = audit.query(Run).one()
+        assert run.status == RunStatus.FAILED.value
+        assert run.finished_at is not None
+        assert run.message == "Failed: no targets resolved for this job"
+
+
+def test_scheduled_retry_persists_each_target_attempt(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A retry must preserve both the failed attempt and the eventual success."""
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'retry.db'}",
+        connect_args={"check_same_thread": False, "timeout": 30},
+    )
+    session_factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    Base.metadata.create_all(bind=engine)
+
+    with session_factory() as setup:
+        tag = Tag(display_name="retry")
+        setup.add(tag)
+        setup.flush()
+        job = Job(
+            tag_id=tag.id,
+            name="Retry backup",
+            schedule_cron="* * * * *",
+            enabled=True,
+        )
+        target = Target(
+            name="Retry target",
+            slug="retry-target",
+            plugin_name="artifact-test",
+            plugin_config_json="{}",
+        )
+        setup.add_all([job, target])
+        setup.flush()
+        setup.add(TargetTag(target_id=target.id, tag_id=tag.id, origin="DIRECT"))
+        setup.commit()
+        job_id = int(job.id)
+
+    plugin = _ArtifactPlugin(tmp_path / "retry-artifacts")
+    plugin.artifact_root.mkdir()
+    attempts = 0
+    original_backup = plugin.backup
+
+    async def fail_once(context: BackupContext) -> dict[str, Any]:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("transient failure")
+        return await original_backup(context)
+
+    monkeypatch.setattr(plugin, "backup", fail_once)
+    monkeypatch.setattr("app.core.scheduler.get_plugin", lambda _name: plugin)
+
+    with session_factory() as scheduler_session:
+        summary = scheduled_tick_with_session(scheduler_session, job_id)
+
+    assert summary["results"][0]["status"] == TargetRunStatus.SUCCESS.value
+    with session_factory() as audit:
+        run = audit.query(Run).one()
+        attempts_ledger = audit.query(TargetRun).order_by(TargetRun.id).all()
+        assert run.status == RunStatus.SUCCESS.value
+        assert [attempt.status for attempt in attempts_ledger] == [
+            TargetRunStatus.FAILED.value,
+            TargetRunStatus.SUCCESS.value,
+        ]

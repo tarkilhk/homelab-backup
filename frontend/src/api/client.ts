@@ -38,7 +38,7 @@ export type Run = {
   job_id: number
   started_at: string
   finished_at?: string | null
-  status: 'running' | 'success' | 'failed' | 'partial'
+  status: 'running' | 'success' | 'failed' | 'partial' | 'skipped'
   operation?: 'backup' | 'restore'
   message?: string | null
   logs_text?: string | null
@@ -97,6 +97,44 @@ export type JobUpdate = Partial<{
   enabled: boolean
   retention_policy_json: string | null
 }>
+
+export type ProtectionGapReason =
+  | 'not_scheduled'
+  | 'never_succeeded'
+  | 'scheduled_backup_missing'
+
+export type TargetProtectionSummary = {
+  target_id: number
+  target_name: string
+  target_slug: string
+  plugin_name: string | null
+  covering_jobs: Array<{
+    job_id: number
+    name: string
+    schedule_cron: string
+    next_run_at: string
+  }>
+  latest_attempt: {
+    run_id: number
+    target_run_id: number
+    started_at: string
+    finished_at: string | null
+    status: string
+    message: string | null
+  } | null
+  latest_success: {
+    run_id: number
+    target_run_id: number
+    finished_at: string
+    artifact_path: string
+    artifact_bytes: number
+    sha256: string
+    age_seconds: number
+  } | null
+  next_run_at: string | null
+  consecutive_failures: number
+  gap_reason: ProtectionGapReason | null
+}
 
 // Retention policy types
 export type RetentionRule = {
@@ -300,6 +338,7 @@ export const api = {
   runJobNow: (id: number) => request<Run>(`/jobs/${id}/run`, { method: 'POST' }),
   // Dashboard helpers
   upcomingJobs: () => request<Array<{ job_id: number; name: string; next_run_at: string }>>('/jobs/upcoming'),
+  listProtection: () => request<TargetProtectionSummary[]>('/protection/targets'),
   // Restores
   restoreTargetRun: (payload: { artifact_path: string; destination_target_id: number; source_target_run_id?: number; triggered_by?: string }) =>
     request<RunWithJob>('/restores/', { method: 'POST', body: JSON.stringify(payload) }),

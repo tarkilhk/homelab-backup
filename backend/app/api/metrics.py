@@ -1,129 +1,88 @@
-"""Prometheus metrics endpoint.
-
-Exposes plain-text Prometheus metrics at `/metrics` without external deps.
-
-Metrics per job:
-- job_success_total{job_id, job_name}
-- job_failure_total{job_id, job_name}
-- last_run_timestamp{job_id, job_name}
-"""
+"""Prometheus metrics derived from the target protection summary."""
 
 from __future__ import annotations
 
-from typing import Dict, Tuple
-
 from fastapi import APIRouter, Depends
 from fastapi.responses import PlainTextResponse
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.db import get_session
-from app.models import Job as JobModel, Run as RunModel
-from app.domain.enums import RunOperation
-
+from app.schemas.protection import TargetProtectionSummary
+from app.services.protection import ProtectionSummaryService
 
 router = APIRouter(tags=["metrics"])
 
 
 def _sanitize_label_value(value: str) -> str:
-    """Sanitize label values for Prometheus exposition (very basic).
+    """Escape a value for Prometheus text-format labels."""
+    return value.replace("\\", r"\\").replace('"', r"\"").replace("\n", r"\n")[:200]
 
-    - Escape backslashes and quotes
-    - Trim to a reasonable length to avoid very large lines (optional)
-    """
-    safe = value.replace("\\", r"\\").replace("\"", r"\\\"")
-    # Keep label values reasonably short
-    return safe[:200]
+
+def _labels(summary: TargetProtectionSummary) -> str:
+    return (
+        f'target_id="{summary.target_id}",'
+        f'target_name="{_sanitize_label_value(summary.target_name)}",'
+        f'target_slug="{_sanitize_label_value(summary.target_slug)}"'
+    )
 
 
 @router.get("/metrics", response_class=PlainTextResponse)
 def metrics(db: Session = Depends(get_session)) -> str:
-    """Serve Prometheus metrics built from the database state."""
-    # Preload jobs for labels
-    jobs: Dict[int, str] = {j.id: j.name for j in db.query(JobModel).all()}
+    """Serve the same target protection facts used by the Dashboard."""
+    summaries = ProtectionSummaryService(db).list_targets()
+    lines = [
+        "# HELP homelab_backup_target_covering_jobs Enabled jobs currently covering the target",
+        "# TYPE homelab_backup_target_covering_jobs gauge",
+        "# HELP homelab_backup_target_latest_attempt_info Latest backup attempt outcome",
+        "# TYPE homelab_backup_target_latest_attempt_info gauge",
+        "# HELP homelab_backup_target_last_attempt_timestamp_seconds Unix timestamp of the latest backup attempt",
+        "# TYPE homelab_backup_target_last_attempt_timestamp_seconds gauge",
+        "# HELP homelab_backup_target_last_success_timestamp_seconds Unix timestamp of the latest validated backup",
+        "# TYPE homelab_backup_target_last_success_timestamp_seconds gauge",
+        "# HELP homelab_backup_target_artifact_age_seconds Age of the latest validated backup artifact",
+        "# TYPE homelab_backup_target_artifact_age_seconds gauge",
+        "# HELP homelab_backup_target_next_run_timestamp_seconds Unix timestamp of the next scheduled backup",
+        "# TYPE homelab_backup_target_next_run_timestamp_seconds gauge",
+        "# HELP homelab_backup_target_consecutive_failures Consecutive completed backup runs that failed for the target",
+        "# TYPE homelab_backup_target_consecutive_failures gauge",
+        "# HELP homelab_backup_target_gap_info Current protection gap reason",
+        "# TYPE homelab_backup_target_gap_info gauge",
+    ]
 
-    # Success and failure counts per job
-    # Explicitly filter by operation and non-null job_id to exclude restore runs
-    success_counts: Dict[int, int] = {
-        job_id: count
-        for job_id, count in (
-            db.query(RunModel.job_id, func.count())
-            .filter(
-                RunModel.status == "success",
-                RunModel.operation == RunOperation.BACKUP.value,
-                RunModel.job_id.isnot(None),
+    for summary in summaries:
+        labels = _labels(summary)
+        lines.append(
+            f"homelab_backup_target_covering_jobs{{{labels}}} {len(summary.covering_jobs)}"
+        )
+        lines.append(
+            "homelab_backup_target_consecutive_failures"
+            f"{{{labels}}} {summary.consecutive_failures}"
+        )
+        if summary.latest_attempt is not None:
+            status = _sanitize_label_value(summary.latest_attempt.status)
+            lines.append(
+                f'homelab_backup_target_latest_attempt_info{{{labels},status="{status}"}} 1'
             )
-            .group_by(RunModel.job_id)
-            .all()
-        )
-    }
-    failure_counts: Dict[int, int] = {
-        job_id: count
-        for job_id, count in (
-            db.query(RunModel.job_id, func.count())
-            .filter(
-                RunModel.status == "failed",
-                RunModel.operation == RunOperation.BACKUP.value,
-                RunModel.job_id.isnot(None),
+            lines.append(
+                "homelab_backup_target_last_attempt_timestamp_seconds"
+                f"{{{labels}}} {summary.latest_attempt.started_at.timestamp():.6f}"
             )
-            .group_by(RunModel.job_id)
-            .all()
-        )
-    }
+        if summary.latest_success is not None:
+            lines.append(
+                "homelab_backup_target_last_success_timestamp_seconds"
+                f"{{{labels}}} {summary.latest_success.finished_at.timestamp():.6f}"
+            )
+            lines.append(
+                "homelab_backup_target_artifact_age_seconds"
+                f"{{{labels}}} {summary.latest_success.age_seconds:.6f}"
+            )
+        if summary.next_run_at is not None:
+            lines.append(
+                "homelab_backup_target_next_run_timestamp_seconds"
+                f"{{{labels}}} {summary.next_run_at.timestamp():.6f}"
+            )
+        if summary.gap_reason is not None:
+            reason = _sanitize_label_value(summary.gap_reason.value)
+            lines.append(f'homelab_backup_target_gap_info{{{labels},reason="{reason}"}} 1')
 
-    # Last run timestamp per job (unix seconds). Use finished_at; fallback to started_at
-    # Explicitly filter by operation and non-null job_id to exclude restore runs
-    last_ts_rows: Tuple[int, float]
-    last_ts: Dict[int, float] = {}
-    for job_id, ts in (
-        db.query(
-            RunModel.job_id,
-            func.max(func.coalesce(RunModel.finished_at, RunModel.started_at)),
-        )
-        .filter(
-            RunModel.operation == RunOperation.BACKUP.value,
-            RunModel.job_id.isnot(None),
-        )
-        .group_by(RunModel.job_id)
-        .all()
-    ):
-        if ts is not None:
-            try:
-                last_ts[job_id] = ts.timestamp()  # type: ignore[assignment]
-            except Exception:
-                # In case of naive datetimes; SQLAlchemy/SQLite should give aware here
-                last_ts[job_id] = float(0)
-
-    # Build exposition text
-    lines: list[str] = []
-
-    lines.append("# HELP job_success_total Total number of successful job runs")
-    lines.append("# TYPE job_success_total counter")
-    for job_id, job_name in jobs.items():
-        value = int(success_counts.get(job_id, 0))
-        label_job = _sanitize_label_value(job_name)
-        lines.append(
-            f'job_success_total{{job_id="{job_id}",job_name="{label_job}"}} {value}'
-        )
-
-    lines.append("# HELP job_failure_total Total number of failed job runs")
-    lines.append("# TYPE job_failure_total counter")
-    for job_id, job_name in jobs.items():
-        value = int(failure_counts.get(job_id, 0))
-        label_job = _sanitize_label_value(job_name)
-        lines.append(
-            f'job_failure_total{{job_id="{job_id}",job_name="{label_job}"}} {value}'
-        )
-
-    lines.append("# HELP last_run_timestamp Unix timestamp of the last run per job")
-    lines.append("# TYPE last_run_timestamp gauge")
-    for job_id, job_name in jobs.items():
-        value = float(last_ts.get(job_id, 0.0))
-        label_job = _sanitize_label_value(job_name)
-        lines.append(
-            f'last_run_timestamp{{job_id="{job_id}",job_name="{label_job}"}} {value}'
-        )
-
-    body = "\n".join(lines) + "\n"
-    return body
-
+    return "\n".join(lines) + "\n"
