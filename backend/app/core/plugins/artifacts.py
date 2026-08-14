@@ -16,6 +16,7 @@ from .base import BackupContext, BackupPlugin
 from .sidecar import read_backup_sidecar, write_backup_sidecar
 
 _SAFE_COMPONENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+FILE_CACHE_EVICTION_BYTES = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,18 @@ def _fsync_directory(path: Path) -> None:
         os.fsync(directory_fd)
     finally:
         os.close(directory_fd)
+
+
+def evict_file_cache(file_descriptor: int, offset: int, length: int) -> None:
+    """Best-effort eviction of a completed file range from the Linux page cache."""
+
+    if length <= 0 or not hasattr(os, "posix_fadvise"):
+        return
+    try:
+        os.posix_fadvise(file_descriptor, offset, length, os.POSIX_FADV_DONTNEED)
+    except OSError:
+        # Cache advice must never change backup correctness or availability.
+        pass
 
 
 @contextmanager
@@ -158,8 +171,16 @@ def validate_backup_artifact(
 
     digest = hashlib.sha256()
     with path.open("rb") as artifact_file:
+        eviction_offset = 0
+        pending_eviction_bytes = 0
         for chunk in iter(lambda: artifact_file.read(1024 * 1024), b""):
             digest.update(chunk)
+            pending_eviction_bytes += len(chunk)
+            if pending_eviction_bytes >= FILE_CACHE_EVICTION_BYTES:
+                evict_file_cache(artifact_file.fileno(), eviction_offset, pending_eviction_bytes)
+                eviction_offset += pending_eviction_bytes
+                pending_eviction_bytes = 0
+        evict_file_cache(artifact_file.fileno(), eviction_offset, pending_eviction_bytes)
     return ValidatedBackupArtifact(
         path=path,
         size_bytes=size_bytes,

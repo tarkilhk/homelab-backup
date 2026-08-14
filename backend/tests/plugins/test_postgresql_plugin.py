@@ -11,16 +11,26 @@ from app.plugins.postgresql import PostgreSQLPlugin
 
 
 class DummyProcess:
-    def __init__(self, returncode=0, stdout=b"", stderr=b""):
+    def __init__(self, returncode=0, stdout=b"", stderr=b"", stdout_stream=None):
         self.returncode = returncode
         self._stdout = stdout
         self._stderr = stderr
+        self.stdout = stdout_stream
 
     async def communicate(self):
         return self._stdout, self._stderr
 
     async def wait(self):
         return self.returncode
+
+
+class DummyStream:
+    def __init__(self, *chunks):
+        self.chunks = list(chunks)
+
+    async def read(self, size):
+        assert 0 < size <= 1024 * 1024
+        return self.chunks.pop(0) if self.chunks else b""
 
 
 @pytest.mark.asyncio
@@ -88,8 +98,7 @@ async def test_backup_writes_artifact(tmp_path, monkeypatch):
     async def fake_exec(*args, **kwargs):
         assert args[0] == "pg_dump"
         assert "docker" not in args
-        kwargs["stdout"].write(b"dump data")
-        return DummyProcess(returncode=0)
+        return DummyProcess(returncode=0, stdout_stream=DummyStream(b"dump data"))
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     monkeypatch.setattr("app.plugins.postgresql.plugin.BACKUP_BASE_PATH", str(tmp_path))
@@ -114,15 +123,16 @@ async def test_backup_writes_artifact(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_backup_streams_dump_directly_to_pending_artifact(tmp_path, monkeypatch):
+async def test_backup_streams_dump_in_bounded_chunks_to_pending_artifact(tmp_path, monkeypatch):
     dump_chunk = b"x" * (1024 * 1024)
 
     async def fake_exec(*args, **kwargs):
-        output = kwargs["stdout"]
-        assert output != asyncio.subprocess.PIPE
-        for _ in range(8):
-            output.write(dump_chunk)
-        return DummyProcess(returncode=0, stderr=b"")
+        assert kwargs["stdout"] == asyncio.subprocess.PIPE
+        return DummyProcess(
+            returncode=0,
+            stderr=b"",
+            stdout_stream=DummyStream(*([dump_chunk] * 8)),
+        )
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     monkeypatch.setattr("app.plugins.postgresql.plugin.BACKUP_BASE_PATH", str(tmp_path))
@@ -149,13 +159,14 @@ async def test_backup_streams_dump_directly_to_pending_artifact(tmp_path, monkey
 @pytest.mark.asyncio
 async def test_failed_backup_cleans_partial_output_without_buffering_stderr(tmp_path, monkeypatch):
     async def fake_exec(*args, **kwargs):
-        output = kwargs["stdout"]
         error_output = kwargs["stderr"]
-        assert output != asyncio.subprocess.PIPE
+        assert kwargs["stdout"] == asyncio.subprocess.PIPE
         assert error_output != asyncio.subprocess.PIPE
-        output.write(b"partial dump")
         error_output.write(b"connection refused" + b"x" * (128 * 1024))
-        return DummyProcess(returncode=1)
+        return DummyProcess(
+            returncode=1,
+            stdout_stream=DummyStream(b"partial dump"),
+        )
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     monkeypatch.setattr("app.plugins.postgresql.plugin.BACKUP_BASE_PATH", str(tmp_path))
@@ -190,8 +201,10 @@ async def test_backup_all_databases_uses_pg_dumpall(tmp_path, monkeypatch):
         assert args[0] == "pg_dumpall"
         assert "docker" not in args
         assert "pg_dump" not in args  # Ensure pg_dump is not used
-        kwargs["stdout"].write(b"all databases dump data")
-        return DummyProcess(returncode=0)
+        return DummyProcess(
+            returncode=0,
+            stdout_stream=DummyStream(b"all databases dump data"),
+        )
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     monkeypatch.setattr("app.plugins.postgresql.plugin.BACKUP_BASE_PATH", str(tmp_path))

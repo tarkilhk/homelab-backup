@@ -145,6 +145,38 @@ def test_validation_rejects_artifact_without_sidecar(
         validate_backup_artifact(str(artifact), _Plugin(), context)
 
 
+def test_backup_validation_hashes_while_evicting_completed_ranges(
+    tmp_path: Path,
+    context: BackupContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plugin = _Plugin()
+    payload = b"x" * (9 * 1024 * 1024 + 17)
+    with create_backup_artifact(
+        plugin,
+        context,
+        prefix="large",
+        suffix=".bin",
+        backup_root=tmp_path,
+    ) as artifact:
+        artifact.temporary_path.write_bytes(payload)
+    evicted_ranges: list[tuple[int, int]] = []
+
+    def record_eviction(file_descriptor: int, offset: int, length: int) -> None:
+        assert file_descriptor >= 0
+        evicted_ranges.append((offset, length))
+
+    monkeypatch.setattr("app.core.plugins.artifacts.evict_file_cache", record_eviction)
+
+    validated = validate_backup_artifact(str(artifact.final_path), plugin, context)
+
+    assert validated.sha256 == hashlib.sha256(payload).hexdigest()
+    assert evicted_ranges == [
+        (0, 8 * 1024 * 1024),
+        (8 * 1024 * 1024, 1024 * 1024 + 17),
+    ]
+
+
 def test_restore_validation_checks_root_plugin_size_and_hash(
     tmp_path: Path,
     context: BackupContext,

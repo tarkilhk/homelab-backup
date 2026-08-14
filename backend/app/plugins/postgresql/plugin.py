@@ -7,12 +7,14 @@ import tempfile
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-from app.core.plugins.artifacts import create_backup_artifact
+from app.core.plugins.artifacts import create_backup_artifact, evict_file_cache
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
 from app.core.plugins.restore_utils import copy_artifact_for_restore
 
 BACKUP_BASE_PATH = "/backups"
 MAX_ERROR_BYTES = 64 * 1024
+STREAM_CHUNK_BYTES = 1024 * 1024
+FILE_CACHE_FLUSH_BYTES = 8 * 1024 * 1024
 
 
 class PostgreSQLPlugin(BackupPlugin):
@@ -151,9 +153,33 @@ class PostgreSQLPlugin(BackupPlugin):
                 ):
                     proc = await asyncio.create_subprocess_exec(
                         *cmd,
-                        stdout=artifact_file,
+                        stdout=asyncio.subprocess.PIPE,
                         stderr=error_file,
                         env=env,
+                    )
+                    if proc.stdout is None:
+                        raise RuntimeError("pg_dump stdout pipe was not created")
+                    eviction_offset = 0
+                    pending_eviction_bytes = 0
+                    while chunk := await proc.stdout.read(STREAM_CHUNK_BYTES):
+                        artifact_file.write(chunk)
+                        pending_eviction_bytes += len(chunk)
+                        if pending_eviction_bytes >= FILE_CACHE_FLUSH_BYTES:
+                            artifact_file.flush()
+                            os.fsync(artifact_file.fileno())
+                            evict_file_cache(
+                                artifact_file.fileno(),
+                                eviction_offset,
+                                pending_eviction_bytes,
+                            )
+                            eviction_offset += pending_eviction_bytes
+                            pending_eviction_bytes = 0
+                    artifact_file.flush()
+                    os.fsync(artifact_file.fileno())
+                    evict_file_cache(
+                        artifact_file.fileno(),
+                        eviction_offset,
+                        pending_eviction_bytes,
                     )
                     returncode = await proc.wait()
                     error_file.seek(0)
