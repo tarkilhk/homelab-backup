@@ -2,6 +2,7 @@ import asyncio
 import os
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -17,6 +18,9 @@ class DummyProcess:
 
     async def communicate(self):
         return self._stdout, self._stderr
+
+    async def wait(self):
+        return self.returncode
 
 
 @pytest.mark.asyncio
@@ -84,7 +88,8 @@ async def test_backup_writes_artifact(tmp_path, monkeypatch):
     async def fake_exec(*args, **kwargs):
         assert args[0] == "pg_dump"
         assert "docker" not in args
-        return DummyProcess(returncode=0, stdout=b"dump data")
+        kwargs["stdout"].write(b"dump data")
+        return DummyProcess(returncode=0)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     monkeypatch.setattr("app.plugins.postgresql.plugin.BACKUP_BASE_PATH", str(tmp_path))
@@ -109,6 +114,75 @@ async def test_backup_writes_artifact(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_backup_streams_dump_directly_to_pending_artifact(tmp_path, monkeypatch):
+    dump_chunk = b"x" * (1024 * 1024)
+
+    async def fake_exec(*args, **kwargs):
+        output = kwargs["stdout"]
+        assert output != asyncio.subprocess.PIPE
+        for _ in range(8):
+            output.write(dump_chunk)
+        return DummyProcess(returncode=0, stderr=b"")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr("app.plugins.postgresql.plugin.BACKUP_BASE_PATH", str(tmp_path))
+    plugin = PostgreSQLPlugin(name="postgresql")
+    ctx = BackupContext(
+        job_id="1",
+        target_id="1",
+        config={
+            "host": "localhost",
+            "user": "user",
+            "password": "pw",
+            "database": "db",
+        },
+        metadata={"target_slug": "slug"},
+    )
+
+    result = await plugin.backup(ctx)
+
+    artifact_path = Path(result["artifact_path"])
+    assert artifact_path.stat().st_size == 8 * 1024 * 1024
+    assert Path(f"{artifact_path}.meta.json").is_file()
+
+
+@pytest.mark.asyncio
+async def test_failed_backup_cleans_partial_output_without_buffering_stderr(tmp_path, monkeypatch):
+    async def fake_exec(*args, **kwargs):
+        output = kwargs["stdout"]
+        error_output = kwargs["stderr"]
+        assert output != asyncio.subprocess.PIPE
+        assert error_output != asyncio.subprocess.PIPE
+        output.write(b"partial dump")
+        error_output.write(b"connection refused" + b"x" * (128 * 1024))
+        return DummyProcess(returncode=1)
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr("app.plugins.postgresql.plugin.BACKUP_BASE_PATH", str(tmp_path))
+    plugin = PostgreSQLPlugin(name="postgresql")
+    ctx = BackupContext(
+        job_id="1",
+        target_id="1",
+        config={
+            "host": "localhost",
+            "user": "user",
+            "password": "pw",
+            "database": "db",
+        },
+        metadata={"target_slug": "slug"},
+    )
+
+    with pytest.raises(RuntimeError) as exc_info:
+        await plugin.backup(ctx)
+
+    error = str(exc_info.value)
+    assert "connection refused" in error
+    assert error.endswith("[truncated]")
+    assert len(error.encode()) < 66 * 1024
+    assert not [path for path in tmp_path.rglob("*") if path.is_file()]
+
+
+@pytest.mark.asyncio
 async def test_backup_all_databases_uses_pg_dumpall(tmp_path, monkeypatch):
     """Backup should use pg_dumpall when database field is empty."""
 
@@ -116,7 +190,8 @@ async def test_backup_all_databases_uses_pg_dumpall(tmp_path, monkeypatch):
         assert args[0] == "pg_dumpall"
         assert "docker" not in args
         assert "pg_dump" not in args  # Ensure pg_dump is not used
-        return DummyProcess(returncode=0, stdout=b"all databases dump data")
+        kwargs["stdout"].write(b"all databases dump data")
+        return DummyProcess(returncode=0)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     monkeypatch.setattr("app.plugins.postgresql.plugin.BACKUP_BASE_PATH", str(tmp_path))

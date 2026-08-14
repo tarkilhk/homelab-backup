@@ -3,14 +3,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import tempfile
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-from app.core.plugins.artifacts import write_backup_bytes
+from app.core.plugins.artifacts import create_backup_artifact
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
 from app.core.plugins.restore_utils import copy_artifact_for_restore
 
 BACKUP_BASE_PATH = "/backups"
+MAX_ERROR_BYTES = 64 * 1024
 
 
 class PostgreSQLPlugin(BackupPlugin):
@@ -135,36 +137,44 @@ class PostgreSQLPlugin(BackupPlugin):
 
         self._logger.info(log_msg)
 
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
-            stdout_data, stderr_data = await proc.communicate()
-        except OSError as exc:
-            self._logger.error(
-                "pg_dump_exec_error | job_id=%s target_id=%s error=%s",
-                context.job_id,
-                context.target_id,
-                exc,
-            )
-            raise
-        if proc.returncode != 0:
-            err = stderr_data.decode(errors="ignore").strip()
-            cmd_name = "pg_dumpall" if not database else "pg_dump"
-            raise RuntimeError(f"{cmd_name} failed: {err}")
-
-        artifact_path = write_backup_bytes(
+        with create_backup_artifact(
             self,
             context,
-            stdout_data,
             prefix=artifact_prefix,
             suffix=".sql",
             backup_root=BACKUP_BASE_PATH,
-        )
-        return {"artifact_path": artifact_path}
+        ) as artifact:
+            try:
+                with (
+                    artifact.temporary_path.open("wb") as artifact_file,
+                    tempfile.TemporaryFile(mode="w+b") as error_file,
+                ):
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=artifact_file,
+                        stderr=error_file,
+                        env=env,
+                    )
+                    returncode = await proc.wait()
+                    error_file.seek(0)
+                    stderr_data = error_file.read(MAX_ERROR_BYTES + 1)
+            except OSError as exc:
+                self._logger.error(
+                    "pg_dump_exec_error | job_id=%s target_id=%s error=%s",
+                    context.job_id,
+                    context.target_id,
+                    exc,
+                )
+                raise
+            if returncode != 0:
+                error_was_truncated = len(stderr_data) > MAX_ERROR_BYTES
+                err = stderr_data[:MAX_ERROR_BYTES].decode(errors="ignore").strip()
+                if error_was_truncated:
+                    err = f"{err} [truncated]"
+                cmd_name = "pg_dumpall" if not database else "pg_dump"
+                raise RuntimeError(f"{cmd_name} failed: {err}")
+
+        return {"artifact_path": str(artifact.final_path)}
 
     async def restore(self, context: RestoreContext) -> Dict[str, Any]:
         """Restore a PostgreSQL database from a SQL dump file using psql.
