@@ -8,13 +8,11 @@ from app.models import (
 )
 """
 
-from .common import slugify, ValidationError422, validate_cron_expression  # noqa: F401
+from .common import ValidationError422, slugify, validate_cron_expression  # noqa: F401
 from .groups import Group  # noqa: F401
-from .targets import Target  # noqa: F401
 from .jobs import Job  # noqa: F401
-from .runs import Run, TargetRun  # noqa: F401
-from .tags import Tag, GroupTag, TargetTag  # noqa: F401
-from .settings import Settings  # noqa: F401
 from .maintenance import MaintenanceJob, MaintenanceRun  # noqa: F401
-
-
+from .runs import Run, TargetRun  # noqa: F401
+from .settings import Settings  # noqa: F401
+from .tags import GroupTag, Tag, TargetTag  # noqa: F401
+from .targets import Target  # noqa: F401

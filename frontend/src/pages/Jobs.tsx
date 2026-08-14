@@ -1,10 +1,10 @@
 import { useParams, useLocation } from 'react-router-dom'
-import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient, useQueries } from '@tanstack/react-query'
 import { api, type JobCreate, type Job, type Tag, type TagTargetAttachment, type RetentionRule, type RetentionPolicy } from '../api/client'
 import { formatLocalDateTime } from '../lib/dates'
 import { Button } from '../components/ui/button'
-import { useConfirm } from '../components/ConfirmProvider'
+import { useConfirm } from '../components/confirm-context'
 import {
   Trash2,
   Pencil,
@@ -129,12 +129,12 @@ export default function JobsPage() {
   }
 
   // Reset retention state
-  const resetRetentionState = () => {
+  const resetRetentionState = useCallback(() => {
     setRetentionOverride('global')
     setRetentionDaily(7)
     setRetentionWeekly(4)
     setRetentionMonthly(6)
-  }
+  }, [])
 
   // Track whether the user has opted-in to dynamic name suggestions via the
   // sparkles button. When false, we never modify a non-empty name.
@@ -225,7 +225,7 @@ export default function JobsPage() {
     return null
   }
 
-  const humanCron = useMemo(() => cronToHuman(form.schedule_cron), [form.schedule_cron])
+  const humanCron = cronToHuman(form.schedule_cron)
 
   // Infer prefix from cron for label updates
   function inferPrefixFromCron(cron: string): string | null {
@@ -412,7 +412,7 @@ export default function JobsPage() {
   }, [targetId, autoTagId, showEditor, editingId])
 
   // Cancel editing helper (used by Cancel button and Escape key)
-  function cancelEditing(): void {
+  const cancelEditing = useCallback((): void => {
     setEditingId(null)
     if (Number.isFinite(targetId as number) && target) {
       setForm({ name: `${target.name} Backup`, schedule_cron: '0 2 * * *', enabled: 'true' })
@@ -423,7 +423,7 @@ export default function JobsPage() {
     setNameSuggested(false)
     resetRetentionState()
     setShowEditor(false)
-  }
+  }, [resetRetentionState, target, targetId])
 
   // Global Escape handler to cancel edit when editor is open
   useEffect(() => {
@@ -435,7 +435,7 @@ export default function JobsPage() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [showEditor, editingId, target, targetId])
+  }, [cancelEditing, editingId, showEditor])
 
   return (
     <div className="space-y-6">
@@ -815,7 +815,11 @@ export default function JobsPage() {
                       e.preventDefault()
                       const row = e.currentTarget as HTMLElement
                       row.classList.add('select-none')
-                      try { window.getSelection()?.removeAllRanges?.() } catch {}
+                      try {
+                        window.getSelection()?.removeAllRanges()
+                      } catch {
+                        // Selection cleanup is best-effort.
+                      }
                       window.setTimeout(() => row.classList.remove('select-none'), 300)
                       setEditingId(j.id)
                       setForm({ name: j.name, schedule_cron: j.schedule_cron, enabled: String(j.enabled) as 'true' | 'false' })
@@ -865,7 +869,7 @@ export default function JobsPage() {
                               setRunPendingByJobId((prev) => ({ ...prev, [j.id]: true }))
                               await runNowMut.mutateAsync(j.id)
                               setRunStatusByJobId((prev) => ({ ...prev, [j.id]: 'success' }))
-                            } catch (err) {
+                            } catch {
                               setRunStatusByJobId((prev) => ({ ...prev, [j.id]: 'error' }))
                             } finally {
                               setRunPendingByJobId((prev) => ({ ...prev, [j.id]: false }))

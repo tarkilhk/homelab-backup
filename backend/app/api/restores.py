@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.db import get_session
+from app.models import Run as RunModel
 from app.schemas import RunWithJob
 from app.services import RestoreService
 
@@ -22,7 +23,7 @@ router = APIRouter(prefix="/restores", tags=["restores"])
 
 
 @router.post("/", response_model=RunWithJob, status_code=status.HTTP_201_CREATED)
-def trigger_restore(payload: RestoreRequest, db: Session = Depends(get_session)) -> RunWithJob:
+def trigger_restore(payload: RestoreRequest, db: Session = Depends(get_session)) -> RunModel:
     svc = RestoreService(db)
     try:
         run = svc.restore_from_path(

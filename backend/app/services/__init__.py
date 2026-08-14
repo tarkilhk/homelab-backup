@@ -8,15 +8,15 @@ Exposes:
 - RunService
 """
 
-from .tags import TagService
-from .groups import GroupService
-from .targets import TargetService
-from .jobs import JobService
-from .runs import RunService
-from .restores import RestoreService
 from .backups_from_disk import BackupsFromDiskService
-from .retention import RetentionService
+from .groups import GroupService
+from .jobs import JobService
 from .maintenance import MaintenanceService
+from .restores import RestoreService
+from .retention import RetentionService
+from .runs import RunService
+from .tags import TagService
+from .targets import TargetService
 
 __all__ = [
     "TagService",
@@ -29,4 +29,3 @@ __all__ = [
     "RetentionService",
     "MaintenanceService",
 ]
-

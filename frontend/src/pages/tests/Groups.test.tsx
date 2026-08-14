@@ -77,6 +77,7 @@ async function defaultFetchStub(url: string, init?: RequestInit) {
 }
 
 vi.stubGlobal('fetch', vi.fn(defaultFetchStub))
+const fetchMock = vi.mocked(fetch)
 
 function renderWithProviders(route: string) {
   const qc = new QueryClient()
@@ -94,7 +95,7 @@ function renderWithProviders(route: string) {
 
 describe('GroupsPage', () => {
   beforeEach(() => {
-    ;(fetch as any).mockClear()
+    ;fetchMock.mockClear()
   })
   afterEach(() => cleanup())
 
@@ -110,7 +111,7 @@ describe('GroupsPage', () => {
     const descInput = (await screen.findByLabelText('Description')) as HTMLInputElement
     fireEvent.change(descInput, { target: { value: 'Critical infra' } })
     fireEvent.submit((await screen.findByRole('button', { name: 'Create Group' })).closest('form')!)
-    await waitFor(() => expect((fetch as any).mock.calls.some((c: any[]) => c[0].toString().endsWith('/groups/') && c[1]?.method === 'POST')).toBe(true))
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => c[0].toString().endsWith('/groups/') && c[1]?.method === 'POST')).toBe(true))
   })
 
   it('edits and deletes a group', async () => {
@@ -121,12 +122,12 @@ describe('GroupsPage', () => {
     fireEvent.click(await screen.findByLabelText('Edit'))
     const saveBtn = await screen.findByText('Save')
     fireEvent.submit(saveBtn.closest('form')!)
-    await waitFor(() => expect((fetch as any).mock.calls.some((c: any[]) => c[0].toString().endsWith('/groups/1') && c[1]?.method === 'PUT')).toBe(true))
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => c[0].toString().endsWith('/groups/1') && c[1]?.method === 'PUT')).toBe(true))
     // Delete
     fireEvent.click(await screen.findByLabelText('Delete'))
     const ok = await screen.findByRole('button', { name: 'OK' })
     fireEvent.click(ok)
-    await waitFor(() => expect((fetch as any).mock.calls.some((c: any[]) => c[0].toString().endsWith('/groups/1') && c[1]?.method === 'DELETE')).toBe(true))
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => c[0].toString().endsWith('/groups/1') && c[1]?.method === 'DELETE')).toBe(true))
   })
 
   it('manages group membership', async () => {
@@ -149,7 +150,7 @@ describe('GroupsPage', () => {
     // Persist via the top Save button
     const saveBtn1 = await screen.findByText('Save')
     fireEvent.submit(saveBtn1.closest('form')!)
-    await waitFor(() => expect((fetch as any).mock.calls.some((c: any[]) => c[0].toString().endsWith('/groups/1/targets') && c[1]?.method === 'POST')).toBe(true))
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => c[0].toString().endsWith('/groups/1/targets') && c[1]?.method === 'POST')).toBe(true))
   })
 
   it('adds a target to a group on double-click in the multi-select', async () => {
@@ -160,13 +161,13 @@ describe('GroupsPage', () => {
     const groupSelect = await screen.findByLabelText('Group')
     fireEvent.change(groupSelect, { target: { value: '1' } })
 
-    const targetList = await screen.findByRole('listbox', { name: 'Targets' })
+    await screen.findByRole('listbox', { name: 'Targets' })
     const nasOption = await screen.findByRole('option', { name: 'NAS' })
     fireEvent.doubleClick(nasOption)
     const saveBtn2 = await screen.findByText('Save')
     fireEvent.submit(saveBtn2.closest('form')!)
     await waitFor(() =>
-      expect((fetch as any).mock.calls.some((c: any[]) => c[0].toString().endsWith('/groups/1/targets') && c[1]?.method === 'POST')).toBe(true)
+      expect(fetchMock.mock.calls.some((c) => c[0].toString().endsWith('/groups/1/targets') && c[1]?.method === 'POST')).toBe(true)
     )
   })
 
@@ -187,8 +188,6 @@ describe('GroupsPage', () => {
     fireEvent.doubleClick(piHoleOption)
     const saveBtn3 = await screen.findByText('Save')
     fireEvent.submit(saveBtn3.closest('form')!)
-    await waitFor(() => expect((fetch as any).mock.calls.some((c: any[]) => c[0].toString().endsWith('/groups/1/targets') && c[1]?.method === 'DELETE')).toBe(true))
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => c[0].toString().endsWith('/groups/1/targets') && c[1]?.method === 'DELETE')).toBe(true))
   })
 })
-
-

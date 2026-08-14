@@ -6,12 +6,10 @@ from typing import List, Optional
 from sqlalchemy.orm import Session, joinedload
 
 from app.domain.enums import RunOperation
-from app.models import (
-    Run as RunModel,
-    Job as JobModel,
-    TargetTag as TargetTagModel,
-    TargetRun as TargetRunModel,
-)
+from app.models import Job as JobModel
+from app.models import Run as RunModel
+from app.models import TargetRun as TargetRunModel
+from app.models import TargetTag as TargetTagModel
 
 
 def _assign_display_fields(run: RunModel) -> None:
@@ -21,7 +19,7 @@ def _assign_display_fields(run: RunModel) -> None:
         job_name = run.job.name
     elif run.job_id is not None:
         job_name = f"Job #{run.job_id}"
-    
+
     tag_name = None
     if getattr(run, "job", None) and run.job is not None and getattr(run.job, "tag", None):
         tag_name = run.job.tag.display_name
@@ -40,8 +38,8 @@ def _assign_display_fields(run: RunModel) -> None:
             display_tag_name = destination_target.name
         else:
             display_job_name = "Target Restore"
-    run.display_job_name = display_job_name
-    run.display_tag_name = display_tag_name
+    setattr(run, "display_job_name", display_job_name)
+    setattr(run, "display_tag_name", display_tag_name)
 
 
 class RunService:
@@ -77,9 +75,8 @@ class RunService:
         if target_id:
             # Filter runs whose job is associated with the target via tag linkage
             # This will exclude restore runs (which have NULL job_id)
-            query = (
-                query.join(TargetTagModel, TargetTagModel.tag_id == JobModel.tag_id)
-                .filter(TargetTagModel.target_id == target_id)
+            query = query.join(TargetTagModel, TargetTagModel.tag_id == JobModel.tag_id).filter(
+                TargetTagModel.target_id == target_id
             )
         if tag_id:
             # Filter by tag_id - this will exclude restore runs (which have NULL job_id)

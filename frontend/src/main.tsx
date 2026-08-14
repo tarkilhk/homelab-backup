@@ -8,22 +8,21 @@ import './index.css'
 import { initThemeFromStorage } from './lib/theme'
 import { ConfirmProvider } from './components/ConfirmProvider'
 import { getRoutes } from './routes'
+import { getErrorMessage } from './lib/errors'
 
 initThemeFromStorage()
 
-const router = createBrowserRouter(getRoutes() as any)
+const router = createBrowserRouter(getRoutes())
 
 const queryClient = new QueryClient({
   queryCache: new QueryCache({
     onError: (error) => {
-      const message = (error as any)?.message || 'Request failed'
-      toast.error(message)
+      toast.error(getErrorMessage(error))
     },
   }),
   mutationCache: new MutationCache({
     onError: (error) => {
-      const message = (error as any)?.message || 'Request failed'
-      toast.error(message)
+      toast.error(getErrorMessage(error))
     },
   }),
   defaultOptions: {

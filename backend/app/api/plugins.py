@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import json
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
-from fastapi import APIRouter, HTTPException, Body
+from fastapi import APIRouter, Body, HTTPException
 from fastapi.responses import JSONResponse
 
-from app.core.plugins.loader import list_plugins, get_plugin_schema_path, get_plugin
-
+from app.core.plugins.loader import get_plugin, get_plugin_schema_path, list_plugins
 
 router = APIRouter(prefix="/plugins", tags=["plugins"])
 
@@ -48,5 +47,3 @@ async def test_plugin_connectivity(key: str, config: Dict[str, Any] = Body(...))
     if not ok:
         return JSONResponse(content={"ok": False, "error": "Connection test failed"})
     return JSONResponse(content={"ok": True})
-
-

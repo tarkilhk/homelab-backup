@@ -10,8 +10,9 @@ import OptionsPage from './pages/Options'
 import MaintenanceJobsPage from './pages/MaintenanceJobs'
 import ErrorPage from './pages/ErrorPage'
 import NotFoundPage from './pages/NotFound'
+import type { RouteObject } from 'react-router-dom'
 
-export function getRoutes() {
+export function getRoutes(): RouteObject[] {
   return [
     {
       path: '/',
@@ -32,7 +33,6 @@ export function getRoutes() {
         { path: '*', element: <NotFoundPage /> },
       ],
     },
-  ] as const
+  ]
 }
-
 

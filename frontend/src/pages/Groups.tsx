@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type Group, type GroupWithTargets, type Target } from '../api/client'
 import AppCard from '../components/ui/AppCard'
 import IconButton from '../components/IconButton'
 import { Button } from '../components/ui/button'
-import { useConfirm } from '../components/ConfirmProvider'
+import { useConfirm } from '../components/confirm-context'
 import MultiSelectList from '../components/MultiSelectList'
 import { Plus, Pencil, Trash2 } from 'lucide-react'
 import { formatLocalDateTime } from '../lib/dates'
@@ -61,6 +61,11 @@ export default function GroupsPage() {
     queryFn: () => api.getGroupTargets(selectedGroupId as number),
     enabled: Number.isFinite(selectedGroupId as number),
   })
+
+  const serverTargetIds = useMemo(
+    () => (groupWithTargets?.targets ?? []).map((target) => target.id),
+    [groupWithTargets],
+  )
   
 
   const addTargetsMut = useMutation({
@@ -82,11 +87,10 @@ export default function GroupsPage() {
 
   // Initialize working members whenever selected group or server members change
   useEffect(() => {
-    const serverIds = ((groupWithTargets as GroupWithTargets | undefined)?.targets ?? []).map((t) => t.id)
-    setWorkingMemberIds(serverIds)
+    setWorkingMemberIds(serverTargetIds)
     setSelectedTargetIds([])
     setSelectedMemberIds([])
-  }, [selectedGroupId, (groupWithTargets as GroupWithTargets | undefined)?.targets?.map((t) => t.id).join(',')])
+  }, [selectedGroupId, serverTargetIds])
 
   // Derived lists for transfer UI (use workingMemberIds)
   const currentMembers: Target[] = (targets ?? []).filter((t) => workingMemberIds.includes(t.id))
@@ -158,7 +162,7 @@ export default function GroupsPage() {
                 const workingSet = new Set(workingMemberIds)
                 const toAdd = Array.from(workingSet).filter((id) => !serverSet.has(id))
                 const toRemove = Array.from(serverSet).filter((id) => !workingSet.has(id))
-                const ops: Promise<any>[] = []
+                const ops: Promise<unknown>[] = []
                 if (toAdd.length > 0) ops.push(addTargetsMut.mutateAsync({ id: editingId, ids: toAdd }))
                 if (toRemove.length > 0) ops.push(removeTargetsMut.mutateAsync({ id: editingId, ids: toRemove }))
                 if (ops.length) await Promise.all(ops)
@@ -337,7 +341,11 @@ export default function GroupsPage() {
                   e.preventDefault()
                   const row = e.currentTarget as HTMLElement
                   row.classList.add('select-none')
-                  try { window.getSelection()?.removeAllRanges?.() } catch {}
+                  try {
+                    window.getSelection()?.removeAllRanges()
+                  } catch {
+                    // Selection cleanup is best-effort.
+                  }
                   window.setTimeout(() => row.classList.remove('select-none'), 300)
                   setEditingId(g.id)
                   setForm({ name: g.name, description: g.description ?? '' })
@@ -386,5 +394,3 @@ export default function GroupsPage() {
     </div>
   )
 }
-
-

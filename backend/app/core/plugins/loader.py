@@ -12,6 +12,7 @@ import importlib
 import inspect
 import logging
 import os
+from types import ModuleType
 from typing import Dict, Iterable, List, Optional, Type
 
 from app.core.plugins.base import BackupPlugin
@@ -22,7 +23,7 @@ _REGISTRY: Dict[str, Type[BackupPlugin]] = {}
 logger = logging.getLogger(__name__)
 
 
-def _iter_subclasses_in_module(module) -> Iterable[Type[BackupPlugin]]:
+def _iter_subclasses_in_module(module: ModuleType) -> Iterable[Type[BackupPlugin]]:
     """Yield all `BackupPlugin` subclasses defined or re-exported by a module."""
     for _, obj in inspect.getmembers(module, inspect.isclass):
         try:

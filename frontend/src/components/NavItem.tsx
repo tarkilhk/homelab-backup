@@ -1,7 +1,8 @@
 import { NavLink } from 'react-router-dom'
+import type { LucideIcon } from 'lucide-react'
 import { cn } from '../lib/cn'
 
-export default function NavItem({ to, icon: Icon, label, end }: { to: string; icon: React.ComponentType<any>; label: string; end?: boolean }) {
+export default function NavItem({ to, icon: Icon, label, end }: { to: string; icon: LucideIcon; label: string; end?: boolean }) {
   return (
     <NavLink
       to={to}
@@ -16,5 +17,4 @@ export default function NavItem({ to, icon: Icon, label, end }: { to: string; ic
     </NavLink>
   )
 }
-
 

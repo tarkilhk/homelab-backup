@@ -1,18 +1,26 @@
 from __future__ import annotations
 
-from typing import Optional, List
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, List, Optional
 
-from pydantic import BaseModel, Field, ConfigDict
-from app.domain.enums import RunStatus, RunOperation, TargetRunOperation
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.domain.enums import RunOperation, RunStatus, TargetRunOperation
+
+if TYPE_CHECKING:
+    from .jobs import Job
 
 
 class RunBase(BaseModel):
     """Base schema for Run model."""
 
-    job_id: Optional[int] = Field(None, description="ID of the associated job (null for restore operations)")
+    job_id: Optional[int] = Field(
+        None, description="ID of the associated job (null for restore operations)"
+    )
     status: RunStatus = Field(..., description="Status of the run")
-    operation: RunOperation = Field(default=RunOperation.BACKUP, description="Operation performed by the run")
+    operation: RunOperation = Field(
+        default=RunOperation.BACKUP, description="Operation performed by the run"
+    )
     message: Optional[str] = Field(None, description="Error message or success message")
     logs_text: Optional[str] = Field(None, description="Log output from the backup process")
 
@@ -20,7 +28,9 @@ class RunBase(BaseModel):
 class RunCreate(RunBase):
     """Schema for creating a new Run."""
 
-    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), description="Start timestamp")
+    started_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc), description="Start timestamp"
+    )
 
 
 class RunUpdate(BaseModel):
@@ -48,13 +58,16 @@ class Run(RunBase):
 
 class TargetRun(BaseModel):
     """Per-target execution details for a Run."""
+
     id: int
     run_id: int
     target_id: int
     started_at: datetime
     finished_at: Optional[datetime] = None
     status: str
-    operation: TargetRunOperation = Field(default=TargetRunOperation.BACKUP, description="Operation performed for the target")
+    operation: TargetRunOperation = Field(
+        default=TargetRunOperation.BACKUP, description="Operation performed for the target"
+    )
     message: Optional[str] = None
     artifact_path: Optional[str] = None
     artifact_bytes: Optional[int] = None
@@ -68,4 +81,6 @@ class RunWithJob(Run):
     """Schema for Run with related Job."""
 
     job: Optional["Job"] = Field(None, description="Associated job (null for restore operations)")
-    target_runs: List[TargetRun] = Field(default_factory=list, description="Per-target execution results")
+    target_runs: List[TargetRun] = Field(
+        default_factory=list, description="Per-target execution results"
+    )

@@ -4,16 +4,16 @@ from __future__ import annotations
 
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, status, Response
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.db import get_session
-from app.models import Tag as TagModel, Target as TargetModel, TargetTag as TargetTagModel
+from app.models import Tag as TagModel
+from app.models import Target as TargetModel
+from app.models import TargetTag as TargetTagModel
 from app.schemas import Tag as TagSchema
-from app.schemas import TagTargetAttachment
-from app.schemas import TagCreate
+from app.schemas import TagCreate, TagTargetAttachment
 from app.services import TagService
-
 
 router = APIRouter(prefix="/tags", tags=["tags"])
 
@@ -68,6 +68,7 @@ def list_targets_for_tag(tag_id: int, db: Session = Depends(get_session)) -> Lis
 @router.delete("/{tag_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
 def delete_tag(tag_id: int, db: Session = Depends(get_session)) -> Response:
     from sqlalchemy.exc import IntegrityError
+
     svc = TagService(db)
     try:
         ok = svc.delete(tag_id)
@@ -76,5 +77,3 @@ def delete_tag(tag_id: int, db: Session = Depends(get_session)) -> Response:
     if not ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-

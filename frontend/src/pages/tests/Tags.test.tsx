@@ -50,6 +50,7 @@ async function defaultFetchStub(url: string, init?: RequestInit) {
 }
 
 vi.stubGlobal('fetch', vi.fn(defaultFetchStub))
+const fetchMock = vi.mocked(fetch)
 
 function renderWithProviders(route: string) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -67,7 +68,7 @@ function renderWithProviders(route: string) {
 
 describe('TagsPage', () => {
   beforeEach(() => {
-    ;(fetch as any).mockClear?.()
+    ;fetchMock.mockClear?.()
   })
   afterEach(() => cleanup())
 
@@ -102,7 +103,7 @@ describe('TagsPage', () => {
     fireEvent.click(delBtn)
     const ok = await screen.findByRole('button', { name: 'OK' })
     fireEvent.click(ok)
-    await waitFor(() => expect((fetch as any).mock.calls.some((c: any[]) => /\/tags\/.+/.test(c[0]) && c[1]?.method === 'DELETE')).toBe(true))
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => /\/tags\/.+/.test(c[0]) && c[1]?.method === 'DELETE')).toBe(true))
   })
 
   it('creates a tag from the create form', async () => {
@@ -112,8 +113,7 @@ describe('TagsPage', () => {
     const nameInput = (await screen.findByLabelText('Name')) as HTMLInputElement
     fireEvent.change(nameInput, { target: { value: 'Databases' } })
     fireEvent.submit(nameInput.closest('form')!)
-    await waitFor(() => expect((fetch as any).mock.calls.some((c: any[]) => c[0].toString().endsWith('/tags/') && c[1]?.method === 'POST')).toBe(true))
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => c[0].toString().endsWith('/tags/') && c[1]?.method === 'POST')).toBe(true))
   })
 })
-
 

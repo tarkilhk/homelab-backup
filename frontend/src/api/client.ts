@@ -71,6 +71,19 @@ export type PluginInfo = {
   restore_capability: 'automatic' | 'partial' | 'manual'
 }
 
+export type PluginSchemaProperty = {
+  type?: 'string' | 'number' | 'integer' | 'boolean'
+  format?: string
+  title?: string
+  description?: string
+  default?: unknown
+}
+
+export type PluginSchema = {
+  properties?: Record<string, PluginSchemaProperty>
+  required?: string[]
+}
+
 export type Job = {
   id: number
   tag_id: number
@@ -266,7 +279,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T
 }
 
-type TargetCreatePlugin = { name: string; slug?: string } & {
+export type TargetCreatePlugin = {
+  name: string
   plugin_name: string
   plugin_config_json: string
 }
@@ -307,7 +321,7 @@ export const api = {
   },
   getRun: (id: number) => request<RunWithJob>(`/runs/${id}`),
   listPlugins: () => request<PluginInfo[]>('/plugins/'),
-  getPluginSchema: (key: string) => request<Record<string, unknown>>(`/plugins/${key}/schema`),
+  getPluginSchema: (key: string) => request<PluginSchema>(`/plugins/${encodeURIComponent(key)}/schema`),
   // Tags
   listTags: () => request<Tag[]>('/tags/'),
   getTag: (id: number) => request<Tag>(`/tags/${id}`),

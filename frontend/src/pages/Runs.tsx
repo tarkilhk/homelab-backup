@@ -111,8 +111,8 @@ export default function RunsPage() {
     })
   }
 
-  function isClickFromInteractive(target: any): boolean {
-    let el: HTMLElement | null = target as HTMLElement
+  function isClickFromInteractive(target: EventTarget | null): boolean {
+    let el = target instanceof HTMLElement ? target : null
     while (el) {
       const tag = el.tagName?.toLowerCase()
       if (tag && ['button', 'a', 'input', 'select', 'textarea', 'label', 'svg', 'path'].includes(tag)) return true
@@ -335,7 +335,7 @@ export default function RunsPage() {
   )
 }
 
-function ExpandedTargetRunRows({ runId, targetsById, isClickFromInteractive }: { runId: number; targetsById: Map<number, Target>; isClickFromInteractive: (target: any) => boolean }) {
+function ExpandedTargetRunRows({ runId, targetsById, isClickFromInteractive }: { runId: number; targetsById: Map<number, Target>; isClickFromInteractive: (target: EventTarget | null) => boolean }) {
   const queryClient = useQueryClient()
   const { data, isLoading, error } = useQuery({ queryKey: ['run', runId], queryFn: () => api.getRun(runId) })
   const items = data?.target_runs ?? []

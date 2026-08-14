@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from typing import Optional, List
 from datetime import datetime
+from typing import TYPE_CHECKING, List, Optional
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from .tags import Tag
+    from .targets import Target
 
 
 class GroupBase(BaseModel):
@@ -50,5 +54,3 @@ class AddTagsToGroup(BaseModel):
 
 class RemoveTagsFromGroup(BaseModel):
     tag_names: List[str] = Field(..., description="List of tag names to remove from group")
-
-

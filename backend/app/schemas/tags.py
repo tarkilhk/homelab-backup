@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-from typing import Optional, List, Literal
 from datetime import datetime
+from typing import TYPE_CHECKING, List, Literal, Optional
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from .targets import Target
 
 
 class TagBase(BaseModel):
-    name: str = Field(..., description="Tag name (will be normalized for uniqueness)", max_length=255)
+    name: str = Field(
+        ..., description="Tag name (will be normalized for uniqueness)", max_length=255
+    )
 
 
 class TagCreate(TagBase):
@@ -34,5 +39,3 @@ class TagTargetAttachment(BaseModel):
     target: "Target"
     origin: Literal["AUTO", "DIRECT", "GROUP"]
     source_group_id: Optional[int] = None
-
-

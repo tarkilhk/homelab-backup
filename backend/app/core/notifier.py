@@ -59,5 +59,3 @@ def send_failure_email(subject: str, body: str) -> None:
     except Exception:
         # Intentionally ignore to not break job flow
         pass
-
-

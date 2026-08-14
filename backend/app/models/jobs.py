@@ -1,10 +1,19 @@
 from __future__ import annotations
 
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, event
-from sqlalchemy.orm import relationship
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy import Boolean, ForeignKey, String, Text, event
+from sqlalchemy.engine import Connection
+from sqlalchemy.orm import Mapped, Mapper, mapped_column, relationship
 
 from app.core.db import Base
+
 from .common import _utcnow, validate_cron_expression
+
+if TYPE_CHECKING:
+    from .runs import Run
+    from .tags import Tag
 
 
 class Job(Base):
@@ -12,25 +21,29 @@ class Job(Base):
 
     __tablename__ = "jobs"
 
-    id = Column(Integer, primary_key=True, index=True)
-    tag_id = Column(Integer, ForeignKey("tags.id", ondelete="RESTRICT"), nullable=False, index=True)
-    name = Column(String(255), nullable=False, index=True)
-    schedule_cron = Column(String(100), nullable=False)
-    enabled = Column(Boolean, nullable=False, default=True)
-    retention_policy_json = Column(Text, nullable=True)  # NULL means use global
-    created_at = Column(DateTime, nullable=False, default=_utcnow)
-    updated_at = Column(DateTime, nullable=False, default=_utcnow, onupdate=_utcnow)
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    tag_id: Mapped[int] = mapped_column(
+        ForeignKey("tags.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    schedule_cron: Mapped[str] = mapped_column(String(100), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    retention_policy_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(nullable=False, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(nullable=False, default=_utcnow, onupdate=_utcnow)
 
-    tag = relationship("Tag", back_populates="jobs")
-    runs = relationship("Run", back_populates="job", cascade="all, delete-orphan")
+    tag: Mapped[Tag] = relationship(back_populates="jobs")
+    runs: Mapped[list[Run]] = relationship(back_populates="job", cascade="all, delete-orphan")
 
     def __repr__(self) -> str:  # noqa: D401
-        return f"<Job(id={self.id}, name='{self.name}', tag_id={self.tag_id}, enabled={self.enabled})>"
+        return (
+            f"<Job(id={self.id}, name='{self.name}', tag_id={self.tag_id}, enabled={self.enabled})>"
+        )
 
 
 @event.listens_for(Job, "before_insert")
 @event.listens_for(Job, "before_update")
-def _validate_job_cron(mapper, connection, job: Job) -> None:  # pragma: no cover
+def _validate_job_cron(
+    mapper: Mapper[Any], connection: Connection, job: Job
+) -> None:  # pragma: no cover
     job.schedule_cron = validate_cron_expression(job.schedule_cron)
-
-

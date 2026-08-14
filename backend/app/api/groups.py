@@ -4,26 +4,29 @@ from __future__ import annotations
 
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, status, Response
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.core.db import get_session
-from app.models import Group as GroupModel, Tag as TagModel, Target as TargetModel
+from app.models import Group as GroupModel
+from app.models import Tag as TagModel
+from app.models import Target as TargetModel
 from app.schemas import (
-    Group as GroupSchema,
+    AddTagsToGroup,
+    AddTargetsToGroup,
+)
+from app.schemas import Group as GroupSchema
+from app.schemas import (
     GroupCreate,
     GroupUpdate,
-    GroupWithTargets,
     GroupWithTags,
-    AddTargetsToGroup,
-    RemoveTargetsFromGroup,
-    AddTagsToGroup,
+    GroupWithTargets,
     RemoveTagsFromGroup,
-    Tag as TagSchema,
-    Target as TargetSchema,
+    RemoveTargetsFromGroup,
 )
+from app.schemas import Tag as TagSchema
+from app.schemas import Target as TargetSchema
 from app.services import GroupService
-
 
 router = APIRouter(prefix="/groups", tags=["groups"])
 
@@ -50,7 +53,9 @@ def get_group(group_id: int, db: Session = Depends(get_session)) -> GroupModel:
 
 
 @router.put("/{group_id}", response_model=GroupSchema)
-def update_group(group_id: int, payload: GroupUpdate, db: Session = Depends(get_session)) -> GroupModel:
+def update_group(
+    group_id: int, payload: GroupUpdate, db: Session = Depends(get_session)
+) -> GroupModel:
     svc = GroupService(db)
     g = svc.update(group_id, name=payload.name, description=payload.description)
     if g is None:
@@ -79,11 +84,20 @@ def get_group_targets(group_id: int, db: Session = Depends(get_session)) -> dict
     if g is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     # Eager load targets via relationship
-    return {"id": g.id, "name": g.name, "description": g.description, "created_at": g.created_at, "updated_at": g.updated_at, "targets": list(g.targets)}
+    return {
+        "id": g.id,
+        "name": g.name,
+        "description": g.description,
+        "created_at": g.created_at,
+        "updated_at": g.updated_at,
+        "targets": list(g.targets),
+    }
 
 
 @router.post("/{group_id}/targets", response_model=GroupWithTargets)
-def add_targets_to_group(group_id: int, payload: AddTargetsToGroup, db: Session = Depends(get_session)) -> dict:
+def add_targets_to_group(
+    group_id: int, payload: AddTargetsToGroup, db: Session = Depends(get_session)
+) -> dict:
     svc = GroupService(db)
     try:
         svc.add_targets(group_id, payload.target_ids)
@@ -91,17 +105,33 @@ def add_targets_to_group(group_id: int, payload: AddTargetsToGroup, db: Session 
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     g = svc.get(group_id)
     assert g is not None
-    return {"id": g.id, "name": g.name, "description": g.description, "created_at": g.created_at, "updated_at": g.updated_at, "targets": list(g.targets)}
+    return {
+        "id": g.id,
+        "name": g.name,
+        "description": g.description,
+        "created_at": g.created_at,
+        "updated_at": g.updated_at,
+        "targets": list(g.targets),
+    }
 
 
 @router.delete("/{group_id}/targets", response_model=GroupWithTargets)
-def remove_targets_from_group(group_id: int, payload: RemoveTargetsFromGroup, db: Session = Depends(get_session)) -> dict:
+def remove_targets_from_group(
+    group_id: int, payload: RemoveTargetsFromGroup, db: Session = Depends(get_session)
+) -> dict:
     svc = GroupService(db)
     svc.remove_targets(group_id, payload.target_ids)
     g = svc.get(group_id)
     if g is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
-    return {"id": g.id, "name": g.name, "description": g.description, "created_at": g.created_at, "updated_at": g.updated_at, "targets": list(g.targets)}
+    return {
+        "id": g.id,
+        "name": g.name,
+        "description": g.description,
+        "created_at": g.created_at,
+        "updated_at": g.updated_at,
+        "targets": list(g.targets),
+    }
 
 
 @router.get("/{group_id}/tags", response_model=GroupWithTags)
@@ -111,11 +141,20 @@ def get_group_tags(group_id: int, db: Session = Depends(get_session)) -> dict:
     if g is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     tags = [gt.tag for gt in g.group_tags]
-    return {"id": g.id, "name": g.name, "description": g.description, "created_at": g.created_at, "updated_at": g.updated_at, "tags": tags}
+    return {
+        "id": g.id,
+        "name": g.name,
+        "description": g.description,
+        "created_at": g.created_at,
+        "updated_at": g.updated_at,
+        "tags": tags,
+    }
 
 
 @router.post("/{group_id}/tags", response_model=GroupWithTags)
-def add_tags_to_group(group_id: int, payload: AddTagsToGroup, db: Session = Depends(get_session)) -> dict:
+def add_tags_to_group(
+    group_id: int, payload: AddTagsToGroup, db: Session = Depends(get_session)
+) -> dict:
     svc = GroupService(db)
     try:
         svc.add_tags(group_id, payload.tag_names)
@@ -124,11 +163,20 @@ def add_tags_to_group(group_id: int, payload: AddTagsToGroup, db: Session = Depe
     g = svc.get(group_id)
     assert g is not None
     tags = [gt.tag for gt in g.group_tags]
-    return {"id": g.id, "name": g.name, "description": g.description, "created_at": g.created_at, "updated_at": g.updated_at, "tags": tags}
+    return {
+        "id": g.id,
+        "name": g.name,
+        "description": g.description,
+        "created_at": g.created_at,
+        "updated_at": g.updated_at,
+        "tags": tags,
+    }
 
 
 @router.delete("/{group_id}/tags", response_model=GroupWithTags)
-def remove_tags_from_group(group_id: int, payload: RemoveTagsFromGroup, db: Session = Depends(get_session)) -> dict:
+def remove_tags_from_group(
+    group_id: int, payload: RemoveTagsFromGroup, db: Session = Depends(get_session)
+) -> dict:
     svc = GroupService(db)
     try:
         svc.remove_tags(group_id, payload.tag_names)
@@ -137,6 +185,11 @@ def remove_tags_from_group(group_id: int, payload: RemoveTagsFromGroup, db: Sess
     g = svc.get(group_id)
     assert g is not None
     tags = [gt.tag for gt in g.group_tags]
-    return {"id": g.id, "name": g.name, "description": g.description, "created_at": g.created_at, "updated_at": g.updated_at, "tags": tags}
-
-
+    return {
+        "id": g.id,
+        "name": g.name,
+        "description": g.description,
+        "created_at": g.created_at,
+        "updated_at": g.updated_at,
+        "tags": tags,
+    }

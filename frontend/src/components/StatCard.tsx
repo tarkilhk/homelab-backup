@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion'
+import type { LucideIcon } from 'lucide-react'
 import { cn } from '../lib/cn'
 
 export default function StatCard({
@@ -12,7 +13,7 @@ export default function StatCard({
   label: string
   value: string | number
   trend?: { delta: string; color?: 'green' | 'red' | 'yellow' }
-  icon?: React.ComponentType<any>
+  icon?: LucideIcon
   className?: string
   onClick?: () => void
 }) {
@@ -44,5 +45,4 @@ export default function StatCard({
     </motion.div>
   )
 }
-
 

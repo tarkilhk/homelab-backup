@@ -1,17 +1,16 @@
 """Maintenance API router."""
 
+import json
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.db import get_session
-from app.models import MaintenanceJob as MaintenanceJobModel, MaintenanceRun as MaintenanceRunModel
+from app.models import MaintenanceJob as MaintenanceJobModel
+from app.models import MaintenanceRun as MaintenanceRunModel
 from app.schemas.maintenance import MaintenanceJob, MaintenanceRun, MaintenanceRunResult
 from app.services.maintenance import MaintenanceService
-from sqlalchemy.orm import joinedload
-import json
-
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
 
@@ -32,7 +31,9 @@ def get_maintenance_job(job_id: int, db: Session = Depends(get_session)) -> Main
     svc = MaintenanceService(db)
     job = svc.get_job(job_id)
     if job is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Maintenance job not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Maintenance job not found"
+        )
     return job
 
 
@@ -43,11 +44,15 @@ def list_maintenance_runs(
 ) -> List[MaintenanceRun]:
     """List maintenance runs, sorted by most recent first."""
     # Query with job relationship loaded
-    q = db.query(MaintenanceRunModel).options(joinedload(MaintenanceRunModel.job)).order_by(MaintenanceRunModel.started_at.desc())
+    q = (
+        db.query(MaintenanceRunModel)
+        .options(joinedload(MaintenanceRunModel.job))
+        .order_by(MaintenanceRunModel.started_at.desc())
+    )
     if limit is not None:
         q = q.limit(limit)
     runs = list(q.all())
-    
+
     # Convert to response models with parsed result_json
     result = []
     for run in runs:
@@ -59,7 +64,14 @@ def list_maintenance_runs(
 def get_maintenance_run(run_id: int, db: Session = Depends(get_session)) -> MaintenanceRun:
     """Get a specific maintenance run by ID."""
     # Query with job relationship loaded
-    run = db.query(MaintenanceRunModel).options(joinedload(MaintenanceRunModel.job)).filter(MaintenanceRunModel.id == run_id).first()
+    run = (
+        db.query(MaintenanceRunModel)
+        .options(joinedload(MaintenanceRunModel.job))
+        .filter(MaintenanceRunModel.id == run_id)
+        .first()
+    )
     if run is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Maintenance run not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Maintenance run not found"
+        )
     return MaintenanceRun.from_orm_with_result(run)

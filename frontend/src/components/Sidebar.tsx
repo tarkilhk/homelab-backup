@@ -1,9 +1,9 @@
 import { Link, NavLink, useLocation } from 'react-router-dom'
 import { cn } from '../lib/cn'
-import { Home, Target, ListChecks, Timer, Settings, FolderTree, HardDrive, Wrench } from 'lucide-react'
+import { Home, Target, ListChecks, Timer, Settings, FolderTree, HardDrive, Wrench, type LucideIcon } from 'lucide-react'
 import logoUrl from '../assets/homelab-backup-logo.png'
 
-type Item = { to: string; label: string; icon: React.ComponentType<any> }
+type Item = { to: string; label: string; icon: LucideIcon }
 
 const groups: { header: string; items: Item[] }[] = [
   {
@@ -87,5 +87,4 @@ export default function Sidebar({ onNavigate }: SidebarProps) {
     </div>
   )
 }
-
 

@@ -35,5 +35,3 @@ def validate_cron_expression(expr: str) -> str:
     if not s or "BAD" in s or "invalid" in s.lower():
         raise ValidationError422("Invalid cron expression")
     return s
-
-

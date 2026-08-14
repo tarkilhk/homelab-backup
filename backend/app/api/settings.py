@@ -65,7 +65,7 @@ def preview_retention(
     """
     if (job_id is None) != (target_id is None):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="job_id and target_id must be provided together",
         )
 
@@ -94,7 +94,7 @@ def run_retention_cleanup(
         )
     if (job_id is None) != (target_id is None):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="job_id and target_id must be provided together",
         )
 

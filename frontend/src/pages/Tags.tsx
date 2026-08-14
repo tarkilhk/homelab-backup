@@ -4,7 +4,7 @@ import { api, type Tag, type TagTargetAttachment, type Group } from '../api/clie
 import AppCard from '../components/ui/AppCard'
 import IconButton from '../components/IconButton'
 import { Button } from '../components/ui/button'
-import { useConfirm } from '../components/ConfirmProvider'
+import { useConfirm } from '../components/confirm-context'
 import { Plus, Trash2 } from 'lucide-react'
 import { formatLocalDateTime } from '../lib/dates'
 
@@ -201,7 +201,7 @@ export default function TagsPage() {
             <select
               className="border rounded px-3 py-2 bg-background"
               value={originFilter}
-              onChange={(e) => setOriginFilter(e.target.value as any)}
+              onChange={(e) => setOriginFilter(e.target.value as typeof originFilter)}
               aria-label="Origin"
             >
               <option value="">All</option>
@@ -242,5 +242,3 @@ export default function TagsPage() {
     </div>
   )
 }
-
-

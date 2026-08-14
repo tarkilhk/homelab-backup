@@ -140,7 +140,7 @@ class ProtectionSummaryService:
                 target_run_id=int(successful_attempt.id),
                 finished_at=finished_at,
                 artifact_path=str(successful_attempt.artifact_path),
-                artifact_bytes=int(successful_attempt.artifact_bytes),
+                artifact_bytes=cast(int, successful_attempt.artifact_bytes),
                 sha256=str(successful_attempt.sha256),
                 age_seconds=max((now - finished_at).total_seconds(), 0.0),
             )

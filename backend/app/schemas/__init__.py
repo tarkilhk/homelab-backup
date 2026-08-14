@@ -3,60 +3,60 @@
 Public re-exports keep existing import paths stable.
 """
 
-from .targets import (
-    TargetBase,
-    TargetCreate,
-    TargetUpdate,
-    Target,
-    AddTagsToTarget,
-    RemoveTagsFromTarget,
-    TargetTagWithOrigin,
-)  # noqa: F401
-from .groups import (
+from .backups import (  # noqa: F401
+    BackupFromDiskResponse,
+)
+from .groups import (  # noqa: F401
+    AddTagsToGroup,
+    AddTargetsToGroup,
+    Group,
     GroupBase,
     GroupCreate,
     GroupUpdate,
-    Group,
-    GroupWithTargets,
     GroupWithTags,
-    AddTargetsToGroup,
-    RemoveTargetsFromGroup,
-    AddTagsToGroup,
+    GroupWithTargets,
     RemoveTagsFromGroup,
-)  # noqa: F401
-from .tags import (
-    TagBase,
-    TagCreate,
-    TagUpdate,
-    Tag,
-    TagTargetAttachment,
-)  # noqa: F401
-from .jobs import (
+    RemoveTargetsFromGroup,
+)
+from .jobs import (  # noqa: F401
+    Job,
     JobBase,
     JobCreate,
     JobUpdate,
-    Job,
-    UpcomingJob,
     JobWithRuns,
-)  # noqa: F401
-from .runs import (
+    UpcomingJob,
+)
+from .runs import (  # noqa: F401
+    Run,
     RunBase,
     RunCreate,
     RunUpdate,
-    Run,
-    TargetRun,
     RunWithJob,
-)  # noqa: F401
-from .backups import (
-    BackupFromDiskResponse,
-)  # noqa: F401
-from .settings import (
-    RetentionRule,
+    TargetRun,
+)
+from .settings import (  # noqa: F401
     RetentionPolicy,
+    RetentionRule,
+    Settings,
     SettingsBase,
     SettingsUpdate,
-    Settings,
-)  # noqa: F401
+)
+from .tags import (  # noqa: F401
+    Tag,
+    TagBase,
+    TagCreate,
+    TagTargetAttachment,
+    TagUpdate,
+)
+from .targets import (  # noqa: F401
+    AddTagsToTarget,
+    RemoveTagsFromTarget,
+    Target,
+    TargetBase,
+    TargetCreate,
+    TargetTagWithOrigin,
+    TargetUpdate,
+)
 
 # Resolve forward references across modules to satisfy Pydantic v2
 try:
@@ -73,5 +73,3 @@ try:
 except Exception:
     # If pydantic not available at import time, skip (tests/uvicorn will import later)
     pass
-
-

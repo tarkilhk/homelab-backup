@@ -397,189 +397,6 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
         return {"target_id": target_id, "status": TargetRunStatus.FAILED.value, "error": str(exc)}
 
 
-def _perform_run(db: Session, job: JobModel, triggered_by: str) -> RunModel:
-    """Create a Run row, execute the job's plugin, and finalize status.
-
-    This function is synchronous; scheduler will call it inside its own
-    threadpool.
-    """
-    started_at = datetime.now(timezone.utc)
-
-    run = RunModel(
-        job_id=job.id,
-        started_at=started_at,
-        status=RunStatus.RUNNING.value,
-        operation=RunOperation.BACKUP.value,
-        message=f"Run started (triggered_by={triggered_by})",
-        logs_text=f"Run started at {started_at.isoformat()} (triggered_by={triggered_by})",
-    )
-    db.add(run)
-    db.commit()
-    db.refresh(run)
-
-    _log_event(
-        "run_started",
-        job_id=job.id,
-        run_id=run.id,
-        triggered_by=triggered_by,
-        started_at=run.started_at,
-        job_name=job.name,
-    )
-
-    # Execute plugin if available; otherwise fall back to a dummy artifact.
-    artifact_path: str
-    try:
-        # Load target for slug/config
-        target = db.get(TargetModel, job.target_id)
-        target_slug = target.slug if target is not None else f"target-{job.target_id}"
-        # Use plugin-based target config only
-        config_dict = {}
-        if target is not None:
-            raw_cfg = target.plugin_config_json or "{}"
-            try:
-                config_dict = json.loads(raw_cfg)
-            except Exception:
-                config_dict = {}
-
-        # Emit context diagnostics (without dumping full config contents)
-        plugin_key = target.plugin_name if target is not None and target.plugin_name else None
-        _log_event(
-            "run_context",
-            job_id=job.id,
-            run_id=run.id,
-            target_id=job.target_id,
-            target_slug=target_slug,
-            plugin=(plugin_key or "<missing>"),
-            config_keys=sorted(list(config_dict.keys()))[:20],
-            config_size=len(config_dict),
-        )
-
-        # Build context per base class
-        ctx = BackupContext(
-            job_id=str(job.id),
-            target_id=str(job.target_id),
-            config=config_dict,
-            metadata={"target_slug": target_slug},
-        )
-
-        # Resolve and invoke plugin strictly from target (jobs no longer carry plugin)
-        if not plugin_key:
-            # No plugin configured on target -> trigger legacy dummy branch below
-            raise KeyError("missing plugin on target")
-        plugin = get_plugin(plugin_key)
-
-        # Plugin interface is async; execute in a dedicated thread with its own loop
-        result_container: dict[str, object] = {}
-
-        _log_event("plugin_start", job_id=job.id, run_id=run.id, plugin=plugin_key)
-
-        def _runner() -> None:
-            try:
-                result_container["result"] = asyncio.run(plugin.backup(ctx))
-            except Exception as exc:  # capture in-thread exceptions to re-raise in main thread
-                result_container["error"] = exc
-
-        th = threading.Thread(target=_runner, daemon=True)
-        th.start()
-        th.join()
-        # Re-raise any error from the worker thread so our outer try/except handles it
-        if "error" in result_container:
-            raise result_container["error"]  # type: ignore[misc]
-        result = result_container.get("result")
-        artifact_path = result.get("artifact_path") if isinstance(result, dict) else None  # type: ignore[assignment]
-        if not artifact_path:
-            raise RuntimeError("Plugin did not return artifact_path")
-
-        finished_at = datetime.now(timezone.utc)
-        run.finished_at = finished_at
-        run.status = RunStatus.SUCCESS.value
-        run.message = "Run completed successfully"
-        run.logs_text = (run.logs_text or "") + f"\nCompleted at {finished_at.isoformat()}"
-
-        _log_event(
-            "plugin_success",
-            job_id=job.id,
-            run_id=run.id,
-            plugin=plugin_key,
-        )
-    except KeyError as exc:
-        # Missing plugin — mark the run as failed; do not create dummy artifacts.
-        finished_at = datetime.now(timezone.utc)
-        run.finished_at = finished_at
-        run.status = RunStatus.FAILED.value
-        run.message = "Run failed: missing plugin on target"
-        run.logs_text = (
-            run.logs_text or ""
-        ) + f"\nFailed at {finished_at.isoformat()} with error: {exc}"
-
-        _log_event(
-            "plugin_missing",
-            job_id=job.id,
-            run_id=run.id,
-            plugin="<missing>",
-            error=str(exc),
-        )
-    except Exception as exc:  # Catch-all failures → mark failed
-        finished_at = datetime.now(timezone.utc)
-        run.finished_at = finished_at
-        run.status = RunStatus.FAILED.value
-        run.message = f"Run failed: {exc}"
-        run.logs_text = (
-            run.logs_text or ""
-        ) + f"\nFailed at {finished_at.isoformat()} with error: {exc}"
-
-        # Fire-and-forget email notification (best-effort)
-        try:
-            subject = f"[Backup Failure] Job {job.id} — {job.name}"
-            body = (
-                f"Job ID: {job.id}\n"
-                f"Job Name: {job.name}\n"
-                f"Target ID: {job.target_id}\n"
-                f"Started: {run.started_at}\n"
-                f"Finished: {finished_at}\n"
-                f"Error: {exc}\n"
-            )
-            send_failure_email(subject, body)
-        except Exception:
-            # Never let email issues affect job flow
-            pass
-
-        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        _log_event(
-            "plugin_error",
-            job_id=job.id,
-            run_id=run.id,
-            error=str(exc),
-            error_type=type(exc).__name__,
-            traceback=tb,
-        )
-        logger.exception("Run failed | job_id=%s run_id=%s", job.id, run.id)
-
-    db.add(run)
-    db.commit()
-    db.refresh(run)
-
-    duration_sec = None
-    try:
-        if run.started_at and run.finished_at:
-            duration_sec = (run.finished_at - run.started_at).total_seconds()
-    except Exception:
-        duration_sec = None
-
-        _log_event(
-            "run_finished",
-            job_id=job.id,
-            run_id=run.id,
-            triggered_by=triggered_by,
-            finished_at=run.finished_at,
-            status=run.status,
-            duration_sec=duration_sec,
-            message=run.message,
-        )
-
-    return run
-
-
 def run_job_immediately(db: Session, job_id: int, triggered_by: str = "manual") -> RunModel:
     """Execute the job immediately and return the created Run row.
 
@@ -898,12 +715,8 @@ def scheduled_tick(job_id: int) -> None:
         db.close()
 
 
-def _scheduled_job(job_id: int) -> None:  # legacy-compatible shim for tests
-    """Backward-compatible entry point used by existing tests.
-
-    - If the job has a tag_id, execute the tag-based scheduled tick.
-    - Otherwise, execute the legacy single-target _perform_run.
-    """
+def _scheduled_job(job_id: int) -> None:
+    """Execute a scheduled tag-based backup job."""
     _log_event("scheduled_job_trigger", job_id=job_id)
     from app.core.db import get_session
 
@@ -913,17 +726,8 @@ def _scheduled_job(job_id: int) -> None:  # legacy-compatible shim for tests
         if job is None:
             _log_event("job_missing", job_id=job_id)
             return
-        if getattr(job, "tag_id", None):
-            scheduled_tick_with_session(db, job_id)
-            _log_event("scheduled_job_complete", job_id=job_id)
-            return
-        run = _perform_run(db, job, triggered_by="scheduler")
-        _log_event(
-            "scheduled_job_complete",
-            job_id=job_id,
-            run_id=getattr(run, "id", None),
-            status=getattr(run, "status", None),
-        )
+        scheduled_tick_with_session(db, job_id)
+        _log_event("scheduled_job_complete", job_id=job_id)
     finally:
         db.close()
 
@@ -1092,8 +896,8 @@ def schedule_jobs_on_startup(scheduler: AsyncIOScheduler, db: Session) -> None:
     scheduled_items: list[ScheduledItem] = []
     for job in enabled_backup_jobs:
         scheduled_items.append(ScheduledItem.from_backup_job(job))
-    for job in enabled_maintenance_jobs:
-        scheduled_items.append(ScheduledItem.from_maintenance_job(job))
+    for maintenance_job in enabled_maintenance_jobs:
+        scheduled_items.append(ScheduledItem.from_maintenance_job(maintenance_job))
 
     scheduled_count: int = 0
     invalid_count: int = 0

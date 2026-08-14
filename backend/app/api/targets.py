@@ -1,24 +1,24 @@
 """Targets API router (thin) delegating to services."""
 
-from typing import List
 import logging
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.db import get_session
+from app.models import Tag as TagModel
 from app.models import Target as TargetModel
+from app.models import TargetTag as TargetTagModel
 from app.schemas import (
-    Target,
-    TargetCreate,
-    TargetUpdate,
-    TargetTagWithOrigin,
     AddTagsToTarget,
     RemoveTagsFromTarget,
+    Target,
+    TargetCreate,
+    TargetTagWithOrigin,
+    TargetUpdate,
 )
-from app.services import TargetService, TagService
-from app.models import Tag as TagModel, TargetTag as TargetTagModel
-
+from app.services import TagService, TargetService
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ router = APIRouter(prefix="/targets", tags=["targets"])
 def list_targets(db: Session = Depends(get_session)) -> List[TargetModel]:
     # Service will compute derived fields: has_schedule, schedule_names
     svc = TargetService(db)
-    return svc.list()
+    return svc.list_targets()
 
 
 @router.post("/", response_model=Target, status_code=status.HTTP_201_CREATED)
@@ -42,7 +42,7 @@ def create_target(payload: TargetCreate, db: Session = Depends(get_session)) -> 
             plugin_config_json=payload.plugin_config_json,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc))
 
 
 @router.get("/{target_id}", response_model=Target)
@@ -55,7 +55,9 @@ def get_target(target_id: int, db: Session = Depends(get_session)) -> TargetMode
 
 
 @router.put("/{target_id}", response_model=Target)
-def update_target(target_id: int, payload: TargetUpdate, db: Session = Depends(get_session)) -> TargetModel:
+def update_target(
+    target_id: int, payload: TargetUpdate, db: Session = Depends(get_session)
+) -> TargetModel:
     svc = TargetService(db)
     update_data = payload.model_dump(exclude_unset=True)
     try:
@@ -78,15 +80,25 @@ def delete_target(target_id: int, db: Session = Depends(get_session)) -> None:
     return None
 
 
-
 @router.post("/{target_id}/test")
 async def test_target_connectivity(target_id: int, db: Session = Depends(get_session)) -> dict:
     svc = TargetService(db)
     try:
         return await svc.test_connectivity(target_id)
     except KeyError as exc:
-        code = status.HTTP_404_NOT_FOUND if str(exc) in {"target_not_found", "plugin_not_found"} else status.HTTP_404_NOT_FOUND
-        raise HTTPException(status_code=code, detail="Unknown plugin for target" if str(exc) == "plugin_not_found" else "Target not found")
+        code = (
+            status.HTTP_404_NOT_FOUND
+            if str(exc) in {"target_not_found", "plugin_not_found"}
+            else status.HTTP_404_NOT_FOUND
+        )
+        raise HTTPException(
+            status_code=code,
+            detail=(
+                "Unknown plugin for target"
+                if str(exc) == "plugin_not_found"
+                else "Target not found"
+            ),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
@@ -119,7 +131,9 @@ def list_target_tags(target_id: int, db: Session = Depends(get_session)) -> List
 
 
 @router.post("/{target_id}/tags", response_model=List[TargetTagWithOrigin])
-def add_direct_tags_to_target(target_id: int, payload: AddTagsToTarget, db: Session = Depends(get_session)) -> List[dict]:
+def add_direct_tags_to_target(
+    target_id: int, payload: AddTagsToTarget, db: Session = Depends(get_session)
+) -> List[dict]:
     # Ensure target exists
     target = db.get(TargetModel, target_id)
     if target is None:
@@ -148,11 +162,15 @@ def add_direct_tags_to_target(target_id: int, payload: AddTagsToTarget, db: Sess
         .filter(TargetTagModel.target_id == target_id)
         .all()
     )
-    return [{"tag": tag, "origin": tt.origin, "source_group_id": tt.source_group_id} for tag, tt in rows]
+    return [
+        {"tag": tag, "origin": tt.origin, "source_group_id": tt.source_group_id} for tag, tt in rows
+    ]
 
 
 @router.delete("/{target_id}/tags", response_model=List[TargetTagWithOrigin])
-def remove_direct_tags_from_target(target_id: int, payload: RemoveTagsFromTarget, db: Session = Depends(get_session)) -> List[dict]:
+def remove_direct_tags_from_target(
+    target_id: int, payload: RemoveTagsFromTarget, db: Session = Depends(get_session)
+) -> List[dict]:
     target = db.get(TargetModel, target_id)
     if target is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Target not found")
@@ -172,5 +190,6 @@ def remove_direct_tags_from_target(target_id: int, payload: RemoveTagsFromTarget
         .filter(TargetTagModel.target_id == target_id)
         .all()
     )
-    return [{"tag": tag, "origin": tt.origin, "source_group_id": tt.source_group_id} for tag, tt in rows]
-
+    return [
+        {"tag": tag, "origin": tt.origin, "source_group_id": tt.source_group_id} for tag, tt in rows
+    ]

@@ -1,34 +1,13 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { ConfirmContext, type ConfirmOptions } from './confirm-context'
 import { Button } from './ui/button'
-
-type ConfirmVariant = 'default' | 'danger'
-
-export interface ConfirmOptions {
-  title?: string
-  description?: string
-  confirmText?: string
-  cancelText?: string
-  variant?: ConfirmVariant
-}
 
 interface ConfirmState extends Required<ConfirmOptions> {
   open: boolean
 }
 
 type Resolver = (value: boolean) => void
-
-interface ConfirmContextValue {
-  confirm: (options: ConfirmOptions) => Promise<boolean>
-}
-
-const ConfirmContext = createContext<ConfirmContextValue | null>(null)
-
-export function useConfirm(): ConfirmContextValue['confirm'] {
-  const ctx = useContext(ConfirmContext)
-  if (!ctx) throw new Error('useConfirm must be used within a ConfirmProvider')
-  return ctx.confirm
-}
 
 export const ConfirmProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = useState<ConfirmState>({
@@ -136,5 +115,4 @@ export const ConfirmProvider: React.FC<{ children: React.ReactNode }> = ({ child
     </ConfirmContext.Provider>
   )
 }
-
 

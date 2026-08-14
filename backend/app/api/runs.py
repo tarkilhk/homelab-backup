@@ -9,9 +9,9 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.db import get_session
 from app.models import Job as JobModel
 from app.models import Run as RunModel
-from app.schemas import RunWithJob, Run as RunSchema
+from app.schemas import Run as RunSchema
+from app.schemas import RunWithJob
 from app.services import RunService
-
 
 router = APIRouter(prefix="/runs", tags=["runs"])
 
@@ -49,7 +49,9 @@ def list_runs(
     svc = RunService(db)
     start_dt = _parse_datetime(start_date)
     end_dt = _parse_datetime(end_date)
-    return svc.list(status=status, start_dt=start_dt, end_dt=end_dt, target_id=target_id, tag_id=tag_id)
+    return svc.list(
+        status=status, start_dt=start_dt, end_dt=end_dt, target_id=target_id, tag_id=tag_id
+    )
 
 
 @router.get("/{run_id}", response_model=RunWithJob)
@@ -60,5 +62,3 @@ def get_run(run_id: int, db: Session = Depends(get_session)) -> RunModel:
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
     return run
-
-

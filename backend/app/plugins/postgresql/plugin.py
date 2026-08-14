@@ -79,7 +79,7 @@ class PostgreSQLPlugin(BackupPlugin):
                 database=database,
             )
             value = await conn.fetchval("SELECT 1")
-            return value == 1
+            return bool(value == 1)
         except Exception as exc:
             self._logger.warning("postgresql_test_failed | host=%s error=%s", host, exc)
             raise ConnectionError(f"Failed to connect to PostgreSQL database: {exc}") from exc

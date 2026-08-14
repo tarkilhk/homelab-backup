@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { api, type Target, type PluginInfo, type TargetTagWithOrigin } from '../api/client'
+import { api, type Target, type PluginInfo, type PluginSchema, type TargetTagWithOrigin, type TargetUpdate } from '../api/client'
 import { useEffect, useState } from 'react'
 import { Button } from '../components/ui/button'
 import { Trash2, Pencil, Calendar, Check, X, Plus, Tag as TagIcon } from 'lucide-react'
@@ -7,8 +7,9 @@ import { formatLocalDateTime } from '../lib/dates'
 import AppCard from '../components/ui/AppCard'
 import IconButton from '../components/IconButton'
 import { Link } from 'react-router-dom'
-import { useConfirm } from '../components/ConfirmProvider'
+import { useConfirm } from '../components/confirm-context'
 import { toast } from 'sonner'
+import { getErrorMessage, getErrorStatus } from '../lib/errors'
 
 export default function TargetsPage() {
   const confirm = useConfirm()
@@ -31,9 +32,12 @@ export default function TargetsPage() {
   // Controls visibility of the create/edit card. Defaults to hidden.
   const [showEditor, setShowEditor] = useState<boolean>(false)
 
+  // Edit/Delete state (edit happens via the top form)
+  const [editingId, setEditingId] = useState<number | null>(null)
+
   // Schema-driven config state
-  const [schema, setSchema] = useState<Record<string, any> | null>(null)
-  const [config, setConfig] = useState<Record<string, any>>({})
+  const [schema, setSchema] = useState<PluginSchema | null>(null)
+  const [config, setConfig] = useState<Record<string, unknown>>({})
 
   // When plugin changes, fetch its schema if available
   useEffect(() => {
@@ -74,10 +78,9 @@ export default function TargetsPage() {
           } else {
             setConfig({})
           }
-          const status = (err as any)?.status
+          const status = getErrorStatus(err)
           if (status !== 404) {
-            const message = (err as any)?.message || 'Failed to load plugin schema'
-            toast.error(message)
+            toast.error(getErrorMessage(err, 'Failed to load plugin schema'))
           }
         }
       }
@@ -86,7 +89,7 @@ export default function TargetsPage() {
     return () => {
       cancelled = true
     }
-  }, [form.plugin_name])
+  }, [editingId, form.plugin_config_json, form.plugin_name])
 
   const createMut = useMutation({
     mutationFn: api.createTarget,
@@ -99,11 +102,8 @@ export default function TargetsPage() {
     },
   })
 
-  // Edit/Delete state (edit happens via the top form)
-  const [editingId, setEditingId] = useState<number | null>(null)
-
   const updateMut = useMutation({
-    mutationFn: ({ id, body }: { id: number; body: any }) => api.updateTarget(id, body),
+    mutationFn: ({ id, body }: { id: number; body: TargetUpdate }) => api.updateTarget(id, body),
     onSuccess: () => {
       setEditingId(null)
       qc.invalidateQueries({ queryKey: ['targets'] })
@@ -132,8 +132,7 @@ export default function TargetsPage() {
       setTagsStateByTargetId((prev) => ({ ...prev, [targetId]: { status: 'success', data } }))
     } catch (err) {
       setTagsStateByTargetId((prev) => ({ ...prev, [targetId]: { status: 'error' } }))
-      const message = (err as any)?.message || 'Failed to load target tags'
-      toast.error(message)
+      toast.error(getErrorMessage(err, 'Failed to load target tags'))
     }
   }
 
@@ -174,7 +173,7 @@ export default function TargetsPage() {
     return () => {
       cancelled = true
     }
-  }, [JSON.stringify((targets ?? []).map((t) => t.id))])
+  }, [targets])
 
   // Test status and error message for connectivity test
   const [testError, setTestError] = useState<string>('')
@@ -264,7 +263,7 @@ export default function TargetsPage() {
               if (editingId) {
                 updateMut.mutate({ id: editingId, body: payload })
               } else {
-                createMut.mutate(payload as any)
+                createMut.mutate(payload)
               }
           }}
         >
@@ -298,14 +297,18 @@ export default function TargetsPage() {
             <fieldset className="grid gap-2 sm:col-span-2">
               <legend className="text-sm">Plugin Config</legend>
               {/* Render basic inputs for flat object schemas */}
-              {Object.entries((schema as any).properties ?? {}).map(([key, def]: [string, any]) => {
-                const required = Array.isArray((schema as any).required) && (schema as any).required.includes(key)
-                const type = (def && def.type) || 'string'
-                const format = def && def.format
+              {Object.entries(schema.properties ?? {}).map(([key, def]) => {
+                const required = schema.required?.includes(key) ?? false
+                const type = def.type ?? 'string'
+                const format = def.format
                 const id = `plugin-field-${key}`
-                const value = (config as any)[key] ?? ''
-                const label = def && def.title ? def.title : key
-                const description = def && typeof def.description === 'string' ? def.description : ''
+                const configuredValue = config[key]
+                const value =
+                  typeof configuredValue === 'string' || typeof configuredValue === 'number'
+                    ? configuredValue
+                    : ''
+                const label = def.title ?? key
+                const description = def.description ?? ''
 
                 if (type === 'boolean') {
                   return (
@@ -315,7 +318,7 @@ export default function TargetsPage() {
                           id={id}
                           aria-label={label}
                           type="checkbox"
-                          checked={Boolean(value)}
+                          checked={Boolean(configuredValue)}
                           onChange={(e) => setConfig({ ...config, [key]: e.target.checked })}
                         />
                         <span className="text-sm">{label}{required ? ' *' : ''}</span>
@@ -336,7 +339,7 @@ export default function TargetsPage() {
                       aria-label={label}
                       className="border rounded px-3 py-2"
                       type={inputType}
-                      placeholder={def && def.default !== undefined ? String(def.default) : undefined}
+                      placeholder={def.default !== undefined ? String(def.default) : undefined}
                       value={value}
                       onChange={(e) =>
                         setConfig({
@@ -466,7 +469,11 @@ export default function TargetsPage() {
                     e.preventDefault()
                     const row = e.currentTarget as HTMLElement
                     row.classList.add('select-none')
-                    try { window.getSelection()?.removeAllRanges?.() } catch {}
+                    try {
+                      window.getSelection()?.removeAllRanges()
+                    } catch {
+                      // Selection cleanup is best-effort.
+                    }
                     window.setTimeout(() => row.classList.remove('select-none'), 300)
                     setEditingId(t.id)
                     setForm({
@@ -585,4 +592,3 @@ export default function TargetsPage() {
     </div>
   )
 }
-

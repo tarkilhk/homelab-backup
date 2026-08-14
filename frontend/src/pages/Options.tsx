@@ -8,7 +8,7 @@ import { api, type RetentionPolicy, type RetentionRule } from '../api/client'
 import { Button } from '../components/ui/button'
 import { toast } from 'sonner'
 import { Palette, Archive, Play } from 'lucide-react'
-import { useConfirm } from '../components/ConfirmProvider'
+import { useConfirm } from '../components/confirm-context'
 
 function normalizePolicyJson(value: string | null | undefined): string | null {
   if (!value) return null

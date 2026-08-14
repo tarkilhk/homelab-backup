@@ -6,7 +6,7 @@ import json
 import os
 import threading
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy.orm import Session, joinedload
 
@@ -111,7 +111,7 @@ class RestoreService:
             # job_id_for_restore remains None for file-based restores
 
         try:
-            plugin = get_plugin(dest_target.plugin_name)
+            plugin = get_plugin(dest_plugin)
         except KeyError as exc:
             raise ValueError("plugin_not_registered") from exc
 
@@ -127,7 +127,7 @@ class RestoreService:
 
         validated_artifact = validate_restore_artifact(
             artifact_path,
-            expected_plugin_name=dest_target.plugin_name,
+            expected_plugin_name=dest_plugin,
             backup_root=os.environ.get("BACKUP_BASE_PATH", "/backups"),
             expected_target_slug=source_target.slug if source_target is not None else None,
             expected_size_bytes=source_tr.artifact_bytes if source_tr is not None else None,
@@ -175,14 +175,14 @@ class RestoreService:
         self.db.commit()
         self.db.refresh(target_run)
 
-        dest_config: dict = {}
+        dest_config: dict[str, Any] = {}
         if dest_target.plugin_config_json:
             try:
                 dest_config = json.loads(dest_target.plugin_config_json)
             except Exception:
                 dest_config = {}
 
-        metadata = {
+        metadata: dict[str, Any] = {
             "destination_target_slug": dest_target.slug,
         }
         if source_target_run_id:

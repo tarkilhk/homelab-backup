@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from typing import Optional, Dict, Any
-from datetime import datetime
 import json
+from datetime import datetime
+from typing import Any, Dict, Optional
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class MaintenanceJobBase(BaseModel):
@@ -16,11 +16,14 @@ class MaintenanceJobBase(BaseModel):
     schedule_cron: str = Field(..., description="Cron expression for job scheduling")
     enabled: bool = Field(default=True, description="Whether the job is enabled")
     config_json: Optional[str] = Field(None, description="Job-specific configuration JSON")
-    visible_in_ui: bool = Field(default=True, description="Whether the job should appear in UI lists")
+    visible_in_ui: bool = Field(
+        default=True, description="Whether the job should appear in UI lists"
+    )
 
 
 class MaintenanceJobCreate(MaintenanceJobBase):
     """Schema for creating a new MaintenanceJob."""
+
     pass
 
 
@@ -31,7 +34,9 @@ class MaintenanceJobUpdate(BaseModel):
     schedule_cron: Optional[str] = Field(None, description="Cron expression for job scheduling")
     enabled: Optional[bool] = Field(None, description="Whether the job is enabled")
     config_json: Optional[str] = Field(None, description="Job-specific configuration JSON")
-    visible_in_ui: Optional[bool] = Field(None, description="Whether the job should appear in UI lists")
+    visible_in_ui: Optional[bool] = Field(
+        None, description="Whether the job should appear in UI lists"
+    )
 
 
 class MaintenanceJob(BaseModel):
@@ -54,7 +59,9 @@ class MaintenanceJob(BaseModel):
 class MaintenanceRunResult(BaseModel):
     """Parsed result_json from MaintenanceRun."""
 
-    targets_processed: Optional[int] = Field(None, description="Number of distinct targets processed")
+    targets_processed: Optional[int] = Field(
+        None, description="Number of distinct targets processed"
+    )
     deleted_count: Optional[int] = Field(None, description="Number of backups deleted")
     kept_count: Optional[int] = Field(None, description="Number of backups kept")
     deleted_paths: Optional[list[str]] = Field(None, description="List of deleted artifact paths")
@@ -71,7 +78,9 @@ class MaintenanceRun(BaseModel):
     status: str = Field(..., description="Run status (running, success, failed)")
     message: Optional[str] = Field(None, description="Status message")
     result: Optional[MaintenanceRunResult] = Field(None, description="Parsed execution results")
-    job: Optional[MaintenanceJob] = Field(None, description="Associated MaintenanceJob (if included)")
+    job: Optional[MaintenanceJob] = Field(
+        None, description="Associated MaintenanceJob (if included)"
+    )
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -86,7 +95,7 @@ class MaintenanceRun(BaseModel):
             "status": obj.status,
             "message": obj.message,
         }
-        
+
         # Parse result_json if present
         if obj.result_json:
             try:
@@ -96,9 +105,9 @@ class MaintenanceRun(BaseModel):
                 data["result"] = None
         else:
             data["result"] = None
-        
+
         # Include job if relationship is loaded
         if hasattr(obj, "job") and obj.job:
             data["job"] = MaintenanceJob.model_validate(obj.job)
-        
+
         return cls(**data)

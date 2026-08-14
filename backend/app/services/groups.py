@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from typing import Iterable, List, Optional, Sequence
 
-from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
-from app.models import Group, Tag, GroupTag, Target, TargetTag
-from app.models import slugify
+from app.models import Group, GroupTag, Tag, Target, TargetTag, slugify
 
 
 class GroupService:
@@ -53,7 +52,9 @@ class GroupService:
     def list(self) -> List[Group]:
         return list(self.db.query(Group).order_by(Group.name.asc()).all())
 
-    def update(self, group_id: int, *, name: Optional[str] = None, description: Optional[str] = None) -> Optional[Group]:
+    def update(
+        self, group_id: int, *, name: Optional[str] = None, description: Optional[str] = None
+    ) -> Optional[Group]:
         g = self.db.get(Group, group_id)
         if g is None:
             return None
@@ -88,6 +89,7 @@ class GroupService:
         # Best-effort: delete the associated tag if it exists and is not referenced by jobs or target auto-tags
         if auto_tag is not None:
             from sqlalchemy.exc import IntegrityError
+
             try:
                 self.db.delete(auto_tag)
                 self.db.commit()
@@ -103,7 +105,8 @@ class GroupService:
 
         # Ensure tags exist (create if missing)
         existing_by_slug: dict[str, Tag] = {
-            t.slug: t for t in self.db.query(Tag).filter(Tag.slug.in_([slugify(n) for n in tag_names])).all()
+            t.slug: t
+            for t in self.db.query(Tag).filter(Tag.slug.in_([slugify(n) for n in tag_names])).all()
         }
         to_attach: List[Tag] = []
         for name in tag_names:
@@ -118,7 +121,8 @@ class GroupService:
 
         # Link group_tags idempotently
         existing_pairs = {
-            (gt.group_id, gt.tag_id) for gt in self.db.query(GroupTag).filter(GroupTag.group_id == group_id).all()
+            (gt.group_id, gt.tag_id)
+            for gt in self.db.query(GroupTag).filter(GroupTag.group_id == group_id).all()
         }
         for tag in to_attach:
             if (group_id, tag.id) not in existing_pairs:
@@ -127,7 +131,9 @@ class GroupService:
         self.db.flush()
 
         # Propagate to member targets: add TargetTag with origin='GROUP'
-        member_targets: list[Target] = self.db.query(Target).filter(Target.group_id == group_id).all()
+        member_targets: list[Target] = (
+            self.db.query(Target).filter(Target.group_id == group_id).all()
+        )
         for tgt in member_targets:
             # Fetch existing GROUP-origin attachments for this group to avoid duplicates
             existing_tt = {
@@ -238,5 +244,3 @@ class GroupService:
                     TargetTag.source_group_id == group_id,
                 ).delete(synchronize_session="fetch")
         self.db.commit()
-
-

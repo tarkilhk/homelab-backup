@@ -96,6 +96,7 @@ async function defaultFetchStub(url: string, init?: RequestInit) {
 }
 
 vi.stubGlobal('fetch', vi.fn(defaultFetchStub))
+const fetchMock = vi.mocked(fetch)
 
 function renderWithProviders(route: string) {
   const qc = new QueryClient()
@@ -116,7 +117,7 @@ function renderWithProviders(route: string) {
 describe('JobsPage', () => {
   beforeEach(() => {
     // Clear only call history, keep default implementation
-    ;(fetch as any).mockClear?.()
+    ;fetchMock.mockClear?.()
   })
   afterEach(() => cleanup())
   
@@ -140,7 +141,7 @@ describe('JobsPage', () => {
     fireEvent.submit((await screen.findByText('Create Job')).closest('form')!)
     await waitFor(() => expect(fetch).toHaveBeenCalled())
     // Assert payload shape: tag_id from AUTO tag and boolean enabled
-    const postCall = (fetch as any).mock.calls.find((c: any[]) => c[0].toString().endsWith('/jobs/') && c[1]?.method === 'POST')
+    const postCall = fetchMock.mock.calls.find((c) => c[0].toString().endsWith('/jobs/') && c[1]?.method === 'POST')
     expect(postCall).toBeTruthy()
     const body = JSON.parse(postCall[1].body)
     expect(body.tag_id).toBe(101)
@@ -164,7 +165,7 @@ describe('JobsPage', () => {
     fireEvent.submit((await screen.findByText('Create Job')).closest('form')!)
     await waitFor(() => expect(fetch).toHaveBeenCalled())
     // Assert payload shape: selected tag and boolean enabled
-    const postCall = (fetch as any).mock.calls.find((c: any[]) => c[0].toString().endsWith('/jobs/') && c[1]?.method === 'POST')
+    const postCall = fetchMock.mock.calls.find((c) => c[0].toString().endsWith('/jobs/') && c[1]?.method === 'POST')
     expect(postCall).toBeTruthy()
     const body = JSON.parse(postCall[1].body)
     expect(body.tag_id).toBe(101)
@@ -237,9 +238,9 @@ describe('JobsPage', () => {
     const nameInput = (await screen.findByLabelText('Job Name')) as HTMLInputElement
     expect(nameInput.value).toBe('Pi-hole Backup')
     fireEvent.submit((await screen.findByText('Save')).closest('form')!)
-    await waitFor(() => expect((fetch as any).mock.calls.some((c: any[]) => c[0].toString().endsWith('/jobs/9') && c[1]?.method === 'PUT')).toBe(true))
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => c[0].toString().endsWith('/jobs/9') && c[1]?.method === 'PUT')).toBe(true))
     // Assert PUT payload contains boolean enabled and tag_id (from AUTO tag on target page)
-    const putCall = (fetch as any).mock.calls.find((c: any[]) => c[0].toString().endsWith('/jobs/9') && c[1]?.method === 'PUT')
+    const putCall = fetchMock.mock.calls.find((c) => c[0].toString().endsWith('/jobs/9') && c[1]?.method === 'PUT')
     expect(putCall).toBeTruthy()
     const putBody = JSON.parse(putCall[1].body)
     expect(typeof putBody.enabled).toBe('boolean')
@@ -257,7 +258,7 @@ describe('JobsPage', () => {
     // The confirm modal appears; click OK
     const ok = await screen.findByRole('button', { name: 'OK' })
     fireEvent.click(ok)
-    await waitFor(() => expect((fetch as any).mock.calls.some((c: any[]) => c[0].toString().endsWith('/jobs/9') && c[1]?.method === 'DELETE')).toBe(true))
+    await waitFor(() => expect(fetchMock.mock.calls.some((c) => c[0].toString().endsWith('/jobs/9') && c[1]?.method === 'DELETE')).toBe(true))
   })
 
   it('runs a job immediately via the play icon', async () => {
@@ -267,7 +268,7 @@ describe('JobsPage', () => {
     const runBtn = await screen.findByLabelText('Run now')
     fireEvent.click(runBtn)
     await waitFor(() =>
-      expect((fetch as any).mock.calls.some((c: any[]) => c[0].toString().endsWith('/jobs/9/run') && c[1]?.method === 'POST')).toBe(true)
+      expect(fetchMock.mock.calls.some((c) => c[0].toString().endsWith('/jobs/9/run') && c[1]?.method === 'POST')).toBe(true)
     )
   })
 
@@ -278,21 +279,21 @@ describe('JobsPage', () => {
     // Submit without selecting a tag
     fireEvent.submit((await screen.findByText('Create Job')).closest('form')!)
     await waitFor(() => {
-      expect((fetch as any).mock.calls.some((c: any[]) => c[0].toString().endsWith('/jobs/') && c[1]?.method === 'POST')).toBe(false)
+      expect(fetchMock.mock.calls.some((c) => c[0].toString().endsWith('/jobs/') && c[1]?.method === 'POST')).toBe(false)
     })
     // Now select and submit
     const picker = await screen.findByLabelText('Tag')
     fireEvent.change(picker, { target: { value: '101' } })
     fireEvent.submit((await screen.findByText('Create Job')).closest('form')!)
     await waitFor(() => {
-      expect((fetch as any).mock.calls.some((c: any[]) => c[0].toString().endsWith('/jobs/') && c[1]?.method === 'POST')).toBe(true)
+      expect(fetchMock.mock.calls.some((c) => c[0].toString().endsWith('/jobs/') && c[1]?.method === 'POST')).toBe(true)
     })
   })
 
   it('filters jobs by tag using the Filter Tag select', async () => {
     // Override fetch during this test so GET /jobs/ returns two jobs
-    const origImpl = (fetch as any).getMockImplementation?.() || defaultFetchStub
-    ;(fetch as any).mockImplementation(async (url: string, init?: RequestInit) => {
+    const origImpl = fetchMock.getMockImplementation?.() || defaultFetchStub
+    ;fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       const u = url.toString()
       if (u.endsWith('/jobs/') && !init?.method) {
         return new Response(JSON.stringify([
@@ -321,13 +322,13 @@ describe('JobsPage', () => {
       expect(screen.getByText('Linux Backup')).toBeTruthy()
     })
     // Restore fetch
-    ;(fetch as any).mockImplementation(origImpl)
+    ;fetchMock.mockImplementation(origImpl)
   })
 
   it('falls back to — in Tag column when tags list is empty', async () => {
     // Force empty tags list and ensure one job exists
-    const origImpl = (fetch as any).getMockImplementation?.() || defaultFetchStub
-    ;(fetch as any).mockImplementation(async (url: string, init?: RequestInit) => {
+    const origImpl = fetchMock.getMockImplementation?.() || defaultFetchStub
+    ;fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       const u = url.toString()
       if (u.endsWith('/tags/')) {
         return new Response(JSON.stringify([]), { status: 200 })
@@ -346,7 +347,6 @@ describe('JobsPage', () => {
     // Tag column is the second cell
     expect(cells[1].textContent?.trim()).toBe('—')
     // Restore fetch
-    ;(fetch as any).mockImplementation(origImpl)
+    ;fetchMock.mockImplementation(origImpl)
   })
 })
-

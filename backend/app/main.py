@@ -1,21 +1,21 @@
 """Main FastAPI application for homelab backup system."""
 
+import base64
+import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request
-import logging
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, FileResponse, Response, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pathlib import Path
-import base64
+from sqlalchemy.exc import IntegrityError
 
-from app.core.db import init_db, bootstrap_db, get_session, get_engine
 import app.core.db as db_mod
+from app.core.db import bootstrap_db, get_engine, get_session, init_db
 from app.core.logging import setup_logging
 from app.core.scheduler import get_scheduler, schedule_jobs_on_startup
-from sqlalchemy.exc import IntegrityError
 
 
 @asynccontextmanager
@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("App startup | configuring DB and scheduler")
     init_db()
     bootstrap_db()
-    
+
     scheduler = get_scheduler()
     # Schedule enabled jobs from DB before starting scheduler
     # Prefer FastAPI dependency override for DB if present (used by tests)
@@ -50,9 +50,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             db_session.close()
     scheduler.start()
     logger.info("APScheduler started with Asia/Singapore timezone and jobs scheduled")
-    
+
     yield
-    
+
     # Shutdown
     scheduler.shutdown()
     logger.info("APScheduler shutdown")
@@ -83,8 +83,21 @@ app.add_middleware(
 )
 
 # Include routers
-from app.api import health, targets, jobs, runs, plugins, metrics, protection
-from app.api import tags, groups, restores, backups, settings, maintenance
+from app.api import (
+    backups,
+    groups,
+    health,
+    jobs,
+    maintenance,
+    metrics,
+    plugins,
+    protection,
+    restores,
+    runs,
+    settings,
+    tags,
+    targets,
+)
 
 # Mount health endpoints unversioned for infra probes (/health, /ready)
 app.include_router(health.router)
@@ -117,16 +130,17 @@ from fastapi.openapi.docs import get_swagger_ui_html  # noqa: E402
 
 
 @app.get("/api/docs", include_in_schema=False)
-async def custom_swagger_ui_html():
+async def custom_swagger_ui_html() -> HTMLResponse:
     return get_swagger_ui_html(
-        openapi_url=app.openapi_url,
+        openapi_url=app.openapi_url or "/api/openapi.json",
         title=f"{app.title} — Docs",
         swagger_favicon_url="/static/favicon.ico",
     )
 
+
 # Serve /favicon.ico for Swagger and other clients
 @app.get("/favicon.ico", include_in_schema=False)
-async def serve_favicon():
+async def serve_favicon() -> Response:
     # Prefer dev path (monorepo), then packaged static path
     candidates = [
         Path(__file__).resolve().parents[2] / "frontend" / "public" / "favicon.ico",
@@ -152,6 +166,7 @@ async def serve_favicon():
         data = b""  # should not happen
     return Response(content=data, media_type="image/x-icon")
 
+
 # Readiness is provided via health router as /ready
 
 
@@ -161,7 +176,8 @@ async def handle_integrity_error(_request: Request, exc: IntegrityError) -> JSON
     # Standardize DB integrity errors as 409 with readable message
     return JSONResponse(status_code=409, content={"detail": str(exc)})
 
+
 if __name__ == "__main__":
     import uvicorn
-    
+
     uvicorn.run(app, host="0.0.0.0", port=8080)

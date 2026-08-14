@@ -2,12 +2,6 @@
 
 This repository is agent-ready. Use this document as your entry point for rules, conventions, and task workflows.
 
-### Start here: Cursor rules (must follow)
-- Frontend rules: `frontend/.cursorrules`
-- Backend rules: `backend/.cursorrules`
-
-These two files define style, structure, and execution expectations used by Cursor. Always read and adhere to them before making edits.
-
 ### Key docs you will need
 - Adding plugins (canonical, step-by-step): `ADDING_PLUGINS.md`
 - Contributing workflow: `CONTRIBUTING.md`
@@ -83,7 +77,7 @@ with pytest.raises(FileNotFoundError, match="Container.*not found"):
 - Maintenance jobs: Scheduled maintenance tasks (e.g., retention cleanup) are tracked separately from backup jobs. See `backend/app/models/maintenance.py`, `backend/app/services/maintenance.py`, and `backend/app/api/maintenance.py`. Maintenance jobs use deterministic `key` identifiers (never hardcode numeric IDs).
 
 ### PR readiness checklist
-- You followed `frontend/.cursorrules` and `backend/.cursorrules`.
+- Frontend lint/build and backend mypy/Black/isort checks pass.
 - New or changed behavior is covered by tests; all tests pass locally.
 - No secrets in code, logs, or docs.
 - For plugins: discovery works, schema is returned by the API, `test` is non-destructive, `backup` writes an artifact to the correct path and returns it, and sidecar metadata is written for disaster recovery.
@@ -92,5 +86,4 @@ with pytest.raises(FileNotFoundError, match="Container.*not found"):
 - When invoking tools or commands programmatically, prefer absolute paths for reliability.
 
 Keep this file up to date when workflows or conventions change so agents can operate autonomously and safely.
-
 

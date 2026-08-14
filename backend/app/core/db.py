@@ -14,7 +14,7 @@ from typing import Generator
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import Session, declarative_base, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 # Resolve DB location (no DATABASE_URL support). Always use /app/db inside the container
 DEFAULT_DB_FILENAME = "homelab_backup.db"
@@ -65,10 +65,11 @@ def _resolve_sql_echo() -> bool | str:
 
 
 _engine: Engine | None = None
-SessionLocal: sessionmaker | None = None
+SessionLocal: sessionmaker[Session] | None = None
 
-# Create base class for models
-Base = declarative_base()
+
+class Base(DeclarativeBase):
+    """Typed declarative base shared by all ORM models."""
 
 
 def get_engine() -> Engine:

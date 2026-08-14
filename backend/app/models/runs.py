@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
-from app.domain.enums import RunStatus, RunOperation, TargetRunOperation
-from sqlalchemy.orm import relationship
+from typing import TYPE_CHECKING
+
+from sqlalchemy import ForeignKey, String, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
+from app.domain.enums import RunOperation, TargetRunOperation
+
+if TYPE_CHECKING:
+    from .jobs import Job
+    from .targets import Target
 
 
 class Run(Base):
@@ -13,18 +19,24 @@ class Run(Base):
 
     __tablename__ = "runs"
 
-    id = Column(Integer, primary_key=True, index=True)
-    job_id = Column(Integer, ForeignKey("jobs.id"), nullable=True, index=True)
-    started_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
-    finished_at = Column(DateTime, nullable=True)
-    status = Column(String(20), nullable=False, index=True)  # values in RunStatus
-    operation = Column(String(20), nullable=False, default=RunOperation.BACKUP.value, index=True)
-    message = Column(Text, nullable=True)  # Error message or success message
-    logs_text = Column(Text, nullable=True)  # Log output from the backup process
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    job_id: Mapped[int | None] = mapped_column(ForeignKey("jobs.id"), nullable=True, index=True)
+    started_at: Mapped[datetime] = mapped_column(
+        nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    operation: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=RunOperation.BACKUP.value, index=True
+    )
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    logs_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Relationships
-    job = relationship("Job", back_populates="runs")
-    target_runs = relationship("TargetRun", back_populates="run", cascade="all, delete-orphan")
+    job: Mapped[Job | None] = relationship(back_populates="runs")
+    target_runs: Mapped[list[TargetRun]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         """String representation of the Run model."""
@@ -34,22 +46,29 @@ class Run(Base):
 class TargetRun(Base):
     __tablename__ = "target_runs"
 
-    id = Column(Integer, primary_key=True, index=True)
-    run_id = Column(Integer, ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True)
-    target_id = Column(Integer, ForeignKey("targets.id", ondelete="CASCADE"), nullable=False, index=True)
-    started_at = Column(DateTime, nullable=False, default=lambda: datetime.now(timezone.utc))
-    finished_at = Column(DateTime, nullable=True)
-    status = Column(String(20), nullable=False, index=True)
-    operation = Column(String(20), nullable=False, default=TargetRunOperation.BACKUP.value, index=True)
-    message = Column(Text, nullable=True)
-    artifact_path = Column(String(500), nullable=True)
-    artifact_bytes = Column(Integer, nullable=True)
-    sha256 = Column(String(64), nullable=True)
-    logs_text = Column(Text, nullable=True)
+    id: Mapped[int] = mapped_column(primary_key=True, index=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    target_id: Mapped[int] = mapped_column(
+        ForeignKey("targets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        nullable=False, default=lambda: datetime.now(timezone.utc)
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    operation: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=TargetRunOperation.BACKUP.value, index=True
+    )
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    artifact_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    artifact_bytes: Mapped[int | None] = mapped_column(nullable=True)
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    logs_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    run = relationship("Run", back_populates="target_runs")
-    target = relationship("Target")
+    run: Mapped[Run] = relationship(back_populates="target_runs")
+    target: Mapped[Target] = relationship()
 
     def __repr__(self) -> str:
         return f"<TargetRun(id={self.id}, run_id={self.run_id}, target_id={self.target_id}, status='{self.status}')>"
-

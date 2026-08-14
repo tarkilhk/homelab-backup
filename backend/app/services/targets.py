@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-from typing import List, Optional, Sequence
 import json
 import logging
+from typing import Optional
 
-from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
-from app.models import Group, Tag, Target, TargetTag, Job, slugify
 from app.core.plugins import loader as plugins_loader
-
+from app.models import Group, Job, Tag, Target, TargetTag, slugify
 
 logger = logging.getLogger(__name__)
+
 
 class TargetService:
     """Target operations per spec.
@@ -25,13 +25,13 @@ class TargetService:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def list(self) -> List[Target]:
+    def list_targets(self) -> list[Target]:
         # Return plain targets; schedule data is provided by a separate endpoint
-        return list(self.db.query(Target).all())
+        return self.db.query(Target).all()
 
     def list_enabled_job_names_for_target(self, target_id: int) -> list[str]:
         """Return names of enabled jobs that apply to this target via tags."""
-        rows: list[tuple[str]] = (
+        rows = (
             self.db.query(Job.name)
             .join(TargetTag, TargetTag.tag_id == Job.tag_id)
             .filter(TargetTag.target_id == target_id, Job.enabled.is_(True))
@@ -55,18 +55,24 @@ class TargetService:
         # Validate plugin config against plugin schema if exists
         if plugin_name and plugin_config_json:
             schema_path = plugins_loader.get_plugin_schema_path(plugin_name)
-            logger.debug("plugin schema path resolved | plugin=%s path=%s", plugin_name, schema_path)
+            logger.debug(
+                "plugin schema path resolved | plugin=%s path=%s", plugin_name, schema_path
+            )
             if schema_path:
                 import json as _json
+
                 with open(schema_path, "r", encoding="utf-8") as f:
                     schema = _json.load(f)
                 try:  # pragma: no cover - optional dependency
                     import jsonschema  # type: ignore
+
                     logger.debug("validating plugin_config_json against schema via jsonschema")
                     jsonschema.validate(instance=json.loads(plugin_config_json), schema=schema)  # type: ignore
                     logger.debug("plugin_config_json validation OK")
                 except ModuleNotFoundError:
-                    logger.warning("jsonschema not installed; performing minimal required-field validation only")
+                    logger.warning(
+                        "jsonschema not installed; performing minimal required-field validation only"
+                    )
                     try:
                         instance = json.loads(plugin_config_json)
                     except Exception as exc:
@@ -213,9 +219,9 @@ class TargetService:
                 TargetTag(target_id=target.id, tag_id=tag.id, origin="AUTO", is_auto_tag=True)
             )
         else:
-            tag = self.db.get(Tag, auto_tt.tag_id)
-            assert tag is not None
-            tag.display_name = new_name  # validator updates slug
+            persisted_tag = self.db.get(Tag, auto_tt.tag_id)
+            assert persisted_tag is not None
+            persisted_tag.display_name = new_name  # validator updates slug
 
         self.db.commit()
         self.db.refresh(target)
@@ -308,5 +314,3 @@ class TargetService:
         self.db.commit()
         self.db.refresh(target)
         return target
-
-

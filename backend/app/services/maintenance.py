@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from typing import List, Optional
+
 from sqlalchemy.orm import Session
 
-from app.models import MaintenanceJob as MaintenanceJobModel, MaintenanceRun as MaintenanceRunModel
+from app.models import MaintenanceJob as MaintenanceJobModel
+from app.models import MaintenanceRun as MaintenanceRunModel
 
 
 class MaintenanceService:
     """Business logic for MaintenanceJobs and MaintenanceRuns.
-    
+
     Provides CRUD convenience for maintenance job definitions and execution history.
     """
 

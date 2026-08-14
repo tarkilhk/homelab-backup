@@ -4,7 +4,7 @@ import logging
 import os
 import shutil
 from datetime import datetime, timezone
-from typing import Dict
+from typing import Any, Dict
 
 from .base import RestoreContext
 
@@ -15,7 +15,7 @@ def copy_artifact_for_restore(
     logger: logging.Logger,
     restore_root: str,
     prefix: str,
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     """Utility used by plugins to simulate restore by copying artifact to a restore location.
 
     Returns a dict with status/message/restored_path for consistency.
@@ -45,6 +45,7 @@ def copy_artifact_for_restore(
     try:
         artifact_bytes = int(os.path.getsize(restored_path))
         import hashlib
+
         digest = hashlib.sha256()
         with open(restored_path, "rb") as fh:
             for chunk in iter(lambda: fh.read(1024 * 1024), b""):

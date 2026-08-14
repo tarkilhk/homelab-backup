@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
-from app.models import Tag, TargetTag, Job, Target
+from app.models import Job, Tag, Target, TargetTag
 
 
 class TagService:
@@ -30,10 +30,9 @@ class TagService:
             self.db.rollback()
             # Re-fetch existing tag by slug (idempotent create)
             from app.models import slugify
+
             slug = slugify(display_name)
-            existing = (
-                self.db.query(Tag).filter(Tag.slug == slug).one_or_none()
-            )
+            existing = self.db.query(Tag).filter(Tag.slug == slug).one_or_none()
             if existing is None:
                 raise
             return existing
@@ -52,6 +51,7 @@ class TagService:
         targets = self.db.query(Target).all()
         for t in targets:
             from app.models import slugify
+
             slug = slugify(t.name or "")
             tag = self.db.query(Tag).filter(Tag.slug == slug).one_or_none()
             if tag is None:
@@ -95,5 +95,3 @@ class TagService:
         self.db.delete(tag)
         self.db.commit()
         return True
-
-
