@@ -42,6 +42,7 @@ from app.models import MaintenanceJob as MaintenanceJobModel
 from app.models import MaintenanceRun as MaintenanceRunModel
 from app.models import Run as RunModel
 from app.models import Target as TargetModel
+from app.models import TargetRun as TargetRunModel
 from app.services.jobs import run_job_for_tag
 from app.services.retention import apply_retention, apply_retention_all
 
@@ -867,6 +868,54 @@ def nightly_retention_cleanup() -> None:
         db.close()
 
 
+def reconcile_interrupted_runs(
+    db: Session,
+    *,
+    finished_at: datetime | None = None,
+) -> dict[str, int]:
+    """Make attempts abandoned by an earlier process terminal and truthful.
+
+    The scheduler executes in this backend process, so a row that is still
+    ``running`` when a new process starts cannot still have a live worker. Leaving
+    it active would hide missed scheduled backups and make the run ledger lie.
+    """
+
+    observed_at = finished_at or datetime.now(timezone.utc)
+    interrupted_message = "Interrupted by application restart"
+    target_runs = (
+        db.query(TargetRunModel).filter(TargetRunModel.status == RunStatus.RUNNING.value).all()
+    )
+    runs = db.query(RunModel).filter(RunModel.status == RunStatus.RUNNING.value).all()
+    maintenance_runs = (
+        db.query(MaintenanceRunModel)
+        .filter(MaintenanceRunModel.status == RunStatus.RUNNING.value)
+        .all()
+    )
+
+    for target_run in target_runs:
+        target_run.status = RunStatus.FAILED.value
+        target_run.finished_at = observed_at
+        target_run.message = interrupted_message
+    for run in runs:
+        run.status = RunStatus.FAILED.value
+        run.finished_at = observed_at
+        run.message = interrupted_message
+    for maintenance_run in maintenance_runs:
+        maintenance_run.status = RunStatus.FAILED.value
+        maintenance_run.finished_at = observed_at
+        maintenance_run.message = interrupted_message
+
+    reconciled = {
+        "runs": len(runs),
+        "target_runs": len(target_runs),
+        "maintenance_runs": len(maintenance_runs),
+    }
+
+    db.commit()
+    _log_event("interrupted_runs_reconciled", **reconciled)
+    return reconciled
+
+
 def schedule_jobs_on_startup(scheduler: AsyncIOScheduler, db: Session) -> None:
     """Load enabled jobs from DB (backup and maintenance) and schedule them with APScheduler.
 
@@ -874,6 +923,8 @@ def schedule_jobs_on_startup(scheduler: AsyncIOScheduler, db: Session) -> None:
     - Uses cron in `jobs.schedule_cron` or `maintenance_jobs.schedule_cron`
     - Ensures `max_instances=1` via scheduler job_defaults or per-job arg
     """
+    reconcile_interrupted_runs(db)
+
     # In tests, a dummy scheduler may be provided without `add_job`.
     if not hasattr(scheduler, "add_job"):
         return

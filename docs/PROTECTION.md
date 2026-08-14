@@ -42,6 +42,9 @@ Manual and scheduled jobs that resolve no targets finish as failed runs.
 Scheduled overlap prevention creates a terminal `skipped` run instead of only a
 log line. Per-target retries create one TargetRun row per attempt. This keeps the
 Runs UI and database ledger truthful without adding a second event subsystem.
+When the backend starts, attempts left `running` by the previous process are
+finished as failed with `Interrupted by application restart`; they cannot remain
+active indefinitely or suppress a real `scheduled_backup_missing` gap.
 
 ## Prometheus metrics
 
