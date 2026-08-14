@@ -2,6 +2,7 @@ import asyncio
 import os
 import sys
 import types
+
 import pytest
 
 from app.core.plugins.base import BackupContext, RestoreContext
@@ -50,6 +51,7 @@ async def test_test_returns_true(monkeypatch):
 @pytest.mark.asyncio
 async def test_test_returns_true_without_database(monkeypatch):
     """Test should default to 'postgres' database when database field is empty."""
+
     class DummyConn:
         async def fetchval(self, query):
             assert query.strip().upper() == "SELECT 1"
@@ -109,6 +111,7 @@ async def test_backup_writes_artifact(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_backup_all_databases_uses_pg_dumpall(tmp_path, monkeypatch):
     """Backup should use pg_dumpall when database field is empty."""
+
     async def fake_exec(*args, **kwargs):
         assert args[0] == "pg_dumpall"
         assert "docker" not in args
@@ -144,7 +147,7 @@ async def test_restore_single_database(tmp_path, monkeypatch):
     # Create a dummy artifact file
     artifact_path = tmp_path / "postgresql-dump-20250101T120000.sql"
     artifact_path.write_text("PostgreSQL backup data")
-    
+
     async def fake_exec(*args, **kwargs):
         # Verify psql is called with correct arguments
         assert args[0] == "psql"
@@ -152,12 +155,13 @@ async def test_restore_single_database(tmp_path, monkeypatch):
         assert "-U" in args and "user" in args
         assert "-d" in args and "db" in args
         assert "-f" in args and str(artifact_path) in args
+        assert "--set" in args and "ON_ERROR_STOP=on" in args
         # Verify PGPASSWORD is set in environment
         assert kwargs.get("env", {}).get("PGPASSWORD") == "pw"
         return DummyProcess(returncode=0, stdout=b"", stderr=b"")
-    
+
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    
+
     plugin = PostgreSQLPlugin(name="postgresql")
     ctx = RestoreContext(
         job_id="1",
@@ -173,7 +177,7 @@ async def test_restore_single_database(tmp_path, monkeypatch):
         metadata={"target_slug": "postgres-restore"},
     )
     result = await plugin.restore(ctx)
-    
+
     # Verify the result contains the expected fields
     assert result["status"] == "success"
     assert result["artifact_path"] == str(artifact_path)
@@ -186,7 +190,7 @@ async def test_restore_all_databases(tmp_path, monkeypatch):
     # Create a dummy dumpall artifact file
     artifact_path = tmp_path / "postgresql-dumpall-20250101T120000.sql"
     artifact_path.write_text("PostgreSQL dumpall data")
-    
+
     async def fake_exec(*args, **kwargs):
         # Verify psql is called with correct arguments for dumpall
         assert args[0] == "psql"
@@ -194,12 +198,13 @@ async def test_restore_all_databases(tmp_path, monkeypatch):
         assert "-U" in args and "user" in args
         assert "-d" in args and "postgres" in args  # Should use postgres DB for dumpall
         assert "-f" in args and str(artifact_path) in args
+        assert "--set" in args and "ON_ERROR_STOP=on" in args
         # Verify PGPASSWORD is set in environment
         assert kwargs.get("env", {}).get("PGPASSWORD") == "pw"
         return DummyProcess(returncode=0, stdout=b"", stderr=b"")
-    
+
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    
+
     plugin = PostgreSQLPlugin(name="postgresql")
     ctx = RestoreContext(
         job_id="1",
@@ -215,7 +220,7 @@ async def test_restore_all_databases(tmp_path, monkeypatch):
         metadata={"target_slug": "postgres-restore"},
     )
     result = await plugin.restore(ctx)
-    
+
     # Verify the result
     assert result["status"] == "success"
     assert result["artifact_path"] == str(artifact_path)
@@ -239,7 +244,7 @@ async def test_restore_fails_when_artifact_missing(tmp_path):
         },
         metadata={},
     )
-    
+
     with pytest.raises(FileNotFoundError, match="Artifact not found"):
         await plugin.restore(ctx)
 
@@ -249,12 +254,12 @@ async def test_restore_fails_when_psql_fails(tmp_path, monkeypatch):
     """Restore should raise RuntimeError when psql command fails."""
     artifact_path = tmp_path / "postgresql-dump-20250101T120000.sql"
     artifact_path.write_text("SQL dump")
-    
+
     async def fake_exec(*args, **kwargs):
         return DummyProcess(returncode=1, stdout=b"", stderr=b"connection refused")
-    
+
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    
+
     plugin = PostgreSQLPlugin(name="postgresql")
     ctx = RestoreContext(
         job_id="1",
@@ -269,6 +274,6 @@ async def test_restore_fails_when_psql_fails(tmp_path, monkeypatch):
         },
         metadata={},
     )
-    
+
     with pytest.raises(RuntimeError, match="psql restore failed"):
         await plugin.restore(ctx)

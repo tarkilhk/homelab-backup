@@ -1,19 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict
-import logging
 
+from app.core.plugins.artifacts import write_backup_bytes
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
 from app.core.plugins.restore_utils import copy_artifact_for_restore
-from app.core.plugins.sidecar import write_backup_sidecar
 
 BACKUP_BASE_PATH = "/backups"
 
 
 class PostgreSQLPlugin(BackupPlugin):
+    restore_capability = "automatic"
     """PostgreSQL backup plugin executed via a temporary Docker container.
     Research notes:
     - `pg_dump` is the standard utility to export a PostgreSQL database into a
@@ -64,7 +65,9 @@ class PostgreSQLPlugin(BackupPlugin):
             import asyncpg  # type: ignore
         except Exception as exc:  # pragma: no cover - environment dependent
             self._logger.warning("asyncpg_not_available | error=%s", exc)
-            raise RuntimeError("PostgreSQL driver (asyncpg) is not available. Please install it.") from exc
+            raise RuntimeError(
+                "PostgreSQL driver (asyncpg) is not available. Please install it."
+            ) from exc
 
         conn = None
         try:
@@ -99,18 +102,13 @@ class PostgreSQLPlugin(BackupPlugin):
 
         meta = context.metadata or {}
         target_slug = meta.get("target_slug") or str(context.target_id)
-        today = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
-        base_dir = os.path.join(BACKUP_BASE_PATH, target_slug, today)
-        os.makedirs(base_dir, exist_ok=True)
-        timestamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%dT%H%M%S")
-        
         # Use pg_dumpall for all databases, pg_dump for single database
         # Run pg_dump/pg_dumpall directly (installed in container) instead of via Docker
         env = os.environ.copy()
         env["PGPASSWORD"] = password
-        
+
         if database:
-            artifact_path = os.path.join(base_dir, f"postgresql-dump-{timestamp}.sql")
+            artifact_prefix = "postgresql-dump"
             cmd = [
                 "pg_dump",
                 "-h",
@@ -121,9 +119,9 @@ class PostgreSQLPlugin(BackupPlugin):
                 user,
                 database,
             ]
-            log_msg = f"postgresql_backup_start | job_id={context.job_id} target_id={context.target_id} target_slug={target_slug} host={host} database={database} artifact={artifact_path}"
+            log_msg = f"postgresql_backup_start | job_id={context.job_id} target_id={context.target_id} target_slug={target_slug} host={host} database={database} artifact=<pending>"
         else:
-            artifact_path = os.path.join(base_dir, f"postgresql-dumpall-{timestamp}.sql")
+            artifact_prefix = "postgresql-dumpall"
             cmd = [
                 "pg_dumpall",
                 "-h",
@@ -133,7 +131,7 @@ class PostgreSQLPlugin(BackupPlugin):
                 "-U",
                 user,
             ]
-            log_msg = f"postgresql_backup_start | job_id={context.job_id} target_id={context.target_id} target_slug={target_slug} host={host} database=all artifact={artifact_path}"
+            log_msg = f"postgresql_backup_start | job_id={context.job_id} target_id={context.target_id} target_slug={target_slug} host={host} database=all artifact=<pending>"
 
         self._logger.info(log_msg)
 
@@ -158,16 +156,19 @@ class PostgreSQLPlugin(BackupPlugin):
             cmd_name = "pg_dumpall" if not database else "pg_dump"
             raise RuntimeError(f"{cmd_name} failed: {err}")
 
-        with open(artifact_path, "wb") as fh:
-            fh.write(stdout_data)
-        
-        write_backup_sidecar(artifact_path, self, context, logger=self._logger)
-        
+        artifact_path = write_backup_bytes(
+            self,
+            context,
+            stdout_data,
+            prefix=artifact_prefix,
+            suffix=".sql",
+            backup_root=BACKUP_BASE_PATH,
+        )
         return {"artifact_path": artifact_path}
 
     async def restore(self, context: RestoreContext) -> Dict[str, Any]:
         """Restore a PostgreSQL database from a SQL dump file using psql.
-        
+
         For single database dumps (pg_dump): restores to the specified database
         For all database dumps (pg_dumpall): restores to all databases
         """
@@ -177,20 +178,20 @@ class PostgreSQLPlugin(BackupPlugin):
         user = str(cfg.get("user"))
         password = str(cfg.get("password"))
         database = cfg.get("database", "").strip()
-        
+
         if not host or not user or not password:
             raise ValueError("postgresql config requires host, user, password")
-        
+
         artifact_path = context.artifact_path
         if not artifact_path or not os.path.exists(artifact_path):
             raise FileNotFoundError(f"Artifact not found: {artifact_path}")
-        
+
         # Determine if this is a dumpall or single database dump based on filename
         is_dumpall = "dumpall" in os.path.basename(artifact_path)
-        
+
         env = os.environ.copy()
         env["PGPASSWORD"] = password
-        
+
         if is_dumpall:
             # For pg_dumpall dumps, restore to postgres database (system database)
             # psql will execute all CREATE DATABASE and connect statements in the dump
@@ -204,6 +205,8 @@ class PostgreSQLPlugin(BackupPlugin):
                 user,
                 "-d",
                 "postgres",  # Connect to postgres database for dumpall
+                "--set",
+                "ON_ERROR_STOP=on",
                 "-f",
                 artifact_path,
             ]
@@ -221,13 +224,15 @@ class PostgreSQLPlugin(BackupPlugin):
                 user,
                 "-d",
                 target_db,
+                "--set",
+                "ON_ERROR_STOP=on",
                 "-f",
                 artifact_path,
             ]
             log_msg = f"postgresql_restore_start | job_id={context.job_id} source={context.source_target_id} dest={context.destination_target_id} host={host} database={target_db} artifact={artifact_path}"
-        
+
         self._logger.info(log_msg)
-        
+
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -245,13 +250,13 @@ class PostgreSQLPlugin(BackupPlugin):
                 exc,
             )
             raise
-        
+
         if proc.returncode != 0:
             err = stderr_data.decode(errors="ignore").strip()
             raise RuntimeError(f"psql restore failed: {err}")
-        
+
         artifact_bytes = os.path.getsize(artifact_path)
-        
+
         self._logger.info(
             "postgresql_restore_success | job_id=%s source=%s dest=%s artifact=%s bytes=%s",
             context.job_id,
@@ -260,12 +265,14 @@ class PostgreSQLPlugin(BackupPlugin):
             artifact_path,
             artifact_bytes,
         )
-        
+
         return {
             "status": "success",
             "artifact_path": artifact_path,
             "artifact_bytes": artifact_bytes,
         }
 
-    async def get_status(self, context: BackupContext) -> Dict[str, Any]:  # pragma: no cover - not implemented
+    async def get_status(
+        self, context: BackupContext
+    ) -> Dict[str, Any]:  # pragma: no cover - not implemented
         return {"status": "unknown"}

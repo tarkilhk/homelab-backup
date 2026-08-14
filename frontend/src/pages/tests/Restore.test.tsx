@@ -236,10 +236,7 @@ describe('RestorePage', () => {
     })
     
     const restoreButtons = await screen.findAllByText('Restore')
-    const tableRestoreButton = restoreButtons.find(btn => {
-      const parent = btn.closest('tr')
-      return parent !== null
-    })
+    const tableRestoreButton = restoreButtons.filter(btn => btn.closest('tr'))[1]
     expect(tableRestoreButton).toBeDefined()
     fireEvent.click(tableRestoreButton!)
     
@@ -251,7 +248,7 @@ describe('RestorePage', () => {
       if (targetLabel) {
         const targetSelect = targetLabel.parentElement?.querySelector('select') as HTMLSelectElement
         if (targetSelect) {
-          fireEvent.change(targetSelect, { target: { value: '1' } })
+          fireEvent.change(targetSelect, { target: { value: '3' } })
           
           const confirmBtn = screen.getByRole('button', { name: 'Confirm Restore' })
           fireEvent.click(confirmBtn)
@@ -283,10 +280,7 @@ describe('RestorePage', () => {
     })
     
     const restoreButtons = await screen.findAllByText('Restore')
-    const tableRestoreButton = restoreButtons.find(btn => {
-      const parent = btn.closest('tr')
-      return parent !== null
-    })
+    const tableRestoreButton = restoreButtons.filter(btn => btn.closest('tr'))[1]
     expect(tableRestoreButton).toBeDefined()
     fireEvent.click(tableRestoreButton!)
     
@@ -298,7 +292,7 @@ describe('RestorePage', () => {
       if (targetLabel) {
         const targetSelect = targetLabel.parentElement?.querySelector('select') as HTMLSelectElement
         if (targetSelect) {
-          fireEvent.change(targetSelect, { target: { value: '1' } })
+          fireEvent.change(targetSelect, { target: { value: '3' } })
           const confirmBtn = screen.getByRole('button', { name: 'Confirm Restore' })
           fireEvent.click(confirmBtn)
           return true
@@ -349,15 +343,24 @@ describe('RestorePage', () => {
     })
     
     const restoreButtons = await screen.findAllByText('Restore')
-    const tableRestoreButton = restoreButtons.find(btn => {
-      const parent = btn.closest('tr')
-      return parent !== null
-    })
+    const tableRestoreButton = restoreButtons.filter(btn => btn.closest('tr'))[1]
     expect(tableRestoreButton).toBeDefined()
     fireEvent.click(tableRestoreButton!)
     
     await screen.findByText('Restore Backup')
     
+    const confirmBtn = screen.getByRole('button', { name: 'Confirm Restore' }) as HTMLButtonElement
+    expect(confirmBtn.disabled).toBe(true)
+  })
+
+  it('identifies manual-only plugins and prevents a false successful restore', async () => {
+    render(wrapper(<RestorePage />))
+    await waitFor(() => expect(screen.queryByText('Loading backups...')).toBeNull())
+
+    const restoreButtons = await screen.findAllByText('Restore')
+    fireEvent.click(restoreButtons.filter(btn => btn.closest('tr'))[0])
+
+    await screen.findByText(/manual restore workflow only/i)
     const confirmBtn = screen.getByRole('button', { name: 'Confirm Restore' }) as HTMLButtonElement
     expect(confirmBtn.disabled).toBe(true)
   })
@@ -427,12 +430,6 @@ describe('RestorePage', () => {
     await screen.findByText('Restore Backup')
     
     // Wait for targets to be fetched and processed, then check for warning
-    // The warning appears when there are no matching targets for the plugin
-    await waitFor(() => {
-      // Look for the amber warning container
-      const warningContainer = document.querySelector('.bg-amber-50')
-      expect(warningContainer).not.toBeNull()
-      expect(warningContainer?.textContent).toContain('No targets found')
-    }, { timeout: 5000 })
+    await screen.findByText(/No targets found using the/i)
   })
 })

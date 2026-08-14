@@ -46,6 +46,10 @@ export default function RestorePage() {
   const { data: targets } = useQuery({ queryKey: ['targets'], queryFn: api.listTargets })
   const { data: plugins } = useQuery({ queryKey: ['plugins'], queryFn: api.listPlugins })
 
+  const activePluginName = selectedPlugin || selectedBackup?.plugin_name || ''
+  const restoreCapability = plugins?.find((plugin) => plugin.key === activePluginName)?.restore_capability ?? 'manual'
+  const supportsAutomaticRestore = restoreCapability === 'automatic' || restoreCapability === 'partial'
+
   // Filter eligible targets based on plugin
   const eligibleTargets = useMemo(() => {
     if (!selectedBackup) return []
@@ -483,6 +487,17 @@ export default function RestorePage() {
                 </div>
               </div>
 
+              {restoreCapability === 'manual' && activePluginName && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-md text-sm text-amber-800">
+                  This plugin provides a manual restore workflow only. Homelab Backup will not report copying the artifact as a completed restore.
+                </div>
+              )}
+              {restoreCapability === 'partial' && (
+                <div className="p-3 bg-amber-50 border border-amber-200 rounded-md text-sm text-amber-800">
+                  This plugin performs a partial restore. Review the plugin documentation before continuing.
+                </div>
+              )}
+
               {!selectedBackup.plugin_name && (
                 <div className="space-y-2">
                   <label className="block text-sm font-semibold">Select Plugin</label>
@@ -547,7 +562,7 @@ export default function RestorePage() {
                 </button>
                 <button
                   onClick={handleConfirmRestore}
-                  disabled={typeof selectedDestination !== 'number' || isRestoring || eligibleTargets.length === 0 || (!selectedBackup.plugin_name && !selectedPlugin)}
+                  disabled={!supportsAutomaticRestore || typeof selectedDestination !== 'number' || isRestoring || eligibleTargets.length === 0 || (!selectedBackup.plugin_name && !selectedPlugin)}
                   className="px-4 py-2 bg-[hsl(var(--accent))] text-white rounded-md hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isRestoring ? 'Restoring…' : 'Confirm Restore'}

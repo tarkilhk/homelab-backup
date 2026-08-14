@@ -68,6 +68,7 @@ export type PluginInfo = {
   name?: string
   description?: string
   version?: string
+  restore_capability: 'automatic' | 'partial' | 'manual'
 }
 
 export type Job = {
@@ -120,10 +121,13 @@ export type SettingsUpdate = {
 }
 
 export type RetentionPreviewResult = {
+  targets_processed?: number
   keep_count: number
   delete_count: number
   deleted_paths: string[]
   kept_paths: string[]
+  failed_count: number
+  failed_paths: string[]
 }
 
 // Maintenance types
@@ -180,6 +184,10 @@ export type GroupWithTags = Group & { tags: Tag[] }
 
 const API_BASE = '/api/v1'
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     headers: { 'Content-Type': 'application/json' },
@@ -190,13 +198,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const contentType = res.headers.get('content-type') ?? ''
     try {
       if (contentType.includes('application/json')) {
-        const data = await res.json()
-        const detail = (data as any)?.detail ?? (data as any)?.message ?? (data as any)?.error
+        const data: unknown = await res.json()
+        const detail = isRecord(data) ? data.detail ?? data.message ?? data.error : undefined
         if (typeof detail === 'string') {
           errorMessage = detail
         } else if (Array.isArray(detail)) {
           errorMessage = detail
-            .map((d: any) => (typeof d === 'string' ? d : d?.msg ?? JSON.stringify(d)))
+            .map((item: unknown) => {
+              if (typeof item === 'string') return item
+              return isRecord(item) && typeof item.msg === 'string'
+                ? item.msg
+                : JSON.stringify(item)
+            })
             .join(', ')
         } else {
           errorMessage = JSON.stringify(data)
@@ -208,8 +221,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       // Swallow parsing errors and fall back to generic message
     }
-    const err = new Error(errorMessage)
-    ;(err as any).status = res.status
+    const err = Object.assign(new Error(errorMessage), { status: res.status })
     throw err
   }
   if (res.status === 204) return undefined as unknown as T
@@ -306,12 +318,18 @@ export const api = {
   updateSettings: (payload: SettingsUpdate) =>
     request<Settings>('/settings/', { method: 'PUT', body: JSON.stringify(payload) }),
   // Retention
-  previewRetention: (jobId: number, targetId: number) =>
-    request<RetentionPreviewResult>(`/settings/retention/preview?job_id=${jobId}&target_id=${targetId}`, { method: 'POST' }),
-  runRetention: (jobId?: number, targetId?: number) => {
+  previewRetention: (jobId?: number, targetId?: number) => {
     const params = new URLSearchParams()
     if (jobId != null) params.set('job_id', String(jobId))
     if (targetId != null) params.set('target_id', String(targetId))
+    const q = params.toString()
+    return request<RetentionPreviewResult>(`/settings/retention/preview${q ? `?${q}` : ''}`, { method: 'POST' })
+  },
+  runRetention: (confirmed: boolean, jobId?: number, targetId?: number) => {
+    const params = new URLSearchParams()
+    if (jobId != null) params.set('job_id', String(jobId))
+    if (targetId != null) params.set('target_id', String(targetId))
+    params.set('confirmed', String(confirmed))
     const q = params.toString()
     return request<RetentionPreviewResult>(`/settings/retention/run${q ? `?${q}` : ''}`, { method: 'POST' })
   },

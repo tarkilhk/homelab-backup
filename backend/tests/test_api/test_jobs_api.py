@@ -8,7 +8,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.core.plugins.base import BackupPlugin, BackupContext, RestoreContext
+from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
+from app.core.plugins.sidecar import write_backup_sidecar
 
 
 def wait_for_run_completion(
@@ -37,17 +38,27 @@ def test_jobs_crud_and_run_now(client: TestClient, monkeypatch: pytest.MonkeyPat
     class _SuccessPlugin(BackupPlugin):
         async def validate_config(self, config: Dict[str, Any]) -> bool:  # noqa: ARG002
             return True
+
         async def test(self, config: Dict[str, Any]) -> bool:  # noqa: ARG002
             return True
+
         async def backup(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
-            fd, path = tempfile.mkstemp(prefix="backup-test-", suffix=".txt")
+            with tempfile.NamedTemporaryFile(
+                prefix="backup-test-", suffix=".txt", delete=False
+            ) as artifact:
+                artifact.write(b"test backup")
+                path = artifact.name
+            write_backup_sidecar(path, self, context)
             return {"artifact_path": path}
+
         async def restore(self, context: RestoreContext) -> Dict[str, Any]:  # noqa: ARG002
             return {"ok": True}
+
         async def get_status(self, context: BackupContext) -> Dict[str, Any]:  # noqa: ARG002
             return {"ok": True}
 
     import app.core.scheduler as sched
+
     monkeypatch.setattr(sched, "get_plugin", lambda name: _SuccessPlugin(name))
     # Need a target first (auto-tag should be created for target name)
     target_payload = {
@@ -135,7 +146,7 @@ def test_failure_triggers_email_notifier(client: TestClient, monkeypatch: object
     r = client.get("/api/v1/tags/")
     assert r.status_code == 200
     tags = r.json()
-    tag_id = next(t["id"] for t in tags if t.get("display_name") == target["name"]) 
+    tag_id = next(t["id"] for t in tags if t.get("display_name") == target["name"])
 
     r = client.post(
         "/api/v1/jobs/",

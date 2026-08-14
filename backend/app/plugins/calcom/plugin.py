@@ -9,11 +9,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
 
+from app.core.plugins.artifacts import write_backup_bytes
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
-from app.core.plugins.sidecar import write_backup_sidecar
 
 
 class CalcomPlugin(BackupPlugin):
+    restore_capability = "automatic"
     """Backup Cal.com by dumping its PostgreSQL database.
 
     Research notes:
@@ -80,14 +81,8 @@ class CalcomPlugin(BackupPlugin):
         lower = stderr_text.lower()
         return (
             "already exists" in lower
-            or (
-                "cannot drop constraint" in lower
-                and "because other objects depend on it" in lower
-            )
-            or (
-                "use drop ... cascade" in lower
-                and "depend" in lower
-            )
+            or ("cannot drop constraint" in lower and "because other objects depend on it" in lower)
+            or ("use drop ... cascade" in lower and "depend" in lower)
         )
 
     def _sanitize_restore_sql(self, artifact_path: str, unsupported_settings: set[str]) -> str:
@@ -133,9 +128,9 @@ class CalcomPlugin(BackupPlugin):
         # Restrict schema extraction to DDL/COPY lines to avoid false positives
         # from quoted table/column references and data values.
         object_ddl_schema_re = re.compile(
-            r'^\s*(?:CREATE|ALTER|DROP|TRUNCATE|COMMENT\s+ON|COPY)\s+'
-            r'(?:TABLE|TYPE|VIEW|MATERIALIZED\s+VIEW|SEQUENCE|FUNCTION|INDEX|TRIGGER|POLICY|RULE|DOMAIN|TEXT\s+SEARCH\s+CONFIGURATION|TEXT\s+SEARCH\s+DICTIONARY)?'
-            r'.*?\b(?:ON\s+|TABLE\s+|TYPE\s+|VIEW\s+|SEQUENCE\s+|FUNCTION\s+|DOMAIN\s+|COPY\s+)?'
+            r"^\s*(?:CREATE|ALTER|DROP|TRUNCATE|COMMENT\s+ON|COPY)\s+"
+            r"(?:TABLE|TYPE|VIEW|MATERIALIZED\s+VIEW|SEQUENCE|FUNCTION|INDEX|TRIGGER|POLICY|RULE|DOMAIN|TEXT\s+SEARCH\s+CONFIGURATION|TEXT\s+SEARCH\s+DICTIONARY)?"
+            r".*?\b(?:ON\s+|TABLE\s+|TYPE\s+|VIEW\s+|SEQUENCE\s+|FUNCTION\s+|DOMAIN\s+|COPY\s+)?"
             r'("(?P<qschema>[^"]+)"|(?P<uschema>[A-Za-z_][A-Za-z0-9_]*))\s*\.\s*(?:"[^"]+"|[A-Za-z_][A-Za-z0-9_]*)',
             flags=re.IGNORECASE,
         )
@@ -155,7 +150,8 @@ class CalcomPlugin(BackupPlugin):
                         schemas.add(schema)
 
         filtered = [
-            s for s in schemas
+            s
+            for s in schemas
             if s.lower() not in system_schemas and not s.lower().startswith("pg_")
         ]
         if not filtered:
@@ -176,7 +172,7 @@ class CalcomPlugin(BackupPlugin):
         )
         _, stderr_data = await proc.communicate()
         err = stderr_data.decode(errors="ignore").strip()
-        return proc.returncode, err
+        return proc.returncode if proc.returncode is not None else -1, err
 
     async def _reset_public_schema(self, db_url: str) -> tuple[int, str]:
         proc = await asyncio.create_subprocess_exec(
@@ -192,9 +188,11 @@ class CalcomPlugin(BackupPlugin):
         )
         _, stderr_data = await proc.communicate()
         err = stderr_data.decode(errors="ignore").strip()
-        return proc.returncode, err
+        return proc.returncode if proc.returncode is not None else -1, err
 
-    async def _grant_permissions_to_role(self, db_url: str, role_name: str, schemas: list[str]) -> tuple[int, str]:
+    async def _grant_permissions_to_role(
+        self, db_url: str, role_name: str, schemas: list[str]
+    ) -> tuple[int, str]:
         quoted_role = self._quote_ident(role_name)
         statements: list[str] = []
         for schema_name in schemas:
@@ -224,7 +222,7 @@ class CalcomPlugin(BackupPlugin):
         )
         _, stderr_data = await proc.communicate()
         err = stderr_data.decode(errors="ignore").strip()
-        return proc.returncode, err
+        return proc.returncode if proc.returncode is not None else -1, err
 
     async def test(self, config: Dict[str, Any]) -> bool:
         if not await self.validate_config(config):
@@ -246,13 +244,19 @@ class CalcomPlugin(BackupPlugin):
             stdout, stderr = await proc.communicate()
             if proc.returncode != 0:
                 err = stderr.decode(errors="ignore").strip()
-                raise ConnectionError(f"Failed to connect to PostgreSQL database: {err or 'unknown error'}")
+                raise ConnectionError(
+                    f"Failed to connect to PostgreSQL database: {err or 'unknown error'}"
+                )
             if stdout.decode(errors="ignore").strip() != "1":
-                raise ConnectionError("Failed to validate PostgreSQL connection: unexpected test query result")
+                raise ConnectionError(
+                    "Failed to validate PostgreSQL connection: unexpected test query result"
+                )
             return True
         except FileNotFoundError:
             self._logger.warning("psql_not_found")
-            raise FileNotFoundError("psql command not found. Please ensure PostgreSQL client tools are installed.")
+            raise FileNotFoundError(
+                "psql command not found. Please ensure PostgreSQL client tools are installed."
+            )
         except ConnectionError:
             raise
 
@@ -261,16 +265,6 @@ class CalcomPlugin(BackupPlugin):
         db_url = self._get_connection_url(cfg, prefer_direct=True)
         if not db_url:
             raise ValueError("database_url is required")
-
-        meta = context.metadata or {}
-        slug = meta.get("target_slug") or str(context.target_id)
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-        base_dir = Path(self.base_dir) / slug / today
-        base_dir.mkdir(parents=True, exist_ok=True)
-
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-        artifact_path = base_dir / f"calcom-db-{timestamp}.sql"
 
         proc = await asyncio.create_subprocess_exec(
             "pg_dump",
@@ -289,26 +283,29 @@ class CalcomPlugin(BackupPlugin):
             )
             raise RuntimeError("pg_dump failed")
 
-        with open(artifact_path, "wb") as f:
-            f.write(stdout)
-
-        write_backup_sidecar(str(artifact_path), self, context, logger=self._logger)
-
-        return {"artifact_path": str(artifact_path)}
+        artifact_path = write_backup_bytes(
+            self,
+            context,
+            stdout,
+            prefix="calcom-db",
+            suffix=".sql",
+            backup_root=self.base_dir,
+        )
+        return {"artifact_path": artifact_path}
 
     async def restore(self, context: RestoreContext) -> Dict[str, Any]:
         """Restore a Cal.com PostgreSQL database from a SQL dump file using psql."""
         cfg = context.config or {}
         db_url = self._get_connection_url(cfg, prefer_direct=True)
         grant_role = self._get_optional_str(cfg, "restore_grant_role")
-        
+
         if not db_url:
             raise ValueError("database_url is required for restore")
-        
+
         artifact_path = context.artifact_path
         if not artifact_path or not os.path.exists(artifact_path):
             raise FileNotFoundError(f"Artifact not found: {artifact_path}")
-        
+
         self._logger.info(
             "calcom_restore_start | job_id=%s source=%s dest=%s artifact=%s",
             context.job_id,
@@ -316,7 +313,7 @@ class CalcomPlugin(BackupPlugin):
             context.destination_target_id,
             artifact_path,
         )
-        
+
         temp_sql_path: str | None = None
         restore_sql_path = artifact_path
 
@@ -362,25 +359,25 @@ class CalcomPlugin(BackupPlugin):
                         temp_sql_path,
                         exc,
                     )
-        
+
         if returncode != 0:
             raise RuntimeError(f"psql restore failed: {err}")
 
         if grant_role:
             schemas = self._extract_schemas_from_dump(artifact_path)
-            grant_code, grant_err = await self._grant_permissions_to_role(db_url, grant_role, schemas)
+            grant_code, grant_err = await self._grant_permissions_to_role(
+                db_url, grant_role, schemas
+            )
             if grant_code != 0:
-                raise RuntimeError(
-                    f"psql grant for app role '{grant_role}' failed: {grant_err}"
-                )
+                raise RuntimeError(f"psql grant for app role '{grant_role}' failed: {grant_err}")
             self._logger.info(
                 "calcom_restore_permissions_granted | app_role=%s schemas=%s",
                 grant_role,
                 schemas,
             )
-        
+
         artifact_bytes = os.path.getsize(artifact_path)
-        
+
         self._logger.info(
             "calcom_restore_success | job_id=%s source=%s dest=%s artifact=%s bytes=%s",
             context.job_id,
@@ -389,12 +386,14 @@ class CalcomPlugin(BackupPlugin):
             artifact_path,
             artifact_bytes,
         )
-        
+
         return {
             "status": "success",
             "artifact_path": artifact_path,
             "artifact_bytes": artifact_bytes,
         }
 
-    async def get_status(self, context: BackupContext) -> Dict[str, Any]:  # pragma: no cover - trivial
+    async def get_status(
+        self, context: BackupContext
+    ) -> Dict[str, Any]:  # pragma: no cover - trivial
         return {"status": "not implemented"}

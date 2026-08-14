@@ -112,6 +112,33 @@ services:
 
 Prometheus metrics include per-job successes/failures and last-run timestamp. See `/metrics` for details.
 
+## Backup safety and recovery
+
+Backup success means that a plugin produced a unique, non-empty artifact and that
+Homelab Backup atomically published both the artifact and its required
+`<artifact>.meta.json` recovery sidecar. Restore candidates without valid sidecar
+metadata are not exposed in the UI. When database history is available, restore
+also verifies the recorded artifact size and SHA-256 digest before invoking a
+destination plugin.
+
+Retention cleanup must be previewed and explicitly confirmed. A filesystem
+deletion failure preserves the database record so the failure remains visible.
+
+Restore support is plugin-specific: some plugins restore automatically, WordPress
+currently restores only its database, and several plugins intentionally provide a
+manual workflow. See [docs/RECOVERY.md](docs/RECOVERY.md) for the capability matrix,
+restore drills, and current limitations.
+
+The application has no built-in user authentication. Keep the API and UI on a
+trusted network or place them behind an authenticated reverse proxy. A Docker
+socket grants host-level control; mount it only when a configured plugin requires
+it and protect access to the backend accordingly.
+
+SQLite files and backup artifacts are runtime data and must never be committed.
+CI scans the checked-out tree for secrets, and repository tests reject tracked
+database/backup files. This does not remove sensitive data from old Git history or
+rotate credentials; operators must handle those actions separately when needed.
+
 ## Plugins
 The system supports adding new plugins to back up different services. See `ADDING_PLUGINS.md` for the canonical contract and a complete, step-by-step guide.
 

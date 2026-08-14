@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict
 
 import httpx
-import logging
 
+from app.core.plugins.artifacts import write_backup_bytes
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
 from app.core.plugins.restore_utils import copy_artifact_for_restore
-from app.core.plugins.sidecar import write_backup_sidecar
 
 BACKUP_BASE = "/backups"
 
@@ -61,9 +61,7 @@ class JellyfinPlugin(BackupPlugin):
         except RuntimeError:
             raise
         except (httpx.HTTPError, ValueError) as exc:
-            self._logger.warning(
-                "jellyfin_test_error | url=%s error=%s", info_url, exc
-            )
+            self._logger.warning("jellyfin_test_error | url=%s error=%s", info_url, exc)
             raise ConnectionError(f"Failed to connect to Jellyfin server: {exc}") from exc
 
         if not isinstance(data, dict) or not data.get("Version"):
@@ -73,13 +71,6 @@ class JellyfinPlugin(BackupPlugin):
     async def backup(self, context: BackupContext) -> Dict[str, Any]:
         meta = context.metadata or {}
         target_slug = meta.get("target_slug") or str(context.target_id)
-        today = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
-
-        base_dir = os.path.join(BACKUP_BASE, target_slug, today)
-        os.makedirs(base_dir, exist_ok=True)
-
-        ts = datetime.now(timezone.utc).astimezone().strftime("%Y%m%dT%H%M%S")
-        artifact_path = os.path.join(base_dir, f"jellyfin-backup-{ts}.zip")
 
         cfg = getattr(context, "config", {}) or {}
         base_url = str(cfg.get("base_url", "")).rstrip("/")
@@ -98,7 +89,7 @@ class JellyfinPlugin(BackupPlugin):
             context.target_id,
             target_slug,
             backup_url,
-            artifact_path,
+            "<pending>",
         )
         try:
             async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
@@ -124,8 +115,14 @@ class JellyfinPlugin(BackupPlugin):
         if not content:
             raise RuntimeError("Jellyfin backup returned no content")
 
-        with open(artifact_path, "wb") as f:
-            f.write(content)
+        artifact_path = write_backup_bytes(
+            self,
+            context,
+            content,
+            prefix="jellyfin-backup",
+            suffix=".zip",
+            backup_root=BACKUP_BASE,
+        )
         self._logger.info(
             "jellyfin_backup_success | job_id=%s target_id=%s artifact=%s size_bytes=%s",
             context.job_id,
@@ -134,19 +131,17 @@ class JellyfinPlugin(BackupPlugin):
             len(content),
         )
 
-        write_backup_sidecar(artifact_path, self, context, logger=self._logger)
-
         return {"artifact_path": artifact_path}
 
     async def restore(self, context: RestoreContext) -> Dict[str, Any]:
         """Restore a Jellyfin backup.
-        
+
         Note: Jellyfin's Backup plugin manages restoration. This function copies the
         backup file to a restore directory. To complete the restore:
         1. Stop the Jellyfin server
         2. Extract the backup ZIP to the Jellyfin config directory
         3. Restart Jellyfin server
-        
+
         The backup ZIP contains configuration files and metadata but typically not media files.
         """
         return copy_artifact_for_restore(
@@ -156,5 +151,7 @@ class JellyfinPlugin(BackupPlugin):
             prefix="jellyfin",
         )
 
-    async def get_status(self, context: BackupContext) -> Dict[str, Any]:  # pragma: no cover - trivial
+    async def get_status(
+        self, context: BackupContext
+    ) -> Dict[str, Any]:  # pragma: no cover - trivial
         return {"status": "ok"}

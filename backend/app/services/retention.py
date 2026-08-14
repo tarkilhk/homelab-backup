@@ -6,20 +6,21 @@ Retention is evaluated per (job_id, target_id) pair.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import shutil
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
-
-from sqlalchemy.orm import Session
 from zoneinfo import ZoneInfo
 
-from app.models import Run as RunModel, Settings as SettingsModel, Job as JobModel
-from app.models.runs import TargetRun as TargetRunModel
-from app.domain.enums import TargetRunStatus, TargetRunOperation
+from sqlalchemy.orm import Session
 
+from app.domain.enums import TargetRunOperation, TargetRunStatus
+from app.models import Job as JobModel
+from app.models import Run as RunModel
+from app.models import Settings as SettingsModel
+from app.models.runs import TargetRun as TargetRunModel
+from app.schemas.settings import RetentionPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -29,23 +30,21 @@ SERVER_TZ = ZoneInfo("Asia/Singapore")
 
 def _parse_retention_policy(policy_json: Optional[str]) -> Optional[Dict[str, Any]]:
     """Parse a retention policy JSON string into a dict.
-    
+
     Returns None if policy_json is None/empty or invalid.
     """
     if not policy_json:
         return None
     try:
-        policy = json.loads(policy_json)
-        if isinstance(policy, dict) and "rules" in policy:
-            return policy
-        return None
-    except (json.JSONDecodeError, TypeError):
+        policy = RetentionPolicy.model_validate_json(policy_json)
+        return policy.model_dump()
+    except (TypeError, ValueError):
         return None
 
 
 def _get_effective_policy(db: Session, job_id: int) -> Optional[Dict[str, Any]]:
     """Get the effective retention policy for a job (job override or global).
-    
+
     Returns None if no retention policy is configured (retention disabled).
     """
     # Check job-level override first
@@ -54,23 +53,23 @@ def _get_effective_policy(db: Session, job_id: int) -> Optional[Dict[str, Any]]:
         policy = _parse_retention_policy(job.retention_policy_json)
         if policy:
             return policy
-    
+
     # Fall back to global settings
     settings = db.query(SettingsModel).filter(SettingsModel.id == 1).first()
     if settings and settings.global_retention_policy_json:
         return _parse_retention_policy(settings.global_retention_policy_json)
-    
+
     return None
 
 
 def _get_bucket_key(dt: datetime, unit: str) -> Tuple[int, ...]:
     """Compute bucket key for a datetime based on unit (day/week/month/year).
-    
+
     Returns a tuple that uniquely identifies the bucket.
     """
     dt_aware = _ensure_tz_aware(dt)
     local_dt = dt_aware.astimezone(SERVER_TZ)
-    
+
     if unit == "day":
         return (local_dt.year, local_dt.month, local_dt.day)
     elif unit == "week":
@@ -95,13 +94,13 @@ def _ensure_tz_aware(dt: datetime) -> datetime:
 
 def _get_window_start(now: datetime, unit: str, window: int) -> datetime:
     """Compute the start of the retention window.
-    
+
     For 'keep 1 per day for last 7 days', window=7 and we look back 7 days.
     Returns the start of the day/week/month/year (normalized to midnight/start of period).
     """
     now_aware = _ensure_tz_aware(now)
     local_now = now_aware.astimezone(SERVER_TZ)
-    
+
     if unit == "day":
         # Start of day N days ago (normalize to midnight)
         target_date = (local_now - timedelta(days=window)).date()
@@ -118,14 +117,14 @@ def _get_window_start(now: datetime, unit: str, window: int) -> datetime:
         # Use actual calendar months, not approximate 30-day periods
         target_year = local_now.year
         target_month = local_now.month
-        
+
         # Subtract months
         for _ in range(window):
             target_month -= 1
             if target_month < 1:
                 target_month = 12
                 target_year -= 1
-        
+
         start = datetime(target_year, target_month, 1, 0, 0, 0, 0, tzinfo=SERVER_TZ)
     elif unit == "year":
         # Start of year N years ago (normalize to start of year)
@@ -135,13 +134,13 @@ def _get_window_start(now: datetime, unit: str, window: int) -> datetime:
         # Default to day behavior
         target_date = (local_now - timedelta(days=window)).date()
         start = datetime.combine(target_date, datetime.min.time(), tzinfo=SERVER_TZ)
-    
+
     return start
 
 
 def _get_unit_priority(unit: str) -> int:
     """Get priority for unit ordering (lower = more granular, processed first).
-    
+
     day < week < month < year
     """
     priorities = {
@@ -158,21 +157,21 @@ def _get_most_granular_window_end(
     now: datetime,
 ) -> Optional[datetime]:
     """Get the end of the most granular rule's window.
-    
+
     Returns the earliest window_start among all granular rules, or None if no rules.
     This represents the cutoff point: backups newer than this are handled by
     more granular rules.
     """
     if not granular_rules:
         return None
-    
+
     window_starts = []
     for rule in granular_rules:
         unit = rule.get("unit", "day")
         window = rule.get("window", 1)
         window_start = _get_window_start(now, unit, window)
         window_starts.append(window_start)
-    
+
     # Return the earliest (oldest) window start - this is the cutoff
     return min(window_starts) if window_starts else None
 
@@ -183,57 +182,58 @@ def compute_keep_set(
     now: Optional[datetime] = None,
 ) -> Set[int]:
     """Compute which TargetRun IDs to keep based on retention policy.
-    
+
     Uses hierarchical semantics: rules are processed in order of granularity
     (day < week < month < year). More granular rules are processed first, and
     less granular rules only consider backups outside the windows of more
     granular rules.
-    
+
     For example:
     - Daily rule (5 days): Keep 1 per day for last 5 days
     - Monthly rule (3 months): Keep 1 per month for last 3 months, but only
       consider backups outside the 5-day daily window
     - Yearly rule (2 years): Keep 1 per year for last 2 years, but only
       consider backups outside the monthly window
-    
+
     Args:
         candidates: List of TargetRun objects with artifact_path set
         policy: Parsed retention policy dict with 'rules' list
         now: Current time for window calculation (defaults to utcnow)
-    
+
     Returns:
         Set of TargetRun IDs to keep
     """
     if now is None:
         now = datetime.now(SERVER_TZ)
-    
+
     rules = policy.get("rules", [])
     if not rules:
         # No rules = keep everything (retention disabled)
         return {tr.id for tr in candidates}
-    
+
     # Sort rules by granularity (most granular first)
     sorted_rules = sorted(rules, key=lambda r: _get_unit_priority(r.get("unit", "day")))
-    
+
     keep_ids: Set[int] = set()
     processed_candidates: Set[int] = set()  # Track which candidates we've already processed
-    
+
     for rule in sorted_rules:
         unit = rule.get("unit", "day")
         window = rule.get("window", 1)
         keep_per_bucket = rule.get("keep", 1)
-        
+
         window_start = _get_window_start(now, unit, window)
-        
+
         # Get all more granular rules (already processed)
         more_granular_rules = [
-            r for r in sorted_rules[:sorted_rules.index(rule)]
+            r
+            for r in sorted_rules[: sorted_rules.index(rule)]
             if _get_unit_priority(r.get("unit", "day")) < _get_unit_priority(unit)
         ]
-        
+
         # For less granular rules, only consider backups older than the most granular window
         granular_cutoff = _get_most_granular_window_end(more_granular_rules, now)
-        
+
         # Group candidates by bucket (only those within window and not already covered)
         buckets: Dict[Tuple[int, ...], List[TargetRunModel]] = {}
         for tr in candidates:
@@ -241,42 +241,49 @@ def compute_keep_set(
                 continue
             if tr.id in processed_candidates:
                 continue  # Skip if already kept by a more granular rule
-            
+
             # Ensure timezone-aware comparison
             tr_started = _ensure_tz_aware(tr.started_at)
-            
+
             # Check if within this rule's window
             if tr_started < window_start:
                 continue
-            
+
             # For less granular rules, exclude backups that fall within more granular windows
             # This ensures we don't double-keep backups (e.g., a daily backup won't also be kept as monthly)
             if granular_cutoff is not None and tr_started >= granular_cutoff:
                 continue
-            
+
             bucket_key = _get_bucket_key(tr.started_at, unit)
             if bucket_key not in buckets:
                 buckets[bucket_key] = []
             buckets[bucket_key].append(tr)
-        
+
         # For each bucket, keep the N latest
         for bucket_key, bucket_trs in buckets.items():
             # Sort by started_at descending (latest first)
-            bucket_trs.sort(key=lambda x: _ensure_tz_aware(x.started_at) if x.started_at else datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+            bucket_trs.sort(
+                key=lambda x: (
+                    _ensure_tz_aware(x.started_at)
+                    if x.started_at
+                    else datetime.min.replace(tzinfo=timezone.utc)
+                ),
+                reverse=True,
+            )
             for tr in bucket_trs[:keep_per_bucket]:
                 keep_ids.add(tr.id)
                 processed_candidates.add(tr.id)
-    
+
     return keep_ids
 
 
 def _delete_artifact(artifact_path: str) -> bool:
     """Delete an artifact file or directory and its sidecar metadata.
-    
+
     Returns True if deletion was successful or file didn't exist.
     """
     success = True
-    
+
     # Delete main artifact
     if os.path.exists(artifact_path):
         try:
@@ -288,7 +295,7 @@ def _delete_artifact(artifact_path: str) -> bool:
         except Exception as exc:
             logger.error("retention_artifact_delete_failed | path=%s error=%s", artifact_path, exc)
             success = False
-    
+
     # Delete sidecar metadata
     sidecar_path = f"{artifact_path}.meta.json"
     if os.path.exists(sidecar_path):
@@ -298,7 +305,7 @@ def _delete_artifact(artifact_path: str) -> bool:
         except Exception as exc:
             logger.error("retention_sidecar_delete_failed | path=%s error=%s", sidecar_path, exc)
             success = False
-    
+
     return success
 
 
@@ -309,13 +316,13 @@ def apply_retention(
     dry_run: bool = False,
 ) -> Dict[str, Any]:
     """Apply retention policy to backups for a specific (job_id, target_id) pair.
-    
+
     Args:
         db: Database session
         job_id: Job ID to filter by
         target_id: Target ID to filter by
         dry_run: If True, compute but don't actually delete
-    
+
     Returns:
         Dict with counts and paths:
         {
@@ -326,15 +333,19 @@ def apply_retention(
         }
     """
     policy = _get_effective_policy(db, job_id)
-    
+
     if policy is None:
         # No retention policy = keep everything
-        logger.debug(
-            "retention_skip_no_policy | job_id=%s target_id=%s",
-            job_id, target_id
-        )
-        return {"keep_count": 0, "delete_count": 0, "deleted_paths": [], "kept_paths": []}
-    
+        logger.debug("retention_skip_no_policy | job_id=%s target_id=%s", job_id, target_id)
+        return {
+            "keep_count": 0,
+            "delete_count": 0,
+            "deleted_paths": [],
+            "kept_paths": [],
+            "failed_count": 0,
+            "failed_paths": [],
+        }
+
     # Query candidates: successful backup TargetRuns with artifact_path
     candidates = (
         db.query(TargetRunModel)
@@ -348,73 +359,88 @@ def apply_retention(
         )
         .all()
     )
-    
+
     if not candidates:
-        return {"keep_count": 0, "delete_count": 0, "deleted_paths": [], "kept_paths": []}
-    
+        return {
+            "keep_count": 0,
+            "delete_count": 0,
+            "deleted_paths": [],
+            "kept_paths": [],
+            "failed_count": 0,
+            "failed_paths": [],
+        }
+
     # Compute keep set
     keep_ids = compute_keep_set(candidates, policy)
-    
+
     # Partition into keep and delete
     to_keep = [tr for tr in candidates if tr.id in keep_ids]
     to_delete = [tr for tr in candidates if tr.id not in keep_ids]
-    
+
     deleted_paths: List[str] = []
+    failed_paths: List[str] = []
     kept_paths: List[str] = [tr.artifact_path for tr in to_keep if tr.artifact_path]
-    
+
     if not dry_run:
         for tr in to_delete:
-            if tr.artifact_path:
-                _delete_artifact(tr.artifact_path)
-                deleted_paths.append(tr.artifact_path)
-            
+            if not tr.artifact_path or not _delete_artifact(tr.artifact_path):
+                if tr.artifact_path:
+                    failed_paths.append(tr.artifact_path)
+                continue
+
+            deleted_paths.append(tr.artifact_path)
+
             # Delete the TargetRun row
             run_id = tr.run_id
             db.delete(tr)
             db.flush()
-            
+
             # Check if parent Run has any remaining TargetRuns
-            remaining = db.query(TargetRunModel).filter(
-                TargetRunModel.run_id == run_id
-            ).count()
-            
+            remaining = db.query(TargetRunModel).filter(TargetRunModel.run_id == run_id).count()
+
             if remaining == 0:
                 # Delete the orphaned Run
                 run = db.get(RunModel, run_id)
                 if run:
                     db.delete(run)
                     logger.info(
-                        "retention_run_deleted | run_id=%s (no remaining target_runs)",
-                        run_id
+                        "retention_run_deleted | run_id=%s (no remaining target_runs)", run_id
                     )
-            
+
             logger.info(
                 "retention_targetrun_deleted | target_run_id=%s artifact_path=%s",
-                tr.id, tr.artifact_path
+                tr.id,
+                tr.artifact_path,
             )
-        
+
         db.commit()
     else:
         deleted_paths = [tr.artifact_path for tr in to_delete if tr.artifact_path]
-    
+
     logger.info(
         "retention_applied | job_id=%s target_id=%s keep=%s delete=%s dry_run=%s",
-        job_id, target_id, len(to_keep), len(to_delete), dry_run
+        job_id,
+        target_id,
+        len(to_keep),
+        len(to_delete),
+        dry_run,
     )
-    
+
     return {
         "keep_count": len(to_keep),
-        "delete_count": len(to_delete),
+        "delete_count": len(deleted_paths),
         "deleted_paths": deleted_paths,
         "kept_paths": kept_paths,
+        "failed_count": len(failed_paths),
+        "failed_paths": failed_paths,
     }
 
 
 def apply_retention_all(db: Session, dry_run: bool = False) -> Dict[str, Any]:
     """Apply retention to all distinct (job_id, target_id) pairs with backups.
-    
+
     Used for nightly catch-up cleanup.
-    
+
     Returns:
         Aggregate stats across all pairs, with targets_processed count.
     """
@@ -431,14 +457,16 @@ def apply_retention_all(db: Session, dry_run: bool = False) -> Dict[str, Any]:
         .distinct()
         .all()
     )
-    
+
     # Count distinct targets
     distinct_targets = {target_id for _, target_id in pairs if target_id is not None}
-    
+
     total_keep = 0
     total_delete = 0
     all_deleted_paths: List[str] = []
-    
+    total_failed = 0
+    all_failed_paths: List[str] = []
+
     for job_id, target_id in pairs:
         if job_id is None:
             continue
@@ -446,30 +474,38 @@ def apply_retention_all(db: Session, dry_run: bool = False) -> Dict[str, Any]:
         total_keep += result["keep_count"]
         total_delete += result["delete_count"]
         all_deleted_paths.extend(result["deleted_paths"])
-    
+        total_failed += result["failed_count"]
+        all_failed_paths.extend(result["failed_paths"])
+
     logger.info(
         "retention_all_applied | targets=%s pairs=%s keep=%s delete=%s dry_run=%s",
-        len(distinct_targets), len(pairs), total_keep, total_delete, dry_run
+        len(distinct_targets),
+        len(pairs),
+        total_keep,
+        total_delete,
+        dry_run,
     )
-    
+
     return {
         "targets_processed": len(distinct_targets),
         "keep_count": total_keep,
         "delete_count": total_delete,
         "deleted_paths": all_deleted_paths,
+        "failed_count": total_failed,
+        "failed_paths": all_failed_paths,
     }
 
 
 class RetentionService:
     """Service class for retention operations."""
-    
+
     def __init__(self, db: Session) -> None:
         self.db = db
-    
+
     def get_effective_policy(self, job_id: int) -> Optional[Dict[str, Any]]:
         """Get the effective retention policy for a job."""
         return _get_effective_policy(self.db, job_id)
-    
+
     def apply_for_job_target(
         self,
         job_id: int,
@@ -478,11 +514,11 @@ class RetentionService:
     ) -> Dict[str, Any]:
         """Apply retention for a specific job/target pair."""
         return apply_retention(self.db, job_id, target_id, dry_run=dry_run)
-    
+
     def apply_all(self, dry_run: bool = False) -> Dict[str, Any]:
         """Apply retention to all job/target pairs (nightly cleanup)."""
         return apply_retention_all(self.db, dry_run=dry_run)
-    
+
     def preview(self, job_id: int, target_id: int) -> Dict[str, Any]:
         """Preview what retention would delete (dry run)."""
         return apply_retention(self.db, job_id, target_id, dry_run=True)

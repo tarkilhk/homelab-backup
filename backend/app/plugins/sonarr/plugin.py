@@ -1,16 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-import asyncio
 import httpx
-import logging
 
+from app.core.plugins.artifacts import write_backup_bytes
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
 from app.core.plugins.restore_utils import copy_artifact_for_restore
-from app.core.plugins.sidecar import write_backup_sidecar
 
 
 class SonarrPlugin(BackupPlugin):
@@ -38,7 +38,12 @@ class SonarrPlugin(BackupPlugin):
             return False
         base_url = config.get("base_url")
         api_key = config.get("api_key")
-        return bool(base_url) and isinstance(base_url, str) and bool(api_key) and isinstance(api_key, str)
+        return (
+            bool(base_url)
+            and isinstance(base_url, str)
+            and bool(api_key)
+            and isinstance(api_key, str)
+        )
 
     async def test(self, config: Dict[str, Any]) -> bool:
         """Verify connectivity by querying the system status endpoint."""
@@ -62,17 +67,23 @@ class SonarrPlugin(BackupPlugin):
     async def backup(self, context: BackupContext) -> Dict[str, Any]:
         meta = context.metadata or {}
         target_slug = meta.get("target_slug") or str(context.target_id)
-        today = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
-        base_dir = os.path.join(self.backup_root, target_slug, today)
-        os.makedirs(base_dir, exist_ok=True)
-        timestamp = datetime.now(timezone.utc).astimezone().strftime("%Y%m%dT%H%M%S")
-        artifact_path = os.path.join(base_dir, f"sonarr-backup-{timestamp}.zip")
-
         cfg = context.config or {}
         base_url = str(cfg.get("base_url", "")).rstrip("/")
         api_key = str(cfg.get("api_key", ""))
         if not base_url or not api_key:
             raise ValueError("Sonarr config must include base_url and api_key")
+
+        def publish(content: bytes) -> Dict[str, Any]:
+            return {
+                "artifact_path": write_backup_bytes(
+                    self,
+                    context,
+                    content,
+                    prefix="sonarr-backup",
+                    suffix=".zip",
+                    backup_root=self.backup_root,
+                )
+            }
 
         list_url = f"{base_url}/api/v3/system/backup"
         command_url = f"{base_url}/api/v3/command"
@@ -85,7 +96,7 @@ class SonarrPlugin(BackupPlugin):
             context.job_id,
             context.target_id,
             command_url,
-            artifact_path,
+            "<pending>",
         )
 
         async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
@@ -116,10 +127,7 @@ class SonarrPlugin(BackupPlugin):
                 post_content = b""
             post_looks_json = post_content.strip().startswith((b"{", b"["))
             if post_content and not post_looks_json:
-                with open(artifact_path, "wb") as fp:
-                    fp.write(post_content)
-                write_backup_sidecar(artifact_path, self, context, logger=self._logger)
-                return {"artifact_path": artifact_path}
+                return publish(post_content)
 
             # 2) Poll the backup list for the newly created entry
             backup_id: Optional[int] = None
@@ -137,10 +145,7 @@ class SonarrPlugin(BackupPlugin):
                     body = list_resp.content or b""
                     is_json_like = body.strip().startswith((b"{", b"["))
                     if body and not is_json_like:
-                        with open(artifact_path, "wb") as fp:
-                            fp.write(body)
-                        write_backup_sidecar(artifact_path, self, context, logger=self._logger)
-                        return {"artifact_path": artifact_path}
+                        return publish(body)
 
                     items: List[Dict[str, Any]] = list_resp.json() or []
                     # Heuristic: find most recent manual backup created at/after trigger
@@ -181,9 +186,8 @@ class SonarrPlugin(BackupPlugin):
                 await asyncio.sleep(1.0)
 
             if backup_id is None:
-                msg = (
-                    "Unable to locate newly created Sonarr backup entry after trigger"
-                    + (f" | last_error={last_list_error}" if last_list_error else "")
+                msg = "Unable to locate newly created Sonarr backup entry after trigger" + (
+                    f" | last_error={last_list_error}" if last_list_error else ""
                 )
                 self._logger.error(
                     "sonarr_backup_list_timeout | job_id=%s target_id=%s msg=%s",
@@ -197,18 +201,18 @@ class SonarrPlugin(BackupPlugin):
             # Prefer direct file path if provided by the list API (works better behind proxies)
             if backup_path:
                 if backup_path.startswith("/"):
-                    fallback_url = f"{base_url}{backup_path}"
+                    direct_url = f"{base_url}{backup_path}"
                 else:
-                    fallback_url = f"{base_url}/{backup_path}"
+                    direct_url = f"{base_url}/{backup_path}"
                 self._logger.info(
                     "sonarr_backup_download_path | job_id=%s target_id=%s url=%s",
                     context.job_id,
                     context.target_id,
-                    fallback_url,
+                    direct_url,
                 )
                 try:
                     dl_path_resp = await client.get(
-                        fallback_url,
+                        direct_url,
                         headers={
                             "X-Api-Key": api_key,
                             "Accept": "application/zip, application/octet-stream",
@@ -216,10 +220,7 @@ class SonarrPlugin(BackupPlugin):
                         params={"apikey": api_key},
                     )
                     if dl_path_resp.status_code == 200 and (dl_path_resp.content or b""):
-                        with open(artifact_path, "wb") as fp:
-                            fp.write(dl_path_resp.content)
-                        write_backup_sidecar(artifact_path, self, context, logger=self._logger)
-                        return {"artifact_path": artifact_path}
+                        return publish(dl_path_resp.content)
                 except httpx.HTTPError as exc:
                     self._logger.warning(
                         "sonarr_backup_download_path_error | job_id=%s target_id=%s error=%s",
@@ -249,10 +250,7 @@ class SonarrPlugin(BackupPlugin):
                 status = dl_resp.status_code
                 content = dl_resp.content or b""
                 if status == 200 and content:
-                    with open(artifact_path, "wb") as fp:
-                        fp.write(content)
-                    write_backup_sidecar(artifact_path, self, context, logger=self._logger)
-                    return {"artifact_path": artifact_path}
+                    return publish(content)
             except httpx.HTTPError as exc:
                 self._logger.error(
                     "sonarr_backup_download_error | job_id=%s target_id=%s error=%s",
@@ -307,9 +305,7 @@ class SonarrPlugin(BackupPlugin):
                 content2 = dl2_resp.content or b""
                 if not content2:
                     raise RuntimeError("Sonarr backup fallback download returned no content")
-                with open(artifact_path, "wb") as fp:
-                    fp.write(content2)
-                write_backup_sidecar(artifact_path, self, context, logger=self._logger)
+                return publish(content2)
             except httpx.HTTPError as exc:
                 self._logger.error(
                     "sonarr_backup_download_fallback_error | job_id=%s target_id=%s error=%s",
@@ -319,19 +315,17 @@ class SonarrPlugin(BackupPlugin):
                 )
                 raise
 
-        write_backup_sidecar(artifact_path, self, context, logger=self._logger)
-
-        return {"artifact_path": artifact_path}
+        raise RuntimeError("Sonarr backup completed without an artifact")
 
     async def restore(self, context: RestoreContext) -> Dict[str, Any]:
         """Restore a Sonarr backup.
-        
+
         Note: Sonarr manages its own backup restoration. This function copies the
         backup file to a restore directory. To complete the restore:
         1. Access Sonarr UI → System → Backup
         2. Upload the backup ZIP file from the restore location
         3. Sonarr will handle the restoration process
-        
+
         Alternatively, you can copy the backup to Sonarr's backup directory
         (usually /config/Backups/) and it will appear in the UI for restoration.
         """

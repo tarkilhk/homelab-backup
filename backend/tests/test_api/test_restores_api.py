@@ -9,7 +9,18 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.models import Job as JobModel, Run as RunModel, TargetRun as TargetRunModel, Target as TargetModel
+from app.core.plugins.base import BackupContext
+from app.core.plugins.loader import get_plugin
+from app.core.plugins.sidecar import write_backup_sidecar
+from app.models import Job as JobModel
+from app.models import Run as RunModel
+from app.models import Target as TargetModel
+from app.models import TargetRun as TargetRunModel
+
+
+@pytest.fixture(autouse=True)
+def _backup_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BACKUP_BASE_PATH", str(tmp_path))
 
 
 def _create_target(client: TestClient, name: str, plugin: str, config: dict) -> int:
@@ -52,6 +63,18 @@ def _create_source_target_run(
 ) -> TargetRunModel:
     artifact_bytes = artifact_path.read_bytes()
     sha = hashlib.sha256(artifact_bytes).hexdigest()
+    target = db.get(TargetModel, target_id)
+    assert target is not None and target.plugin_name
+    write_backup_sidecar(
+        str(artifact_path),
+        get_plugin(target.plugin_name),
+        BackupContext(
+            job_id=str(job_id),
+            target_id=str(target_id),
+            config={},
+            metadata={"target_slug": target.slug},
+        ),
+    )
 
     run = RunModel(
         job_id=job_id,
@@ -91,18 +114,19 @@ def test_restore_success(
 ) -> None:
     """Happy path: restore from artifact path with source_target_run_id for metadata."""
     import asyncio
-    
+
     class DummyProcess:
         def __init__(self):
             self.returncode = 0
+
         async def communicate(self):
             return b"", b""
-    
+
     async def fake_exec(*args, **kwargs):
         # Verify psql command structure
         assert args[0] == "psql", f"Expected psql, got {args[0]}"
         return DummyProcess()
-    
+
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     monkeypatch.setattr(
         "app.plugins.postgresql.plugin.BACKUP_BASE_PATH",
@@ -162,14 +186,16 @@ def test_restore_success(
     # because the restore actually executes via psql
     assert tr["artifact_path"] == str(artifact_path)
     assert tr["artifact_bytes"] == len("dummy backup data")
-    
+
     # Verify the restore run has job_id from source (backward compatibility)
     restore_run = db_session_override.query(RunModel).filter(RunModel.id == data["id"]).first()
     assert restore_run is not None
     assert restore_run.job_id == job.id  # Should use source run's job_id
 
 
-def test_restore_rejects_plugin_mismatch(client: TestClient, db_session_override: Session, tmp_path: Path) -> None:
+def test_restore_rejects_plugin_mismatch(
+    client: TestClient, db_session_override: Session, tmp_path: Path
+) -> None:
     source_target_id = _create_target(
         client,
         "Source PiHole",
@@ -207,7 +233,9 @@ def test_restore_rejects_plugin_mismatch(client: TestClient, db_session_override
     assert "same plugin" in resp.json()["detail"]
 
 
-def test_restore_missing_artifact_path(client: TestClient, db_session_override: Session, tmp_path: Path) -> None:
+def test_restore_missing_artifact_path(
+    client: TestClient, db_session_override: Session, tmp_path: Path
+) -> None:
     source_target_id = _create_target(
         client,
         "Source Radarr",
@@ -256,24 +284,25 @@ def test_restore_from_file_path_only(
 ) -> None:
     """Test restore from file path without source_target_run_id (disaster recovery scenario)."""
     import asyncio
-    
+
     class DummyProcess:
         def __init__(self):
             self.returncode = 0
+
         async def communicate(self):
             return b"", b""
-    
+
     async def fake_exec(*args, **kwargs):
         assert args[0] == "psql", f"Expected psql, got {args[0]}"
         return DummyProcess()
-    
+
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     monkeypatch.setattr(
         "app.plugins.postgresql.plugin.BACKUP_BASE_PATH",
         str(tmp_path / "backups"),
         raising=True,
     )
-    
+
     dest_target_id = _create_target(
         client,
         "Destination Postgres",
@@ -283,6 +312,16 @@ def test_restore_from_file_path_only(
 
     artifact_path = tmp_path / "orphaned-backup.sql"
     artifact_path.write_text("orphaned backup data")
+    write_backup_sidecar(
+        str(artifact_path),
+        get_plugin("postgresql"),
+        BackupContext(
+            job_id="disaster-recovery",
+            target_id=str(dest_target_id),
+            config={},
+            metadata={"target_slug": "orphaned-source"},
+        ),
+    )
 
     # Restore without source_target_run_id (disaster recovery)
     resp = client.post(
@@ -308,7 +347,7 @@ def test_restore_from_file_path_only(
     assert dest_target is not None
     assert data["display_job_name"] == f"{dest_target.name} Restore"
     assert data.get("display_tag_name") == dest_target.name
-    
+
     # Verify the restore run has NULL job_id (file-based restore)
     restore_run = db_session_override.query(RunModel).filter(RunModel.id == data["id"]).first()
     assert restore_run is not None

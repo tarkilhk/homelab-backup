@@ -1,0 +1,24 @@
+"""Restore capability declarations must match actual plugin behavior."""
+
+from app.core.plugins.loader import get_plugin, list_plugins
+
+
+def test_plugins_publish_honest_restore_capabilities() -> None:
+    expected = {
+        "calcom": "automatic",
+        "mysql": "automatic",
+        "postgresql": "automatic",
+        "vaultwarden": "manual",
+        "wordpress": "partial",
+        "invoiceninja": "manual",
+        "jellyfin": "manual",
+        "lidarr": "manual",
+        "pihole": "manual",
+        "radarr": "manual",
+        "sonarr": "manual",
+    }
+
+    listed = {item["key"]: item["restore_capability"] for item in list_plugins()}
+    assert listed == expected
+    for key, capability in expected.items():
+        assert get_plugin(key).restore_capability == capability

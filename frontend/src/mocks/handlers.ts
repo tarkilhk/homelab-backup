@@ -45,9 +45,9 @@ const defaultTargets = [
 ]
 
 const defaultPlugins = [
-  { key: 'pihole', name: 'Pi-hole', version: '1.0.0' },
-  { key: 'postgresql', name: 'PostgreSQL', version: '1.0.0' },
-  { key: 'mysql', name: 'MySQL', version: '1.0.0' },
+  { key: 'pihole', name: 'Pi-hole', version: '1.0.0', restore_capability: 'manual' },
+  { key: 'postgresql', name: 'PostgreSQL', version: '1.0.0', restore_capability: 'automatic' },
+  { key: 'mysql', name: 'MySQL', version: '1.0.0', restore_capability: 'automatic' },
 ]
 
 export const handlers = [

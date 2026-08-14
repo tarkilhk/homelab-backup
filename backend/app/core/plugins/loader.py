@@ -8,15 +8,13 @@
 
 from __future__ import annotations
 
-from typing import Dict, Type, List, Optional, Iterable
-
 import importlib
 import inspect
 import logging
 import os
+from typing import Dict, Iterable, List, Optional, Type
 
 from app.core.plugins.base import BackupPlugin
-
 
 _REGISTRY: Dict[str, Type[BackupPlugin]] = {}
 
@@ -81,7 +79,9 @@ def _discover_plugins() -> Dict[str, Type[BackupPlugin]]:
                 mod = importlib.import_module(f"{module_base}.plugin")
                 candidates.extend(list(_iter_subclasses_in_module(mod)))
             except Exception as exc:
-                logger.error("Plugin import failed for %s.plugin: %s", module_base, exc, exc_info=True)
+                logger.error(
+                    "Plugin import failed for %s.plugin: %s", module_base, exc, exc_info=True
+                )
                 continue
 
         if not candidates:
@@ -132,13 +132,23 @@ def list_plugins() -> List[dict]:
         try:
             instance = cls(name=key)
             info = instance.get_info()
-            plugins.append({
-                "key": key,
-                "name": info.get("name", key),
-                "version": info.get("version", "unknown"),
-            })
+            plugins.append(
+                {
+                    "key": key,
+                    "name": info.get("name", key),
+                    "version": info.get("version", "unknown"),
+                    "restore_capability": info.get("restore_capability", "manual"),
+                }
+            )
         except Exception:
-            plugins.append({"key": key, "name": key, "version": "unknown"})
+            plugins.append(
+                {
+                    "key": key,
+                    "name": key,
+                    "version": "unknown",
+                    "restore_capability": "manual",
+                }
+            )
     return plugins
 
 
@@ -151,5 +161,3 @@ def get_plugin_schema_path(key: str) -> Optional[str]:
 
 # Perform initial discovery on import
 refresh_registry()
-
-

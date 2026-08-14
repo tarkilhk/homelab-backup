@@ -1,5 +1,6 @@
 import io
 import os
+import sqlite3
 import tarfile
 from pathlib import Path
 from typing import Dict
@@ -23,6 +24,14 @@ def make_tar_bytes(files: Dict[str, bytes]) -> bytes:
 
 def make_client(handler: httpx.MockTransport) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=handler, base_url="http://docker")
+
+
+def make_sqlite_bytes(tmp_path: Path) -> bytes:
+    database = tmp_path / "source.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE secrets (id INTEGER PRIMARY KEY, value TEXT)")
+        connection.execute("INSERT INTO secrets (value) VALUES ('encrypted')")
+    return database.read_bytes()
 
 
 @pytest.mark.asyncio
@@ -106,17 +115,35 @@ async def test_test_missing_config_ok(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.asyncio
 async def test_backup_writes_artifact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    sqlite_backup = make_sqlite_bytes(tmp_path)
+    commands: list[list[str]] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/containers/vw/json":
             return httpx.Response(200, json={"Id": "abc"})
+        if request.url.path == "/containers/vw/exec" and request.method == "POST":
+            command = request.read()
+            import json
+
+            cmd = json.loads(command)["Cmd"]
+            commands.append(cmd)
+            return httpx.Response(201, json={"Id": f"exec-{len(commands)}"})
+        if request.url.path.startswith("/exec/") and request.url.path.endswith("/start"):
+            return httpx.Response(200, content=b"")
+        if request.url.path.startswith("/exec/") and request.url.path.endswith("/json"):
+            return httpx.Response(200, json={"ExitCode": 0, "Running": False})
         if request.url.path == "/containers/vw/archive":
-            path = request.url.params.get("path", "")
-            if path.endswith("db.sqlite3"):
-                return httpx.Response(200, content=make_tar_bytes({"db.sqlite3": b"db"}))
-            if path.endswith("config.json"):
-                return httpx.Response(404)
-            if path.endswith("attachments"):
-                return httpx.Response(404)
+            assert request.url.params.get("path") == "/data"
+            return httpx.Response(
+                200,
+                content=make_tar_bytes(
+                    {
+                        "data/db.sqlite3": b"unsafe live database",
+                        "data/db_20260814_120000.sqlite3": sqlite_backup,
+                        "data/config.json": b"{}",
+                    }
+                ),
+            )
         return httpx.Response(404)
 
     transport = httpx.MockTransport(handler)
@@ -139,7 +166,12 @@ async def test_backup_writes_artifact(tmp_path: Path, monkeypatch: pytest.Monkey
     with tarfile.open(artifact_path, "r:gz") as tar:
         names = tar.getnames()
         assert "db.sqlite3" in names
-        assert "config.json" not in names
+        assert "config.json" in names
+        restored_db = tar.extractfile("db.sqlite3")
+        assert restored_db is not None
+        assert restored_db.read() == sqlite_backup
+    assert commands[0] == ["/vaultwarden", "backup"]
+    assert commands[1] == ["rm", "-f", "/data/db_20260814_120000.sqlite3"]
 
 
 @pytest.mark.asyncio
@@ -150,21 +182,6 @@ async def test_restore_puts_archive(monkeypatch: pytest.MonkeyPatch, tmp_path: P
         db_file.write_bytes(b"db")
         tar.add(db_file, arcname="db.sqlite3")
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/containers/vw/json" and request.method == "GET":
-            return httpx.Response(200, json={"Id": "abc"})
-        if request.url.path == "/containers/vw/archive" and request.method == "PUT":
-            content = request.content or b""
-            names = tarfile.open(fileobj=io.BytesIO(content), mode="r:").getnames()
-            assert "db.sqlite3" in names
-            return httpx.Response(200)
-        return httpx.Response(404)
-
-    transport = httpx.MockTransport(handler)
-    monkeypatch.setattr(
-        VaultWardenPlugin, "_docker_client", lambda self: make_client(transport)  # type: ignore[misc]
-    )
-
     plugin = VaultWardenPlugin(name="vaultwarden")
     ctx = RestoreContext(
         job_id="job-1",
@@ -173,5 +190,5 @@ async def test_restore_puts_archive(monkeypatch: pytest.MonkeyPatch, tmp_path: P
         config={"container_name": "vw"},
         artifact_path=str(artifact),
     )
-    result = await plugin.restore(ctx)
-    assert result["status"] == "success"
+    with pytest.raises(NotImplementedError, match="stopped container"):
+        await plugin.restore(ctx)

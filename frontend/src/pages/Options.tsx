@@ -8,9 +8,20 @@ import { api, type RetentionPolicy, type RetentionRule } from '../api/client'
 import { Button } from '../components/ui/button'
 import { toast } from 'sonner'
 import { Palette, Archive, Play } from 'lucide-react'
+import { useConfirm } from '../components/ConfirmProvider'
+
+function normalizePolicyJson(value: string | null | undefined): string | null {
+  if (!value) return null
+  try {
+    return JSON.stringify(JSON.parse(value))
+  } catch {
+    return value
+  }
+}
 
 export default function OptionsPage() {
   const qc = useQueryClient()
+  const confirm = useConfirm()
   const [theme, setTheme] = useState<ThemeMode>('system')
   const [accentLightHex, setAccentLightHex] = useState<string>('#7c3aed')
   const [accentDarkHex, setAccentDarkHex] = useState<string>('#7c3aed')
@@ -64,6 +75,9 @@ export default function OptionsPage() {
     return JSON.stringify({ rules })
   }
 
+  const retentionIsDirty = normalizePolicyJson(buildRetentionPolicyJson())
+    !== normalizePolicyJson(settings?.global_retention_policy_json)
+
   // Save settings mutation
   const saveSettingsMut = useMutation({
     mutationFn: () => api.updateSettings({ global_retention_policy_json: buildRetentionPolicyJson() }),
@@ -78,13 +92,34 @@ export default function OptionsPage() {
 
   // Run retention cleanup mutation
   const runCleanupMut = useMutation({
-    mutationFn: () => api.runRetention(),
+    mutationFn: () => api.runRetention(true),
     onSuccess: () => {
-      toast.success('Cleanup job started successfully')
+      toast.success('Retention cleanup completed')
       qc.invalidateQueries({ queryKey: ['settings'] })
     },
     onError: (err) => {
       toast.error(`Failed to run cleanup: ${(err as Error).message}`)
+    },
+  })
+
+  const previewCleanupMut = useMutation({
+    mutationFn: () => api.previewRetention(),
+    onSuccess: async (preview) => {
+      if (preview.delete_count === 0) {
+        toast.info('Nothing would be deleted by the current retention policy')
+        return
+      }
+      const accepted = await confirm({
+        title: 'Confirm retention cleanup',
+        description: `The saved policy will keep ${preview.keep_count} backups and permanently delete ${preview.delete_count} backups. Review the count before continuing.`,
+        confirmText: `Delete ${preview.delete_count} backups`,
+        cancelText: 'Cancel',
+        variant: 'danger',
+      })
+      if (accepted) runCleanupMut.mutate()
+    },
+    onError: (err) => {
+      toast.error(`Failed to preview cleanup: ${(err as Error).message}`)
     },
   })
 
@@ -381,13 +416,13 @@ export default function OptionsPage() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={runCleanupMut.isPending || !retentionEnabled}
-                  onClick={() => runCleanupMut.mutate()}
+                  disabled={previewCleanupMut.isPending || runCleanupMut.isPending || !retentionEnabled || retentionIsDirty}
+                  onClick={() => previewCleanupMut.mutate()}
                   className="inline-flex items-center gap-2"
-                  title="Run cleanup job now"
+                  title={retentionIsDirty ? 'Save retention settings before running cleanup' : 'Preview cleanup job'}
                 >
                   <Play className="h-4 w-4" />
-                  {runCleanupMut.isPending ? 'Running...' : 'Run Cleanup'}
+                  {previewCleanupMut.isPending ? 'Previewing...' : runCleanupMut.isPending ? 'Running...' : 'Run Cleanup'}
                 </Button>
               </div>
 
@@ -497,5 +532,3 @@ export default function OptionsPage() {
     </div>
   )
 }
-
-

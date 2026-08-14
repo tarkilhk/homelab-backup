@@ -12,7 +12,9 @@ from app.services import RestoreService
 class RestoreRequest(BaseModel):
     artifact_path: str = Field(..., description="Path to the backup artifact file to restore from")
     destination_target_id: int = Field(..., description="Target to restore the artifact to")
-    source_target_run_id: int | None = Field(None, description="Optional source target run ID for metadata/backward compatibility")
+    source_target_run_id: int | None = Field(
+        None, description="Optional source target run ID for metadata/backward compatibility"
+    )
     triggered_by: str | None = Field(None, description="Audit string for who initiated the restore")
 
 
@@ -32,9 +34,13 @@ def trigger_restore(payload: RestoreRequest, db: Session = Depends(get_session))
     except KeyError as exc:
         key = str(exc).strip("'")
         if key == "source_target_run_not_found":
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source target run not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Source target run not found"
+            )
         if key == "destination_target_not_found":
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Destination target not found")
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="Destination target not found"
+            )
         raise
     except ValueError as exc:
         detail_map = {
@@ -45,6 +51,8 @@ def trigger_restore(payload: RestoreRequest, db: Session = Depends(get_session))
             "plugin_missing": "Plugin missing on source or destination target",
             "plugin_mismatch": "Source and destination targets must use the same plugin",
             "plugin_not_registered": "Plugin is not registered",
+            "restore_not_automatic": "This plugin only supports a manual restore workflow",
+            "artifact_source_mismatch": "Artifact path does not match the selected backup record",
         }
         detail = detail_map.get(str(exc), str(exc))
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)

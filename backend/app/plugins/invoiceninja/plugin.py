@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-import os
-import logging
 import asyncio
+import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Dict
 
 import httpx
 
+from app.core.plugins.artifacts import write_backup_bytes
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
 from app.core.plugins.restore_utils import copy_artifact_for_restore
-from app.core.plugins.sidecar import write_backup_sidecar
 
 
 class InvoiceNinjaPlugin(BackupPlugin):
@@ -114,15 +114,14 @@ class InvoiceNinjaPlugin(BackupPlugin):
                 raise RuntimeError("export download not ready")
             dl_resp.raise_for_status()
 
-        meta = context.metadata or {}
-        target_slug = meta.get("target_slug") or str(context.target_id)
-        today = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d")
-        base_dir = os.path.join(self._base_dir(), target_slug, today)
-        os.makedirs(base_dir, exist_ok=True)
-        ts = datetime.now(timezone.utc).astimezone().strftime("%Y%m%dT%H%M%S")
-        artifact_path = os.path.join(base_dir, f"invoiceninja-export-{ts}.zip")
-        with open(artifact_path, "wb") as f:
-            f.write(dl_resp.content)
+        artifact_path = write_backup_bytes(
+            self,
+            context,
+            dl_resp.content,
+            prefix="invoiceninja-export",
+            suffix=".zip",
+            backup_root=self._base_dir(),
+        )
         self._logger.info(
             "invoiceninja_backup_success | job_id=%s target_id=%s artifact=%s bytes=%s",
             context.job_id,
@@ -130,20 +129,18 @@ class InvoiceNinjaPlugin(BackupPlugin):
             artifact_path,
             len(dl_resp.content),
         )
-        
-        write_backup_sidecar(artifact_path, self, context, logger=self._logger)
-        
+
         return {"artifact_path": artifact_path}
 
     async def restore(self, context: RestoreContext) -> Dict[str, Any]:
         """Restore an Invoice Ninja backup.
-        
+
         Note: Invoice Ninja export/import restoration. This function copies the backup file
         to a restore directory. To complete the restore:
         1. Access Invoice Ninja web interface
         2. Navigate to Settings → Import | Export
         3. Use the "Import" feature to upload the backup ZIP file
-        
+
         The import will restore company data, invoices, clients, and settings.
         """
         return copy_artifact_for_restore(
@@ -153,5 +150,7 @@ class InvoiceNinjaPlugin(BackupPlugin):
             prefix="invoiceninja",
         )
 
-    async def get_status(self, context: BackupContext) -> Dict[str, Any]:  # pragma: no cover - minimal
+    async def get_status(
+        self, context: BackupContext
+    ) -> Dict[str, Any]:  # pragma: no cover - minimal
         return {"ok": True}

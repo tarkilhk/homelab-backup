@@ -1,19 +1,16 @@
 """Jobs API router."""
 
+import logging
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, status
-import logging
 from sqlalchemy.orm import Session
 
 from app.core.db import get_session
-from app.models import Job as JobModel, Run as RunModel
+from app.models import Job as JobModel
+from app.models import Run as RunModel
 from app.schemas import Job, JobCreate, JobUpdate, Run, UpcomingJob
 from app.services import JobService, RunService
-from app.services.jobs import run_job_for_tag
-from app.models import Job as JobModel
-from sqlalchemy.orm import Session
-
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 logger = logging.getLogger(__name__)
@@ -40,6 +37,7 @@ def create_job(payload: JobCreate, db: Session = Depends(get_session)) -> JobMod
         name=payload.name,
         schedule_cron=payload.schedule_cron,
         enabled=payload.enabled,
+        retention_policy_json=payload.retention_policy_json,
     )
 
 
@@ -100,13 +98,28 @@ def run_job_now(job_id: int, db: Session = Depends(get_session)) -> RunModel:
     return run
 
 
-@router.post("/by-tag/{tag_id}/run", response_model=List[dict])
-def run_jobs_by_tag(tag_id: int, db: Session = Depends(get_session)) -> List[dict]:
-    # Find jobs referencing this tag and run across resolved targets.
-    jobs = db.query(JobModel).filter(JobModel.tag_id == tag_id).all()
-    results: list[dict] = []
+@router.post("/by-tag/{tag_id}/run", response_model=List[Run])
+def run_jobs_by_tag(
+    tag_id: int,
+    db: Session = Depends(get_session),
+) -> List[RunModel]:
+    """Run every job associated with a tag through the real execution path."""
+
+    from app.core.scheduler import run_job_immediately
+
+    jobs = db.query(JobModel).filter(JobModel.tag_id == tag_id).order_by(JobModel.id).all()
+    runs: list[RunModel] = []
     for job in jobs:
-        summary = run_job_for_tag(db, job_id=job.id, tag_id=tag_id, runner=lambda t: None)
-        # Minimal response per TDD: list of per-target results
-        results.extend(summary.get("results", []))
-    return results
+        created = run_job_immediately(
+            db,
+            job_id=int(job.id),
+            triggered_by="manual_tag_api",
+        )
+        run = RunService(db).get(int(created.id))
+        if run is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Run was created but could not be loaded",
+            )
+        runs.append(run)
+    return runs

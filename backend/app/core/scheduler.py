@@ -10,32 +10,40 @@ Responsibilities:
 
 from __future__ import annotations
 
-import json
-import os
-import hashlib
-import logging
-from datetime import datetime, timezone
-import traceback
 import asyncio
+import json
+import logging
+import os
 import threading
+import traceback
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Callable, Literal, Optional
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
+from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore[import-untyped]
+from apscheduler.triggers.cron import CronTrigger  # type: ignore[import-untyped]
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.db import SessionLocal
-from app.models import Job as JobModel, Run as RunModel, Target as TargetModel
-from app.models import MaintenanceJob as MaintenanceJobModel, MaintenanceRun as MaintenanceRunModel
-from app.domain.enums import RunStatus, TargetRunStatus, RunOperation, TargetRunOperation, MaintenanceJobType
+from app.core.notifier import send_failure_email
+from app.core.plugins.artifacts import validate_backup_artifact
 from app.core.plugins.base import BackupContext
 from app.core.plugins.loader import get_plugin
-from app.core.notifier import send_failure_email
+from app.domain.enums import (
+    MaintenanceJobType,
+    RunOperation,
+    RunStatus,
+    TargetRunOperation,
+    TargetRunStatus,
+)
+from app.models import Job as JobModel
+from app.models import MaintenanceJob as MaintenanceJobModel
+from app.models import MaintenanceRun as MaintenanceRunModel
+from app.models import Run as RunModel
+from app.models import Target as TargetModel
 from app.services.jobs import run_job_for_tag
 from app.services.retention import apply_retention, apply_retention_all
-from dataclasses import dataclass
-
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +55,7 @@ _scheduler: Optional[AsyncIOScheduler] = None
 @dataclass
 class ScheduledItem:
     """DTO for items that can be scheduled by APScheduler."""
+
     kind: Literal["backup", "maintenance"]
     id: int
     name: str
@@ -74,6 +83,12 @@ class ScheduledItem:
             schedule_cron=job.schedule_cron,
             enabled=job.enabled,
         )
+
+
+def _scheduler_item_id(kind: Literal["backup", "maintenance"], item_id: int) -> str:
+    """Return the stable APScheduler identity for a persisted item."""
+
+    return f"{kind}:{item_id}"
 
 
 def get_scheduler() -> AsyncIOScheduler:
@@ -171,6 +186,18 @@ def _create_run(db: Session, job: JobModel, triggered_by: str) -> RunModel:
     return run
 
 
+def _session_factory_for(db: Session) -> sessionmaker:
+    """Build a session factory bound to the same engine as ``db``."""
+
+    bind = db.get_bind()
+    if bind is None:
+        if SessionLocal is None:
+            raise RuntimeError("Database session factory is not initialized")
+        return SessionLocal
+    engine = bind.engine if isinstance(bind, Connection) else bind
+    return sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+
 def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id: int) -> dict:
     """Execute a plugin for a specific target and record a TargetRun; return summary dict."""
     from app.models import TargetRun as TargetRunModel
@@ -225,7 +252,13 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
 
         result_container: dict[str, object] = {}
 
-        _log_event("plugin_start", job_id=job.id, run_id=run.id, target_run_id=target_run.id, plugin=plugin_key)
+        _log_event(
+            "plugin_start",
+            job_id=job.id,
+            run_id=run.id,
+            target_run_id=target_run.id,
+            plugin=plugin_key,
+        )
 
         def _runner() -> None:
             try:
@@ -242,31 +275,23 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
         artifact_path = result.get("artifact_path") if isinstance(result, dict) else None  # type: ignore[assignment]
         if not artifact_path:
             raise RuntimeError("Plugin did not return artifact_path")
+        validated_artifact = validate_backup_artifact(
+            str(artifact_path),
+            plugin,
+            ctx,
+        )
+        artifact_path = str(validated_artifact.path)
 
         finished_at = datetime.now(timezone.utc)
         target_run.finished_at = finished_at
         target_run.status = TargetRunStatus.SUCCESS.value
         target_run.message = "Run completed successfully"
         target_run.artifact_path = artifact_path
-        # Populate artifact size and sha256 if file exists
-        try:
-            if artifact_path and os.path.exists(artifact_path):
-                try:
-                    target_run.artifact_bytes = int(os.path.getsize(artifact_path))
-                except Exception:
-                    target_run.artifact_bytes = None
-                try:
-                    sha256 = hashlib.sha256()
-                    with open(artifact_path, "rb") as fobj:
-                        for chunk in iter(lambda: fobj.read(1024 * 1024), b""):
-                            sha256.update(chunk)
-                    target_run.sha256 = sha256.hexdigest()
-                except Exception:
-                    target_run.sha256 = None
-        except Exception:
-            # Best-effort only; never fail run because of metadata
-            pass
-        target_run.logs_text = (target_run.logs_text or "") + f"\nCompleted at {finished_at.isoformat()}"
+        target_run.artifact_bytes = validated_artifact.size_bytes
+        target_run.sha256 = validated_artifact.sha256
+        target_run.logs_text = (
+            target_run.logs_text or ""
+        ) + f"\nCompleted at {finished_at.isoformat()}"
         db.add(target_run)
         db.commit()
         db.refresh(target_run)
@@ -279,7 +304,7 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
             plugin=plugin_key,
             artifact_path=artifact_path,
         )
-        
+
         # Apply retention cleanup for this job/target after successful backup
         try:
             retention_result = apply_retention(db, job.id, target_id)
@@ -299,15 +324,22 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
                 target_id=target_id,
                 error=str(retention_exc),
             )
-        
-        return {"target_id": target_id, "status": TargetRunStatus.SUCCESS.value, "error": None, "artifact_path": artifact_path}
+
+        return {
+            "target_id": target_id,
+            "status": TargetRunStatus.SUCCESS.value,
+            "error": None,
+            "artifact_path": artifact_path,
+        }
     except KeyError as exc:
         finished_at = datetime.now(timezone.utc)
         target_run.finished_at = finished_at
         target_run.status = TargetRunStatus.FAILED.value
         target_run.message = "Run failed: missing plugin on target"
         # Do not set artifact fields for missing plugins
-        target_run.logs_text = (target_run.logs_text or "") + f"\nFailed at {finished_at.isoformat()} with error: {exc}"
+        target_run.logs_text = (
+            target_run.logs_text or ""
+        ) + f"\nFailed at {finished_at.isoformat()} with error: {exc}"
         db.add(target_run)
         db.commit()
         db.refresh(target_run)
@@ -319,13 +351,19 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
             plugin="<missing>",
             error=str(exc),
         )
-        return {"target_id": target_id, "status": TargetRunStatus.FAILED.value, "error": "missing_plugin"}
+        return {
+            "target_id": target_id,
+            "status": TargetRunStatus.FAILED.value,
+            "error": "missing_plugin",
+        }
     except Exception as exc:
         finished_at = datetime.now(timezone.utc)
         target_run.finished_at = finished_at
         target_run.status = TargetRunStatus.FAILED.value
         target_run.message = f"Run failed: {exc}"
-        target_run.logs_text = (target_run.logs_text or "") + f"\nFailed at {finished_at.isoformat()} with error: {exc}"
+        target_run.logs_text = (
+            target_run.logs_text or ""
+        ) + f"\nFailed at {finished_at.isoformat()} with error: {exc}"
         db.add(target_run)
         db.commit()
         db.refresh(target_run)
@@ -353,8 +391,12 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
             error_type=type(exc).__name__,
             traceback=tb,
         )
-        logger.exception("Target run failed | job_id=%s run_id=%s target_id=%s", job.id, run.id, target_id)
+        logger.exception(
+            "Target run failed | job_id=%s run_id=%s target_id=%s", job.id, run.id, target_id
+        )
         return {"target_id": target_id, "status": TargetRunStatus.FAILED.value, "error": str(exc)}
+
+
 def _perform_run(db: Session, job: JobModel, triggered_by: str) -> RunModel:
     """Create a Run row, execute the job's plugin, and finalize status.
 
@@ -466,7 +508,9 @@ def _perform_run(db: Session, job: JobModel, triggered_by: str) -> RunModel:
         run.finished_at = finished_at
         run.status = RunStatus.FAILED.value
         run.message = "Run failed: missing plugin on target"
-        run.logs_text = (run.logs_text or "") + f"\nFailed at {finished_at.isoformat()} with error: {exc}"
+        run.logs_text = (
+            run.logs_text or ""
+        ) + f"\nFailed at {finished_at.isoformat()} with error: {exc}"
 
         _log_event(
             "plugin_missing",
@@ -480,7 +524,9 @@ def _perform_run(db: Session, job: JobModel, triggered_by: str) -> RunModel:
         run.finished_at = finished_at
         run.status = RunStatus.FAILED.value
         run.message = f"Run failed: {exc}"
-        run.logs_text = (run.logs_text or "") + f"\nFailed at {finished_at.isoformat()} with error: {exc}"
+        run.logs_text = (
+            run.logs_text or ""
+        ) + f"\nFailed at {finished_at.isoformat()} with error: {exc}"
 
         # Fire-and-forget email notification (best-effort)
         try:
@@ -548,6 +594,7 @@ def run_job_immediately(db: Session, job_id: int, triggered_by: str = "manual") 
     # Create parent run and perform per-target runs
     run = _create_run(db, job, triggered_by)
     from app.services.jobs import resolve_tag_to_targets
+
     targets = resolve_tag_to_targets(db, job.tag_id)
     results: list[dict] = []
     for t in targets:
@@ -563,12 +610,15 @@ def _finalize_run_from_results(db: Session, run: RunModel, results: list[dict]) 
     try:
         run.finished_at = datetime.now(timezone.utc)
         total = len(results)
-        success_count = sum(
-            1 for r in results if r.get("status") == TargetRunStatus.SUCCESS.value
-        )
-        fail_count = sum(
-            1 for r in results if r.get("status") == TargetRunStatus.FAILED.value
-        )
+        success_count = sum(1 for r in results if r.get("status") == TargetRunStatus.SUCCESS.value)
+        fail_count = sum(1 for r in results if r.get("status") == TargetRunStatus.FAILED.value)
+        if total == 0:
+            run.status = RunStatus.FAILED.value
+            run.message = "Failed: no targets resolved for this job"
+            db.add(run)
+            db.commit()
+            db.refresh(run)
+            return
         any_fail = fail_count > 0
         any_success = success_count > 0
         run.status = (
@@ -615,9 +665,7 @@ def _fail_run(db: Session, run: RunModel, *, message: str) -> None:
     run.finished_at = finished_at
     run.status = RunStatus.FAILED.value
     run.message = message
-    run.logs_text = (
-        (run.logs_text or "") + f"\nFailed at {finished_at.isoformat()}: {message}"
-    )
+    run.logs_text = (run.logs_text or "") + f"\nFailed at {finished_at.isoformat()}: {message}"
     db.add(run)
     db.commit()
     db.refresh(run)
@@ -639,6 +687,7 @@ def _run_manual_job_in_background(
             _log_event("manual_run_missing", job_id=job_id, run_id=run_id)
             return
         from app.services.jobs import resolve_tag_to_targets
+
         targets = resolve_tag_to_targets(db, job.tag_id)
         results: list[dict] = []
         for t in targets:
@@ -677,19 +726,7 @@ def trigger_job_async(db: Session, job_id: int, triggered_by: str = "manual") ->
         raise ValueError("Job not found")
     run = _create_run(db, job, triggered_by)
     try:
-        bind = db.get_bind()
-        engine: Engine | None
-        if bind is None:
-            engine = None
-        elif isinstance(bind, Connection):
-            engine = bind.engine
-        else:
-            engine = bind
-        session_factory = (
-            SessionLocal
-            if engine is None
-            else sessionmaker(autocommit=False, autoflush=False, bind=engine)
-        )
+        session_factory = _session_factory_for(db)
         th = threading.Thread(
             target=_run_manual_job_in_background,
             args=(session_factory, job.id, run.id, triggered_by),
@@ -733,38 +770,58 @@ def scheduled_tick_with_session(db: Session, job_id: int) -> dict:
         _log_event("job_missing_tag", job_id=job_id)
         return {"started": False, "results": []}
 
-    # Create parent run, then execute per-target runs and aggregate
-    run = _create_run(db, job, triggered_by="scheduler")
+    persisted_job_id = int(job.id)
+    session_factory = _session_factory_for(db)
+    run_holder: dict[str, RunModel | int] = {}
+
+    def start_run() -> None:
+        run = _create_run(db, job, triggered_by="scheduler")
+        run_holder["run"] = run
+        run_holder["run_id"] = int(run.id)
+
+    def run_target(target_id: int) -> dict:
+        run_id = run_holder.get("run_id")
+        if not isinstance(run_id, int):
+            raise RuntimeError("Scheduled run was not initialized")
+        worker_db = session_factory()
+        try:
+            worker_job = worker_db.get(JobModel, persisted_job_id)
+            worker_run = worker_db.get(RunModel, run_id)
+            if worker_job is None or worker_run is None:
+                raise RuntimeError("Scheduled run context no longer exists")
+            return _perform_target_run(
+                worker_db,
+                worker_job,
+                worker_run,
+                target_id=target_id,
+            )
+        finally:
+            worker_db.close()
+
     summary = run_job_for_tag(
         db,
         job_id=job.id,
         tag_id=job.tag_id,
-        runner=lambda target: _perform_target_run(db, job, run, target_id=int(target.id)),
+        runner=run_target,
         max_concurrency=5,
         no_overlap=True,
+        on_started=start_run,
     )
-    results = summary.get("results", [])
-    try:
-        run.finished_at = datetime.now(timezone.utc)
-        total = len(results)
-        success_count = sum(1 for r in results if r.get("status") == TargetRunStatus.SUCCESS.value)
-        fail_count = sum(1 for r in results if r.get("status") == TargetRunStatus.FAILED.value)
-        any_fail = fail_count > 0
-        any_success = success_count > 0
-        run.status = (
-            RunStatus.PARTIAL.value if (any_fail and any_success) else (RunStatus.FAILED.value if any_fail else RunStatus.SUCCESS.value)
+    if not summary.get("started"):
+        _log_event(
+            "scheduled_tick_skipped",
+            job_id=job_id,
+            tag_id=job.tag_id,
+            reason=summary.get("reason"),
         )
-        if run.status == RunStatus.SUCCESS.value:
-            run.message = f"Completed successfully for {success_count}/{total} targets"
-        elif run.status == RunStatus.PARTIAL.value:
-            run.message = f"Partial: {success_count} succeeded, {fail_count} failed (of {total})"
-        else:
-            run.message = f"Failed: {fail_count}/{total} targets failed"
-        db.add(run)
-        db.commit()
-        db.refresh(run)
-    except Exception:
-        pass
+        return summary
+
+    run_value = run_holder.get("run")
+    if not isinstance(run_value, RunModel):
+        raise RuntimeError("Scheduled run was not initialized")
+    run = run_value
+    results = summary.get("results", [])
+    _finalize_run_from_results(db, run, results)
     # Emit a run_finished event for scheduled runs as well
     try:
         duration_sec = None
@@ -809,6 +866,7 @@ def scheduled_tick_with_session(db: Session, job_id: int) -> dict:
 def scheduled_tick(job_id: int) -> None:
     """Entry point for APScheduler to execute tag-based jobs on tick."""
     from app.core.db import get_session
+
     db = next(get_session())
     try:
         scheduled_tick_with_session(db, job_id)
@@ -824,6 +882,7 @@ def _scheduled_job(job_id: int) -> None:  # legacy-compatible shim for tests
     """
     _log_event("scheduled_job_trigger", job_id=job_id)
     from app.core.db import get_session
+
     db = next(get_session())
     try:
         job = db.get(JobModel, job_id)
@@ -847,13 +906,14 @@ def _scheduled_job(job_id: int) -> None:  # legacy-compatible shim for tests
 
 def execute_maintenance_job(maintenance_job_id: int) -> None:
     """Execute a maintenance job by ID.
-    
+
     Creates a MaintenanceRun, executes the task based on job_type, and updates the run.
     """
+    import json
+
     from app.core.db import get_session
     from app.services.maintenance import MaintenanceService
-    import json
-    
+
     db = next(get_session())
     try:
         svc = MaintenanceService(db)
@@ -861,7 +921,7 @@ def execute_maintenance_job(maintenance_job_id: int) -> None:
         if job is None:
             _log_event("maintenance_job_missing", maintenance_job_id=maintenance_job_id)
             return
-        
+
         # Create MaintenanceRun in running state
         started_at = datetime.now(timezone.utc)
         run = MaintenanceRunModel(
@@ -873,7 +933,7 @@ def execute_maintenance_job(maintenance_job_id: int) -> None:
         db.add(run)
         db.commit()
         db.refresh(run)
-        
+
         _log_event(
             "maintenance_run_started",
             maintenance_job_id=job.id,
@@ -881,7 +941,7 @@ def execute_maintenance_job(maintenance_job_id: int) -> None:
             job_type=job.job_type,
             job_name=job.name,
         )
-        
+
         # Execute based on job_type
         try:
             if job.job_type == MaintenanceJobType.RETENTION_CLEANUP.value:
@@ -890,12 +950,14 @@ def execute_maintenance_job(maintenance_job_id: int) -> None:
                 run.finished_at = datetime.now(timezone.utc)
                 run.status = RunStatus.SUCCESS.value
                 run.message = f"Retention cleanup completed: {result.get('targets_processed', 0)} targets processed"
-                run.result_json = json.dumps({
-                    "targets_processed": result.get("targets_processed", 0),
-                    "deleted_count": result.get("delete_count", 0),
-                    "kept_count": result.get("keep_count", 0),
-                    "deleted_paths": result.get("deleted_paths", []),
-                })
+                run.result_json = json.dumps(
+                    {
+                        "targets_processed": result.get("targets_processed", 0),
+                        "deleted_count": result.get("delete_count", 0),
+                        "kept_count": result.get("keep_count", 0),
+                        "deleted_paths": result.get("deleted_paths", []),
+                    }
+                )
                 _log_event(
                     "maintenance_run_success",
                     maintenance_job_id=job.id,
@@ -910,27 +972,31 @@ def execute_maintenance_job(maintenance_job_id: int) -> None:
             run.finished_at = datetime.now(timezone.utc)
             run.status = RunStatus.FAILED.value
             run.message = f"Maintenance job failed: {str(exc)}"
-            run.result_json = json.dumps({
-                "error": str(exc),
-            })
+            run.result_json = json.dumps(
+                {
+                    "error": str(exc),
+                }
+            )
             _log_event(
                 "maintenance_run_failed",
                 maintenance_job_id=job.id,
                 maintenance_run_id=run.id,
                 error=str(exc),
             )
-        
+
         db.add(run)
         db.commit()
     except Exception as exc:
-        _log_event("maintenance_job_execution_error", maintenance_job_id=maintenance_job_id, error=str(exc))
+        _log_event(
+            "maintenance_job_execution_error", maintenance_job_id=maintenance_job_id, error=str(exc)
+        )
     finally:
         db.close()
 
 
 def scheduled_dispatch(kind: str, job_id: int) -> None:
     """Unified dispatcher for scheduled jobs (backup or maintenance).
-    
+
     Routes execution to the appropriate executor based on kind.
     """
     if kind == "backup":
@@ -943,13 +1009,13 @@ def scheduled_dispatch(kind: str, job_id: int) -> None:
 
 def nightly_retention_cleanup() -> None:
     """Legacy nightly retention cleanup (deprecated - use MaintenanceJob instead).
-    
+
     This function is kept for backward compatibility but should be replaced
     by the MaintenanceJob with key='retention_cleanup_nightly'.
     """
     from app.core.db import get_session
     from app.services.maintenance import MaintenanceService
-    
+
     db = next(get_session())
     try:
         # Try to find the nightly maintenance job and execute it
@@ -986,9 +1052,11 @@ def schedule_jobs_on_startup(scheduler: AsyncIOScheduler, db: Session) -> None:
 
     # Load enabled backup jobs
     enabled_backup_jobs = db.query(JobModel).filter(JobModel.enabled.is_(True)).all()
-    
+
     # Load enabled maintenance jobs
-    enabled_maintenance_jobs = db.query(MaintenanceJobModel).filter(MaintenanceJobModel.enabled.is_(True)).all()
+    enabled_maintenance_jobs = (
+        db.query(MaintenanceJobModel).filter(MaintenanceJobModel.enabled.is_(True)).all()
+    )
 
     _log_event(
         "scheduler_load_jobs_start",
@@ -1011,12 +1079,14 @@ def schedule_jobs_on_startup(scheduler: AsyncIOScheduler, db: Session) -> None:
         try:
             trigger = CronTrigger.from_crontab(item.schedule_cron)
         except Exception:
-            _log_event("invalid_cron", kind=item.kind, job_id=item.id, schedule_cron=item.schedule_cron)
+            _log_event(
+                "invalid_cron", kind=item.kind, job_id=item.id, schedule_cron=item.schedule_cron
+            )
             invalid_count += 1
             continue
 
         # Use namespaced IDs to avoid collisions
-        scheduler_id = f"{item.kind}:{item.id}"
+        scheduler_id = _scheduler_item_id(item.kind, item.id)
         scheduler.add_job(
             func=scheduled_dispatch,
             trigger=trigger,
@@ -1047,43 +1117,45 @@ def schedule_jobs_on_startup(scheduler: AsyncIOScheduler, db: Session) -> None:
 
 def reschedule_job(job_id: int, schedule_cron: str, enabled: bool = True) -> bool:
     """Reschedule a specific job with new cron expression.
-    
+
     Returns True if successful, False if job not found or invalid cron.
     """
     scheduler = get_scheduler()
     if not hasattr(scheduler, "remove_job") or not hasattr(scheduler, "add_job"):
         return False
-    
+
     try:
         # Remove existing job if it exists
-        job_id_str = f"job:{job_id}"
+        job_id_str = _scheduler_item_id("backup", job_id)
         if scheduler.get_job(job_id_str):
             scheduler.remove_job(job_id_str)
             _log_event("job_removed", job_id=job_id)
-        
+
         if not enabled:
             _log_event("job_disabled", job_id=job_id)
             return True
-        
+
         # Parse and validate new cron
         trigger = CronTrigger.from_crontab(schedule_cron)
-        
+
         # Add new job
         scheduler.add_job(
-            func=scheduled_tick,
+            func=scheduled_dispatch,
             trigger=trigger,
             id=job_id_str,
             name=f"Job {job_id}",
             replace_existing=True,
-            kwargs={"job_id": job_id},
+            kwargs={"kind": "backup", "job_id": job_id},
             max_instances=1,
         )
-        
+
         _log_event("job_rescheduled", job_id=job_id, schedule_cron=schedule_cron)
         return True
-        
+
     except Exception as exc:
-        _log_event("job_reschedule_failed", job_id=job_id, schedule_cron=schedule_cron, error=str(exc))
+        _log_event(
+            "job_reschedule_failed", job_id=job_id, schedule_cron=schedule_cron, error=str(exc)
+        )
         return False
 
 
@@ -1092,9 +1164,9 @@ def remove_job(job_id: int) -> bool:
     scheduler = get_scheduler()
     if not hasattr(scheduler, "remove_job"):
         return False
-    
+
     try:
-        job_id_str = f"job:{job_id}"
+        job_id_str = _scheduler_item_id("backup", job_id)
         if scheduler.get_job(job_id_str):
             scheduler.remove_job(job_id_str)
             _log_event("job_removed", job_id=job_id)
@@ -1110,16 +1182,18 @@ def get_scheduler_jobs() -> list[dict]:
     scheduler = get_scheduler()
     if not hasattr(scheduler, "get_jobs"):
         return []
-    
+
     try:
         jobs = []
         for job in scheduler.get_jobs():
-            jobs.append({
-                "id": job.id,
-                "name": job.name,
-                "next_run_time": str(job.next_run_time) if job.next_run_time else None,
-                "trigger": str(job.trigger),
-            })
+            jobs.append(
+                {
+                    "id": job.id,
+                    "name": job.name,
+                    "next_run_time": str(job.next_run_time) if job.next_run_time else None,
+                    "trigger": str(job.trigger),
+                }
+            )
         return jobs
     except Exception:
         return []

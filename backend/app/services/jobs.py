@@ -1,26 +1,26 @@
 from __future__ import annotations
 
-from datetime import datetime
 import logging
-import threading
 import queue
+import threading
 import time as _time
-from typing import Callable, List, Optional, Any
+from datetime import datetime
+from typing import Any, Callable, List, Optional
+from zoneinfo import ZoneInfo
 
+from apscheduler.triggers.cron import CronTrigger  # type: ignore[import-untyped]
 from sqlalchemy.orm import Session
 
-from zoneinfo import ZoneInfo
-from apscheduler.triggers.cron import CronTrigger
-
+from app.models import Job as JobModel
+from app.models import Run as RunModel
+from app.models import Tag as TagModel
+from app.models import Target as TargetModel
+from app.models import TargetTag as TargetTagModel
 from app.models import (
-    Job as JobModel,
-    Run as RunModel,
-    Tag as TagModel,
-    Target as TargetModel,
-    TargetTag as TargetTagModel,
     validate_cron_expression,
 )
 from app.schemas import UpcomingJob
+from app.schemas.settings import normalize_retention_policy_json
 
 
 class JobService:
@@ -40,14 +40,11 @@ class JobService:
         historical runs: enabled == False, cron == "0 0 1 1 *", and name in
         {"N/A"}.
         """
-        q = (
-            self.db.query(JobModel)
-            .filter(
-                ~(
-                    JobModel.enabled.is_(False)
-                    & (JobModel.schedule_cron == "0 0 1 1 *")
-                    & (JobModel.name.in_(["N/A"]))
-                )
+        q = self.db.query(JobModel).filter(
+            ~(
+                JobModel.enabled.is_(False)
+                & (JobModel.schedule_cron == "0 0 1 1 *")
+                & (JobModel.name.in_(["N/A"]))
             )
         )
         return list(q.all())
@@ -62,6 +59,7 @@ class JobService:
         name: str,
         schedule_cron: str,
         enabled: bool = True,
+        retention_policy_json: Optional[str] = None,
     ) -> JobModel:
         # Validate tag exists
         tag = self.db.get(TagModel, tag_id)
@@ -74,20 +72,22 @@ class JobService:
             name=name,
             schedule_cron=schedule_cron,
             enabled=enabled,
+            retention_policy_json=normalize_retention_policy_json(retention_policy_json),
         )
         self.db.add(job)
         self.db.commit()
         self.db.refresh(job)
-        
+
         # Add to scheduler if enabled
         if job.enabled:
             try:
                 from app.core.scheduler import reschedule_job
+
                 reschedule_job(job.id, job.schedule_cron, job.enabled)
             except Exception:
                 # Log but don't fail the create if scheduler update fails
                 pass
-        
+
         return job
 
     def update(self, job_id: int, **fields: object) -> JobModel:
@@ -96,32 +96,39 @@ class JobService:
             raise KeyError("job_not_found")
         # Field validations
         if "tag_id" in fields:
-            tag_id_val = int(fields["tag_id"])  # type: ignore[call-arg]
+            tag_id_val = int(str(fields["tag_id"]))
             tag = self.db.get(TagModel, tag_id_val)
             if tag is None:
                 raise KeyError("tag_not_found")
         if "schedule_cron" in fields:
             validate_cron_expression(str(fields["schedule_cron"]))
-        
+        if "retention_policy_json" in fields:
+            fields["retention_policy_json"] = normalize_retention_policy_json(
+                fields["retention_policy_json"]  # type: ignore[arg-type]
+            )
+
         # Store old values for scheduler update
         old_enabled = job.enabled
         old_cron = job.schedule_cron
-        
+
         for key, value in fields.items():
             setattr(job, key, value)
         self.db.add(job)
         self.db.commit()
         self.db.refresh(job)
-        
+
         # Update scheduler if schedule or enabled status changed
-        if ("schedule_cron" in fields and fields["schedule_cron"] != old_cron) or ("enabled" in fields and fields["enabled"] != old_enabled):
+        if ("schedule_cron" in fields and fields["schedule_cron"] != old_cron) or (
+            "enabled" in fields and fields["enabled"] != old_enabled
+        ):
             try:
                 from app.core.scheduler import reschedule_job
+
                 reschedule_job(job_id, job.schedule_cron, job.enabled)
             except Exception:
                 # Log but don't fail the update if scheduler update fails
                 pass
-        
+
         return job
 
     def delete(self, job_id: int) -> None:
@@ -148,7 +155,9 @@ class JobService:
         )
         if sentinel is None:
             # Create a new sentinel with the preferred display name
-            sentinel = JobModel(tag_id=archived_tag.id, name="N/A", schedule_cron="0 0 1 1 *", enabled=False)
+            sentinel = JobModel(
+                tag_id=archived_tag.id, name="N/A", schedule_cron="0 0 1 1 *", enabled=False
+            )
             self.db.add(sentinel)
             self.db.commit()
             self.db.refresh(sentinel)
@@ -160,17 +169,20 @@ class JobService:
                 self.db.commit()
                 self.db.refresh(sentinel)
         # Reassign runs to sentinel before deleting the job
-        self.db.query(RunModel).filter(RunModel.job_id == job.id).update({RunModel.job_id: sentinel.id}, synchronize_session="fetch")
+        self.db.query(RunModel).filter(RunModel.job_id == job.id).update(
+            {RunModel.job_id: sentinel.id}, synchronize_session="fetch"
+        )
         self.db.commit()
 
         # Remove from scheduler before deleting
         try:
             from app.core.scheduler import remove_job
+
             remove_job(job.id)
         except Exception:
             # Log but don't fail the delete if scheduler update fails
             pass
-        
+
         self.db.delete(job)
         self.db.commit()
 
@@ -204,6 +216,7 @@ class JobService:
         if job is None:
             raise ValueError("Job not found")
         from app.core.scheduler import trigger_job_async
+
         return trigger_job_async(self.db, job_id=job.id, triggered_by=triggered_by)
 
 
@@ -242,34 +255,46 @@ def run_job_for_tag(
     job_id: int,
     tag_id: int,
     *,
-    runner: Callable[[TargetModel], Any],
+    runner: Callable[[int], Any],
     max_concurrency: int = 5,
     no_overlap: bool = True,
     max_retries: int = 1,
     sleep_fn: Callable[[float], None] = _time.sleep,
     backoff_base: float = 0.05,
+    on_started: Optional[Callable[[], None]] = None,
 ) -> dict:
     """Execute a job for all current targets under a tag with bounded concurrency and retries."""
     lock = _get_job_lock(job_id)
     acquired = lock.acquire(blocking=False) if no_overlap else lock.acquire(blocking=True)
     if not acquired:
-        _log.info("job_run_skip_overlap | job_id=%s", job_id, extra={"event": "job_run_skip_overlap", "job_id": job_id})
-        return {"started": False, "results": []}
+        _log.info(
+            "job_run_skip_overlap | job_id=%s",
+            job_id,
+            extra={"event": "job_run_skip_overlap", "job_id": job_id},
+        )
+        return {"started": False, "reason": "overlap", "results": []}
     try:
-        _log.info("job_run_start | job_id=%s tag_id=%s", job_id, tag_id, extra={"event": "job_run_start", "job_id": job_id, "tag_id": tag_id})
-        targets = resolve_tag_to_targets(db, tag_id)
+        if on_started is not None:
+            on_started()
+        _log.info(
+            "job_run_start | job_id=%s tag_id=%s",
+            job_id,
+            tag_id,
+            extra={"event": "job_run_start", "job_id": job_id, "tag_id": tag_id},
+        )
+        target_ids = [int(target.id) for target in resolve_tag_to_targets(db, tag_id)]
         if max_concurrency < 1:
             max_concurrency = 1
-        work: "queue.Queue[TargetModel]" = queue.Queue()
-        for t in targets:
-            work.put(t)
+        work: "queue.Queue[int]" = queue.Queue()
+        for target_id in target_ids:
+            work.put(target_id)
         results_lock = threading.Lock()
         results: list[dict] = []
 
         def worker() -> None:
             while True:
                 try:
-                    t = work.get_nowait()
+                    target_id = work.get_nowait()
                 except queue.Empty:
                     break
                 status = "failed"
@@ -277,30 +302,42 @@ def run_job_for_tag(
                 artifact_path: Optional[str] = None
                 for attempt in range(0, max_retries + 1):
                     try:
-                        res = runner(t)
-                        # Use the status returned by the runner, fallback to "success" if not provided
-                        if isinstance(res, dict) and "status" in res:
-                            status = res["status"]
+                        res = runner(target_id)
+                        if not isinstance(res, dict) or "status" not in res:
+                            status = "failed"
+                            last_err = RuntimeError("Runner returned no explicit status")
                         else:
-                            status = "success"
-                        if isinstance(res, dict):
+                            status = str(res["status"])
                             ap = res.get("artifact_path")
                             if isinstance(ap, str):
                                 artifact_path = ap
-                        last_err = None
-                        break
+                            if status == "success":
+                                last_err = None
+                                break
+                            last_err = RuntimeError(
+                                str(res.get("error") or "Runner reported failure")
+                            )
                     except BaseException as exc:  # noqa: BLE001
                         last_err = exc
-                        if attempt < max_retries:
-                            sleep_fn(max(backoff_base * (2 ** attempt), 0.0))
-                        else:
-                            break
+                        status = "failed"
+
+                    if attempt < max_retries:
+                        sleep_fn(max(backoff_base * (2**attempt), 0.0))
+                    else:
+                        break
                 with results_lock:
-                    results.append({"target_id": t.id, "status": status, "error": str(last_err) if last_err else None, "artifact_path": artifact_path})
+                    results.append(
+                        {
+                            "target_id": target_id,
+                            "status": status,
+                            "error": str(last_err) if last_err else None,
+                            "artifact_path": artifact_path,
+                        }
+                    )
                 work.task_done()
 
         threads: list[threading.Thread] = []
-        for _ in range(min(len(targets), max_concurrency)):
+        for _ in range(min(len(target_ids), max_concurrency)):
             th = threading.Thread(target=worker, daemon=True)
             threads.append(th)
             th.start()
@@ -309,10 +346,13 @@ def run_job_for_tag(
         _log.info(
             "job_run_done | job_id=%s target_count=%s",
             job_id,
-            len(targets),
-            extra={"event": "job_run_done", "job_id": job_id, "target_count": len(targets)},
+            len(target_ids),
+            extra={"event": "job_run_done", "job_id": job_id, "target_count": len(target_ids)},
         )
-        return {"started": True, "results": results}
+        summary = {"started": True, "results": results}
+        if not target_ids:
+            summary["reason"] = "no_targets"
+        return summary
     finally:
         if acquired:
             try:
