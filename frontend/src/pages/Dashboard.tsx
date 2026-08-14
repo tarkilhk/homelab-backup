@@ -10,8 +10,18 @@ import { formatLocalDateTime } from '../lib/dates'
 const gapLabels = {
   not_scheduled: 'Not scheduled',
   never_succeeded: 'Never succeeded',
-  scheduled_backup_missing: 'Scheduled backup missing',
+  scheduled_backup_missing: 'Backup overdue',
 } as const
+
+function overdueDescription(consecutiveFailures: number): string {
+  if (consecutiveFailures === 1) {
+    return '1 attempt failed since the last valid backup.'
+  }
+  if (consecutiveFailures > 1) {
+    return `${consecutiveFailures} consecutive attempts failed since the last valid backup.`
+  }
+  return 'A scheduled backup was due, but no newer valid backup was created.'
+}
 
 function formatAge(ageSeconds: number): string {
   if (ageSeconds < 60) return `${Math.floor(ageSeconds)}s old`
@@ -167,9 +177,16 @@ export default function DashboardPage() {
                     </td>
                     <td className="py-3">
                       {target.gap_reason ? (
-                        <span className="inline-flex rounded-full bg-red-500/10 px-2 py-1 text-xs font-medium text-red-500">
-                          {gapLabels[target.gap_reason]}
-                        </span>
+                        <div className="space-y-1">
+                          <span className="inline-flex rounded-full bg-red-500/10 px-2 py-1 text-xs font-medium text-red-500">
+                            {gapLabels[target.gap_reason]}
+                          </span>
+                          {target.gap_reason === 'scheduled_backup_missing' && (
+                            <div className="max-w-64 text-xs text-muted-foreground">
+                              {overdueDescription(target.consecutive_failures)}
+                            </div>
+                          )}
+                        </div>
                       ) : (
                         <span className="inline-flex rounded-full bg-green-500/10 px-2 py-1 text-xs font-medium text-green-500">
                           No gap

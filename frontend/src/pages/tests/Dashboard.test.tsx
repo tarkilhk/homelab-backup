@@ -182,7 +182,10 @@ describe('DashboardPage', () => {
 
     expect(await screen.findByRole('heading', { name: 'Backup protection' })).toBeInTheDocument()
     const postgresqlRow = screen.getByText('PostgreSQL').closest('tr') as HTMLElement
-    expect(within(postgresqlRow).getByText('Scheduled backup missing')).toBeInTheDocument()
+    expect(within(postgresqlRow).getByText('Backup overdue')).toBeInTheDocument()
+    expect(
+      within(postgresqlRow).getByText('2 consecutive attempts failed since the last valid backup.')
+    ).toBeInTheDocument()
     expect(within(postgresqlRow).getByText('2')).toBeInTheDocument()
     expect(within(postgresqlRow).getByText('Nightly databases')).toBeInTheDocument()
     expect(screen.getByText('Not scheduled')).toBeInTheDocument()
