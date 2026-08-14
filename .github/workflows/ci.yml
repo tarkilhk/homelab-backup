@@ -88,10 +88,53 @@ jobs:
       - name: Build production frontend
         run: npm run build
 
+  test-backend-image:
+    name: Backend Image Health
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build --tag homelab-backup-backend-health-test ./backend
+
+      - name: Verify declared health check
+        shell: bash
+        run: |
+          set -euo pipefail
+          container=homelab-backup-backend-health-test
+          trap 'docker rm --force "${container}" >/dev/null 2>&1 || true' EXIT
+          docker run --detach \
+            --name "${container}" \
+            --health-interval 1s \
+            --health-start-period 10s \
+            --health-timeout 5s \
+            --health-retries 5 \
+            homelab-backup-backend-health-test
+
+          for _ in {1..60}; do
+            status="$(docker inspect --format '{{.State.Health.Status}}' "${container}")"
+            case "${status}" in
+              healthy)
+                exit 0
+                ;;
+              unhealthy)
+                docker inspect --format '{{json .State.Health}}' "${container}"
+                docker logs "${container}"
+                exit 1
+                ;;
+            esac
+            sleep 1
+          done
+
+          docker inspect --format '{{json .State.Health}}' "${container}"
+          docker logs "${container}"
+          exit 1
+
   build-and-push:
     name: Build and Push Docker Images
     runs-on: ubuntu-latest
-    needs: [secret-scan, test-backend, test-frontend]
+    needs: [secret-scan, test-backend, test-frontend, test-backend-image]
     if: github.event_name != 'pull_request'  # do not push images for PRs
     permissions:
       contents: read
