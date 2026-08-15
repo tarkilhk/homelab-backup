@@ -15,6 +15,9 @@ All notable changes to Homelab Backup are recorded here. This project follows
 - A SFTPGo 2.7.5 control-plane plugin with credential-free online SQLite
   snapshots, transient-state scrubbing, and create-only restores verified by
   two fresh exact-image boots.
+- A Termix 2.3.2 encrypted-state plugin with read-only stable snapshots,
+  private strict artifacts, create-only local restores, and two authenticated
+  exact-image recovery drills.
 
 ## [0.2.1] - 2026-08-15
 

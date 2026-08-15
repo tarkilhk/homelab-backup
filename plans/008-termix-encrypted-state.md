@@ -6,8 +6,9 @@
 - **Effort**: M
 - **Risk**: HIGH
 - **Depends on**: Plan 001 foundation
-- **State**: IN PROGRESS
-- **Production status**: local implementation only; production restore remains forbidden
+- **State**: DONE (local)
+- **Production status**: locally verified; production read-only mount, target, and
+  schedule remain pending; production restore remains forbidden
 - **Researched at**: Termix 2.3.2 / upstream commit
   `c3282b5dca081d52513e94329bbc71084338217d`, 2026-08-15
 - **Exact local-drill image**:
@@ -32,7 +33,7 @@ flat target configuration to one `data_path`, defaulting to
 `/api/v1/plugins`.
 
 `test()` is read-only and proves that `.env` and `db.sqlite.encrypted` are
-private regular files, the exact v2/AES-256-GCM envelope authenticates with the
+regular non-symlink files, the exact v2/AES-256-GCM envelope authenticates with the
 stored `DATABASE_KEY`, and the decrypted database passes integrity, foreign-key,
 and minimum Termix 2.3.2 schema checks. Optional `.opk/config.yml` is accepted;
 unknown persistent entries are refused.
@@ -73,15 +74,24 @@ overwrites a running Termix instance, so `restore_capability` is `partial`.
 
 ## Done criteria
 
-- [ ] All nine vertical slices pass.
-- [ ] The backend runner reads the Termix source through a genuine OS read-only
+- [x] All nine vertical slices pass.
+- [x] The backend runner reads the Termix source through a genuine OS read-only
       bind and has no network, Docker socket, or Termix application credentials.
-- [ ] Two exact-version backup-to-fresh-restore drills pass.
-- [ ] Full backend and applicable frontend checks pass.
-- [ ] Standards/spec review has no unresolved P0/P1 findings.
-- [ ] Compatibility, recovery, changelog, and future infrastructure mount are
+- [x] Two exact-version backup-to-fresh-restore drills pass.
+- [x] Full backend and applicable frontend checks pass.
+- [x] Standards/spec review has no unresolved P0/P1 findings.
+- [x] Compatibility, recovery, changelog, and future infrastructure mount are
       documented.
-- [ ] The milestone is committed independently with this plan marked DONE.
+- [x] The milestone is committed independently with this plan marked DONE.
+
+## Local evidence
+
+- Backend: `625 passed, 4 skipped`.
+- Termix plugin and restore-capability contract: `31 passed`.
+- Exact-image two-backup/two-restore Docker drill: `1 passed`.
+- Changed-scope Black, isort, and mypy checks pass; applicable frontend tests,
+  lint, and production build remain green.
+- Independent Standards and Spec reviews report no actionable P0-P3 findings.
 
 ## STOP conditions
 

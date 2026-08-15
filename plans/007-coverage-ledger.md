@@ -80,7 +80,7 @@ included in a broad image job, or a plugin directory exists.
 | Sure | `unclassified` | Active digest-pinned Rails/PostgreSQL/storage deployment; consistency/restore boundary needs primary research. |
 | Hindsight | `unclassified` | Active 0.8.6 PostgreSQL plus `.codex` files; determine authoritative/encrypted file boundary. |
 | Quartz | `unclassified` | Confirm whether authoritative content is in Git or only on the Claw host. |
-| Termix | `planned-plugin` | Exact 2.3.2 encrypted filesystem boundary is researched in Plan 008; local implementation and two isolated exact-image drills are in progress. |
+| Termix | `plugin-local` | Exact 2.3.2 read-only encrypted-state plugin, two distinct backups, two create-only restores, and two authenticated exact-image boots pass locally; production mount/target/schedule evidence remains. |
 | Mealie | `unclassified` | Active v3.22.0 PostgreSQL plus `/app/data`; native/consistent backup boundary needs research. |
 | Wallabag | `unclassified` | Active 2.6.14 data/images deployment; exact database and restore boundary need research. |
 | YouTube-DL Material configuration | `unclassified` | Active 4.3.2 MongoDB/appdata deployment; determine which subscriptions/config are valuable. |

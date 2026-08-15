@@ -1,6 +1,8 @@
 # Termix 2.3.2 backup and restore research
 
-Status: researched against the exact deployed release; implementation not started. This document contains no credential values and authorizes no production restore.
+Status: researched and implemented locally against the exact deployed release;
+production rollout remains pending. This document contains no credential values
+and authorizes no production restore.
 
 ## Deployment verified from infrastructure-as-code
 
@@ -34,7 +36,19 @@ A read-only filesystem backup can run without Termix network access, its credent
 
 The plugin should copy only the allowlisted regular files, reject symlinks, and stable-read each file twice (size, metadata and cryptographic hash) after a settle interval longer than the two-second save debounce, retrying a small bounded number of times. It should validate the encrypted header as v2/AES-256-GCM, decrypt a private temporary copy with the key from `.env` without logging it, then run SQLite `quick_check`, foreign-key checks, and minimum schema checks. Publish an atomic private artifact plus sidecar containing the Termix release/commit, filenames, modes, sizes and hashes.
 
-This is crash-consistent but not a zero-RPO snapshot of memory. Termix debounces dirty saves by about two seconds, also runs a five-minute persistence loop, and saves on graceful shutdown: [save trigger](https://github.com/Termix-SSH/Termix/blob/c3282b5dca081d52513e94329bbc71084338217d/src/backend/utils/database-save-trigger.ts#L23-L97), [shutdown save](https://github.com/Termix-SSH/Termix/blob/c3282b5dca081d52513e94329bbc71084338217d/src/backend/starter.ts#L198-L218). Save errors are logged but swallowed by the persistence function, so a filesystem reader cannot prove it captured the absolute latest in-memory mutation. If zero-second RPO is required, Termix needs an explicit force-save/quiesce seam or a controlled stop; neither belongs in this filesystem-only plugin without a new decision.
+This is crash-consistent but not a zero-RPO snapshot of memory. Termix debounces
+dirty saves by about two seconds, checks dirty state in a five-minute loop, and
+saves on graceful shutdown: [save trigger](https://github.com/Termix-SSH/Termix/blob/c3282b5dca081d52513e94329bbc71084338217d/src/backend/utils/database-save-trigger.ts#L23-L97), [shutdown save](https://github.com/Termix-SSH/Termix/blob/c3282b5dca081d52513e94329bbc71084338217d/src/backend/starter.ts#L198-L218).
+Exact-image testing found that snippet creation does not call the dirty-save
+trigger, so a snippet can remain memory-only indefinitely until another
+save-triggering mutation or graceful shutdown. The five-minute loop does not
+fix an unmarked mutation. Save errors are also logged but swallowed by the
+persistence function, so a filesystem reader cannot prove it captured the
+absolute latest in-memory mutation. The local drill must therefore create its
+snippet before a host mutation, then wait for the encrypted file to change and
+become stable before backup. If zero-second RPO is required, Termix needs an
+explicit force-save/quiesce seam or a controlled stop; neither belongs in this
+filesystem-only plugin without a new decision.
 
 ## Restore boundary and disposable drill
 

@@ -19,6 +19,7 @@ def test_plugins_publish_honest_restore_capabilities() -> None:
         "radarr": "automatic",
         "sftpgo": "partial",
         "sonarr": "automatic",
+        "termix": "partial",
     }
 
     listed = {item["key"]: item["restore_capability"] for item in list_plugins()}

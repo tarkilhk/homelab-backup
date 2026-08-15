@@ -21,6 +21,7 @@ carrying these versions forward by assumption.
 | Radarr | `ghcr.io/linuxserver/radarr:6.3.0.10514-ls313` | Connectivity and two validated native archives passed | Isolated upload, restart, and readiness passed |
 | SFTPGo | `drakkan/sftpgo:v2.7.5-alpine` (`9888a3d`; drill pinned OCI index `sha256:d1e2877600aba270ac395bf76fc7c8a2a0bb4ac83c3e6c180a0540f5d4c3efb2`) | Two live WAL-backed online SQLite snapshots through a read-only bind, complete schema-33 validation, transient-state scrubbing, private artifacts, valid sidecars, independent hashes, and semantic phase differences passed | Two fresh create-only restores and separate exact-image boots proved authentication, SQLite readiness, users/public keys, admins, groups, folders, shares, API keys, roles, and event metadata; capability remains `partial` because the plugin does not control destination lifecycle |
 | Sonarr | `ghcr.io/linuxserver/sonarr:4.0.19.2979-ls320` | Connectivity and two validated native archives passed | Isolated upload, restart, and readiness passed |
+| Termix | `ghcr.io/lukegus/termix:release-2.3.2` (drill pinned OCI index `sha256:06a27a3dc22ae426cf0681fcdbdb58732f2aab56d8ce9e95f4deea18306e5c2f`) | Two stable encrypted-state snapshots through a genuine read-only bind, strict v2/AES-256-GCM authentication, SQLite integrity/schema checks, private manifests/artifacts, valid sidecars, and independent phase hashes passed locally | Two fresh create-only restores and separate exact-image boots proved password authentication plus phase-specific host/snippet content; capability remains `partial` because the plugin does not control destination lifecycle |
 | Vaultwarden | `vaultwarden/server:1.37.1` | Connectivity, two validated component archives, exact-image command checks, and synthetic component replacement passed | Isolated restore, SQLite validation, rollback-safe restart, and application readiness passed |
 
 The repository still contains the previously verified WordPress plugin.
@@ -36,6 +37,7 @@ The authoritative declarations are currently under these `homelab-infra` paths:
 - `docker.compose/media/jelly_misc/jelly_misc.yaml`
 - `docker.compose/media/radarr_sonarr_lidarr/radarr_sonarr_lidarr.yaml`
 - `docker.compose/misc/sftpgo/sftpgo.yaml`
+- `docker.compose/misc/termix/termix.yaml`
 - `docker.compose/tarkilnas-system/pihole/pihole.yaml`
 - `docker.compose/system/postgres/postgres.yaml`
 - `docker.compose/tarkilnas-system/vaultwarden/vaultwarden.yaml`
@@ -82,3 +84,13 @@ network access, an administrator credential, the Docker socket, or downtime.
 Pin the SFTPGo image digest and add this read-only mount during the production
 rollout. `/srv/sftpgo` and all `/nas/*` payload remain outside the plugin and
 must be classified separately before claiming file-data coverage.
+
+The Termix plugin is locally verified but not yet deployed. The Docker-host
+backend needs only
+`/docker-apps/termix/data:/sources/termix/data:ro`; it does not need Termix
+network access, an application credential, the Docker socket, or downtime. The
+plugin captures the latest successfully persisted 2.3.2 state. Termix can keep
+some acknowledged mutations only in memory until another save-triggering change
+or graceful shutdown, so the plugin does not claim zero-second RPO. Production
+restore remains forbidden; the create-only restore contract is for isolated
+local drills.
