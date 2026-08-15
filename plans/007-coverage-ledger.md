@@ -83,7 +83,7 @@ included in a broad image job, or a plugin directory exists.
 | Termix | `plugin-local` | Exact 2.3.2 read-only encrypted-state plugin, two distinct backups, two create-only restores, and two authenticated exact-image boots pass locally; production mount/target/schedule evidence remains. |
 | Mealie | `blocked` | Native v3.22.0 export is not a transactional PostgreSQL/files snapshot and native restore requires unsafe cluster privilege. A dependable logical dump plus `/app/data` capture needs explicit brief Mealie downtime and narrow lifecycle/read-only mount approval. |
 | Wallabag | `blocked` | Exact 2.6.14 SQLite, site-credential key, and downloaded-image boundary is known, but coherent capture needs approved brief downtime and narrow lifecycle control. Production activation also awaits a default Symfony-secret decision and live image-digest verification. |
-| YouTube-DL Material configuration | `unclassified` | Active 4.3.2 MongoDB/appdata deployment; determine which subscriptions/config are valuable. |
+| YouTube-DL Material configuration | `blocked` | Exact 4.3.2 control-plane state spans standalone MongoDB and allowlisted appdata. A dependable media-excluding artifact needs approved brief app downtime, a narrow lifecycle seam, and database-scoped authenticated dump access. |
 | YouTube-DL media payload | `external` | Audio/video payload follows NAS/media policy and is excluded from application artifacts. |
 | Speedtest Tracker | `unprotected` | Measurement history is telemetry and is deliberately excluded by the active goal; its current declaration also has no persistent volume. |
 
