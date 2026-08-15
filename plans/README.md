@@ -10,6 +10,7 @@ Each executor must read its plan fully, honor STOP conditions, and update status
 | 003 | Add consistent Homelab Backup self-backup and offline restore | P0 | M | 001 foundation | DONE (local) |
 | 004 | Add a quiesced Standard Notes composite backup and isolated restore plugin | P0 | L | 001 foundation; downtime decision | BLOCKED |
 | 005 | Add SFTPGo v2.7.5 control-plane backup and isolated restore | P0 | M | 001 foundation | DONE (local) |
+| 006 | Add Paperless-ngx 2.20.15 native export and isolated restore | P0 | L | 001 foundation; execution-path approval | BLOCKED |
 
 Status: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`, or `REJECTED`.
 
