@@ -35,6 +35,7 @@ files, partial files, and artifacts with missing or inconsistent sidecars.
 | Homelab Backup | Partial | Creates a validated database only in a fresh sentinel-marked offline directory. Booting and verifying the exact recorded backend image remains a separate operator step. |
 | MySQL | Partial | Imports only into an empty database and validates tables; MySQL DDL is non-transactional, so a failed import requires the destination to be reset before retry. |
 | PostgreSQL | Automatic | Restores a validated custom archive transactionally with cleanup and stop-on-error semantics. |
+| Profilarr | Automatic | Creates and independently validates a complete Profilarr 1.1.5 SQLite control plane and reconstructed all-ref Git repository in a fresh sentinel-marked local directory. Radarr, Sonarr, Git hosting, credentials, and exact-image boot remain separate recovery-stack prerequisites. |
 | WordPress | Automatic | Replaces site files, imports the database, validates both, and rolls back on failure. The destination must be an isolated mounted WordPress root. |
 | Invoice Ninja | Partial | Queues the official company import. Invoice Ninja exposes no terminal import status, so application-level verification remains required. |
 | Jellyfin | Automatic | Stages a validated archive in Jellyfin's shared backup directory and invokes the official restore endpoint. Success requires an observed restart and readiness transition. |
@@ -196,6 +197,48 @@ Restore is create-only and local:
 
 Never expose the restore authorization variable on a production backend and
 never invoke Bazarr's native `PATCH` restore through this plugin.
+
+### Profilarr composite recovery
+
+The `profilarr` plugin protects exact Profilarr 1.1.5 state from two narrow
+read-only sources. It uses SQLite's online backup API for
+`/config/profilarr.db` and creates a self-contained `git bundle --all` from a
+stable clean `/config/db` repository. The private `.profilarr` ZIP contains
+exactly `profilarr.db`, `repository.bundle`, and `manifest.json`. The database
+can contain authentication material, Arr API keys, internal URLs, and session
+secrets; the bundle can contain private history and local-only refs. Protect the
+artifact as credential-bearing even though its external sidecar contains only
+non-secret structural evidence.
+
+A backup fails deliberately when the repository is dirty, detached, unborn,
+changing, shallow, partial, corrupt, in an active Git operation, or dependent
+on submodules, LFS, alternates, replace refs, or missing objects. Commit or
+resolve the repository state and let the next scheduled run retry. Do not copy
+the worktree or enable a dirty-state compatibility path.
+
+Restore is create-only and local:
+
+1. Use Profilarr 1.1.5 from the pinned linux/amd64 image manifest recorded in
+   the artifact and compatibility matrix.
+2. Create a private disposable parent beneath `/tmp` or `/restore` containing
+   only `.profilarr-restore-destination` with
+   `profilarr-v1.1.5-isolated-restore-v1` followed by one newline.
+3. Set `HOMELAB_BACKUP_ALLOW_ISOLATED_RESTORE=1` only inside a loopback-only
+   restore runner and configure an absent child `restore_directory`.
+4. Restore through `RestoreService`. It stages and hashes the artifact, creates
+   `profilarr.db`, reconstructs `db` from the bundle without copying source
+   `.git/config`, hooks, or credentials, and revalidates database bytes, every
+   ref, branch, HEAD, repository integrity, and authoritative file inventory.
+5. Boot a copy with the exact pinned Profilarr image on an isolated local
+   network. Provide only disposable mock Radarr, Sonarr, and Git dependencies;
+   verify representative application state and restart readiness before
+   planning any recovery cutover.
+
+The automatic capability covers all authoritative Profilarr application state.
+It does not restore Radarr or Sonarr, provision Git credentials, push local-only
+commits, or recreate infrastructure. Never expose the restore authorization
+variable on a production backend and never restore Profilarr in production
+through Homelab Backup.
 
 ## Plugin-specific cautions
 

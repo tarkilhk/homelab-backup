@@ -135,6 +135,7 @@ jobs:
             "${image}" --version | grep 'PostgreSQL) 18.'
           docker run --rm --entrypoint pg_restore \
             "${image}" --version | grep 'PostgreSQL) 18.'
+          docker run --rm --entrypoint git "${image}" --version
           docker run --rm --entrypoint wp \
             "${image}" cli version | grep 'WP-CLI 2.12.0'
           docker run --rm --entrypoint php "${image}" -r \

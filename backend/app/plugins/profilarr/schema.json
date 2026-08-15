@@ -1,0 +1,60 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mode"],
+  "allOf": [
+    {
+      "if": {
+        "properties": {"mode": {"const": "source"}},
+        "required": ["mode"]
+      },
+      "then": {
+        "required": ["database_path", "repository_path"],
+        "not": {"required": ["restore_directory"]}
+      }
+    },
+    {
+      "if": {
+        "properties": {"mode": {"const": "restore_destination"}},
+        "required": ["mode"]
+      },
+      "then": {
+        "required": ["restore_directory"],
+        "not": {
+          "anyOf": [
+            {"required": ["database_path"]},
+            {"required": ["repository_path"]}
+          ]
+        }
+      }
+    }
+  ],
+  "properties": {
+    "mode": {
+      "type": "string",
+      "title": "Mode",
+      "enum": ["source", "restore_destination"],
+      "default": "source"
+    },
+    "database_path": {
+      "type": "string",
+      "title": "Profilarr database path",
+      "minLength": 1,
+      "pattern": "^/",
+      "default": "/sources/profilarr/profilarr.db"
+    },
+    "repository_path": {
+      "type": "string",
+      "title": "Profilarr repository path",
+      "minLength": 1,
+      "pattern": "^/",
+      "default": "/sources/profilarr/db"
+    },
+    "restore_directory": {
+      "type": "string",
+      "title": "Isolated restore directory",
+      "minLength": 1,
+      "pattern": "^/"
+    }
+  }
+}

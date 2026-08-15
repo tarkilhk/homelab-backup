@@ -106,7 +106,7 @@ included in a broad image job, or a plugin directory exists.
 | Jellystat | `unprotected` | Playback/statistics history is excluded telemetry; desired runtime configuration is declared in Git, so no PostgreSQL target belongs in this program. |
 | Tautulli | `unprotected` | Playback/statistics history is excluded telemetry; the remaining convenience configuration does not justify a bespoke plugin in this program. |
 | Wrapperr | `stateless` | Generated presentation over other service data unless contrary evidence appears. |
-| Profilarr | `planned-plugin` | Exact v1.1.5 state spans the SQLite control plane and its profile Git repository. A locally buildable online plugin can combine SQLite's backup API with a clean, stable `git bundle --all`; dirty/in-progress repositories fail closed, and the unsafe native raw-copy backup is excluded. |
+| Profilarr | `plugin-local` | Exact v1.1.5 SQLite plus clean, stable all-ref Git backup and two fresh exact-image restore/boot drills pass locally under Plan 013. Dirty/in-progress repositories fail closed, and the unsafe native raw-copy backup is excluded. Production needs only the two documented narrow read-only mounts. |
 | Tracearr | `unprotected` | TimescaleDB/Redis contain excluded playback telemetry and queues; desired service configuration is declared in Git. |
 | Maloja/Multi-Scrobbler | `unprotected` | Scrobble history is excluded telemetry and Multi-Scrobbler's queue/cache is disposable; desired integration configuration is declared in Git. |
 | Transmission/Flood | `unprotected` | Torrent/session queues are explicitly excluded, and the remaining convenience UI settings are cheaply reconstructed from the Git-declared deployment; no bespoke plugin is warranted. |

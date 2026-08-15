@@ -66,6 +66,72 @@ def test_bazarr_target_persistence_enforces_mode_specific_required_fields(
         assert "required property" in response.json()["detail"]
 
 
+def test_profilarr_target_persistence_is_exact_and_mode_aware(
+    client: TestClient,
+) -> None:
+    configurations = (
+        (
+            "Profilarr source",
+            {
+                "mode": "source",
+                "database_path": "/sources/profilarr/profilarr.db",
+                "repository_path": "/sources/profilarr/db",
+            },
+        ),
+        (
+            "Profilarr restore destination",
+            {
+                "mode": "restore_destination",
+                "restore_directory": "/tmp/profilarr-drill/config",
+            },
+        ),
+    )
+    for name, config in configurations:
+        serialized = json.dumps(config, sort_keys=True)
+        response = client.post(
+            "/api/v1/targets/",
+            json={
+                "name": name,
+                "plugin_name": "profilarr",
+                "plugin_config_json": serialized,
+            },
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["plugin_name"] == "profilarr"
+        assert response.json()["plugin_config_json"] == serialized
+
+    invalid_configurations = (
+        {"mode": "source", "database_path": "/sources/profilarr/profilarr.db"},
+        {"mode": "restore_destination"},
+        {
+            "mode": "source",
+            "database_path": "",
+            "repository_path": "/sources/profilarr/db",
+        },
+        {
+            "mode": "restore_destination",
+            "restore_directory": "/tmp/profilarr-drill/config",
+            "database_path": "/sources/profilarr/profilarr.db",
+        },
+        {
+            "mode": "source",
+            "database_path": "/sources/profilarr/profilarr.db",
+            "repository_path": "/sources/profilarr/db",
+            "legacy_path": "/config",
+        },
+    )
+    for index, config in enumerate(invalid_configurations):
+        response = client.post(
+            "/api/v1/targets/",
+            json={
+                "name": f"Invalid Profilarr {index}",
+                "plugin_name": "profilarr",
+                "plugin_config_json": json.dumps(config),
+            },
+        )
+        assert response.status_code == 422
+
+
 def test_targets_test_endpoint(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

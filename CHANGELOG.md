@@ -32,6 +32,12 @@ All notable changes to Homelab Backup are recorded here. This project follows
   evidence, and RestoreService-staged create-only local restores verified by
   two exact-image boots and restarts. Media and subtitle payloads remain
   separate recovery prerequisites.
+- A version-pinned Profilarr 1.1.5 plugin that combines a live SQLite snapshot
+  with a stable, self-contained all-ref Git bundle, rejects unsettled repository
+  state, publishes a private strict composite artifact, and reconstructs all
+  authoritative application state through a create-only local restore. Radarr,
+  Sonarr, Git hosting, credentials, and production restore remain outside its
+  boundary.
 
 ### Changed
 

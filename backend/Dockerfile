@@ -15,6 +15,7 @@ ENV PATH="/usr/local/lib/postgresql/18/bin:${PATH}"
 # Install only the runtime libraries required by the version-pinned clients.
 RUN apt-get update && apt-get install -y \
     gcc \
+    git \
     libncurses6 \
     libpq5 \
     libssl3 \

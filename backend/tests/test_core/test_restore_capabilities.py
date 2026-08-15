@@ -13,6 +13,7 @@ def test_plugins_publish_honest_restore_capabilities() -> None:
         "homelab_backup": "partial",
         "mysql": "partial",
         "postgresql": "automatic",
+        "profilarr": "automatic",
         "vaultwarden": "automatic",
         "wordpress": "automatic",
         "invoiceninja": "partial",

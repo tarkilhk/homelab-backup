@@ -65,3 +65,13 @@ def test_backend_pins_database_clients_to_deployed_server_majors() -> None:
     assert "ln -s /usr/bin/mariadb-check /usr/local/bin/mysqlcheck" in contents
     assert "default-mysql-client" not in contents
     assert "apt-get install -y postgresql-client" not in contents
+
+
+def test_backend_image_installs_git_for_profilarr_bundles() -> None:
+    dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
+    contents = dockerfile.read_text(encoding="utf-8")
+
+    install_block = contents.split("RUN apt-get update && apt-get install -y", 1)[1].split(
+        "&& rm -rf /var/lib/apt/lists/*", 1
+    )[0]
+    assert "\n    git \\" in install_block

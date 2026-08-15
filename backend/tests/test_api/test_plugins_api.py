@@ -1,14 +1,59 @@
 from __future__ import annotations
 
 import pytest
+from fastapi.testclient import TestClient
 
 
-def test_plugins_test_endpoint(client, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_profilarr_discovery_exposes_flat_mode_aware_schema(client: TestClient) -> None:
+    plugins_response = client.get("/api/v1/plugins/")
+    assert plugins_response.status_code == 200
+    profilarr = next(item for item in plugins_response.json() if item["key"] == "profilarr")
+    assert profilarr == {
+        "key": "profilarr",
+        "name": "profilarr",
+        "version": "0.2.1",
+        "restore_capability": "automatic",
+    }
+
+    schema_response = client.get("/api/v1/plugins/profilarr/schema")
+    assert schema_response.status_code == 200
+    schema = schema_response.json()
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert schema["required"] == ["mode"]
+    assert set(schema["properties"]) == {
+        "mode",
+        "database_path",
+        "repository_path",
+        "restore_directory",
+    }
+    assert schema["properties"]["mode"] == {
+        "type": "string",
+        "title": "Mode",
+        "enum": ["source", "restore_destination"],
+        "default": "source",
+    }
+    assert schema["properties"]["database_path"]["default"] == ("/sources/profilarr/profilarr.db")
+    assert schema["properties"]["repository_path"]["default"] == ("/sources/profilarr/db")
+    assert "default" not in schema["properties"]["restore_directory"]
+    required_by_mode = {
+        branch["if"]["properties"]["mode"]["const"]: branch["then"]["required"]
+        for branch in schema["allOf"]
+    }
+    assert required_by_mode == {
+        "source": ["database_path", "repository_path"],
+        "restore_destination": ["restore_directory"],
+    }
+
+
+def test_plugins_test_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Validate /plugins/{key}/test returns ok true/false and handles errors/404s."""
+
     # Monkeypatch the endpoint-local get_plugin symbol
     class _DummyPlugin:
         def __init__(self, name: str) -> None:
             self.name = name
+
         async def test(self, cfg):  # type: ignore[no-untyped-def]
             return True
 
@@ -82,8 +127,8 @@ def test_plugins_test_endpoint(client, monkeypatch: pytest.MonkeyPatch) -> None:
     assert body["error"] == "Failed to connect to PostgreSQL database: connection refused"
 
     # unknown plugin -> 404
-    monkeypatch.setattr(plugins_api, "get_plugin", lambda key: (_ for _ in ()).throw(KeyError("nope")))
+    monkeypatch.setattr(
+        plugins_api, "get_plugin", lambda key: (_ for _ in ()).throw(KeyError("nope"))
+    )
     r = client.post("/api/v1/plugins/unknown/test", json={})
     assert r.status_code == 404
-
-

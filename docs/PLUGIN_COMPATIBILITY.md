@@ -21,6 +21,7 @@ carrying these versions forward by assumption.
 | MySQL | `mysql:8.4.0` and `mysql:8.4.0-oraclelinux8` | MySQL 8.4 connectivity and two validated logical dumps passed | Empty isolated database import and `mysqlcheck` passed; capability remains `partial` because MySQL DDL is non-transactional |
 | Pi-hole | `pihole/pihole:2026.07.2` | v6 SID authentication and two validated Teleporter exports passed | Isolated Teleporter import and post-import export proof passed |
 | PostgreSQL | `postgres:16` | PostgreSQL 16 connectivity and two validated custom-format archives passed | Isolated transactional clean restore passed |
+| Profilarr | `santiagosayshey/profilarr:v1.1.5` (drill pinned linux/amd64 manifest `sha256:4d37d6b2039697c842211d0879d4d6df19c1dcbd22a962ed67ba3de8f81dfdad`, source `21c8eaeb93241588323672866854275ff7dbed67`) | Two live SQLite snapshots plus self-contained all-ref Git bundles through narrow read-only sources, stable clean-repository fences, exact schema/migration/ref/inventory validation, private three-member artifacts, and bound sidecars passed locally in two clean exact-image drills | Two RestoreService-staged create-only restores reconstructed the database and every captured Git ref without source repository configuration; exact-image boots/restarts proved distinct A/B application state, so capability is `automatic` for all authoritative Profilarr application state |
 | Radarr | `ghcr.io/linuxserver/radarr:6.3.0.10514-ls313` | Connectivity and two validated native archives passed | Isolated upload, restart, and readiness passed |
 | SFTPGo | `drakkan/sftpgo:v2.7.5-alpine` (`9888a3d`; drill pinned OCI index `sha256:d1e2877600aba270ac395bf76fc7c8a2a0bb4ac83c3e6c180a0540f5d4c3efb2`) | Two live WAL-backed online SQLite snapshots through a read-only bind, complete schema-33 validation, transient-state scrubbing, private artifacts, valid sidecars, independent hashes, and semantic phase differences passed | Two fresh create-only restores and separate exact-image boots proved authentication, SQLite readiness, users/public keys, admins, groups, folders, shares, API keys, roles, and event metadata; capability remains `partial` because the plugin does not control destination lifecycle |
 | Sonarr | `ghcr.io/linuxserver/sonarr:4.0.19.2979-ls320` | Connectivity and two validated native archives passed | Isolated upload, restart, and readiness passed |
@@ -40,6 +41,7 @@ The authoritative declarations are currently under these `homelab-infra` paths:
 - `docker.compose/work/invoiceninja/invoiceninja.yaml`
 - `docker.compose/media/jelly_misc/jelly_misc.yaml`
 - `docker.compose/media/books/books.yaml`
+- `docker.compose/media/profilarr/profilarr.yaml`
 - `docker.compose/media/radarr_sonarr_lidarr/radarr_sonarr_lidarr.yaml`
 - `docker.compose/misc/sftpgo/sftpgo.yaml`
 - `docker.compose/misc/termix/termix.yaml`
@@ -128,3 +130,16 @@ host-control access and does not stop Bazarr. Production restore remains
 forbidden; restore is disabled unless
 `HOMELAB_BACKUP_ALLOW_ISOLATED_RESTORE=1` is deliberately set for a disposable
 local drill.
+
+The Profilarr plugin is locally verified and is not deployed. A later approved
+production activation needs only
+`/docker-apps/profilarr/config/profilarr.db` and
+`/docker-apps/profilarr/config/db` exposed as two narrow read-only sources under
+`/sources/profilarr`; it needs no Profilarr or Arr API key, Git credential,
+network access, Docker socket, downtime, or write access. The source repository
+must be clean, settled, self-contained, and on a symbolic branch. Dirty,
+untracked, shallow, partial, externally backed, or in-progress Git state is an
+actionable failed backup rather than a compatibility mode. The composite
+artifact contains the secret-bearing SQLite control plane and private Git
+history, so it requires the same protected storage as application credentials.
+Production restore remains forbidden.
