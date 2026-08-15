@@ -54,9 +54,9 @@ fallbacks, and versions other than the researched one. `backup()` accepts only
 `source`; `restore()` accepts only `restore_destination`.
 
 Using PostgreSQL 18 `psql -X`, a source must prove server major 18, configured
-database identity, exact locally-pinned vector and Hindsight 0.8.6 Alembic
-versions, no RLS on required tables, and the exact version-pinned schema object
-allowlist from the vendor migrations/table inventory cited in the research.
+database identity, pgvector `0.8.6`, Hindsight Alembic head
+`c7d1e9a4b3f2`, no RLS on required tables, and the exact version-pinned schema
+object allowlist derived from the pinned local migration and vendor inventory.
 That allowlist must include every persistent Hindsight table, `file_storage`,
 `webhooks`, `alembic_version`, and `bank_stats_cache`, and reject omissions or
 unexpected Hindsight-owned tables.

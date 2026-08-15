@@ -1,0 +1,36 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mode", "host", "database", "user", "password"],
+  "properties": {
+    "mode": {
+      "type": "string",
+      "title": "Mode",
+      "enum": ["source", "restore_destination"],
+      "default": "source"
+    },
+    "host": {
+      "type": "string",
+      "title": "Host"
+    },
+    "port": {
+      "type": "integer",
+      "title": "Port",
+      "default": 5432,
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "database": {
+      "type": "string",
+      "title": "Database"
+    },
+    "user": {
+      "type": "string",
+      "title": "User"
+    },
+    "password": {
+      "type": "string",
+      "title": "Password"
+    }
+  }
+}
