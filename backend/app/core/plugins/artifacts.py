@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import re
 import uuid
+import zipfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -34,6 +36,20 @@ class ValidatedBackupArtifact:
     path: Path
     size_bytes: int
     sha256: str
+
+
+def validate_zip_bytes(data: bytes, *, artifact_label: str) -> None:
+    """Reject empty, malformed, or CRC-damaged ZIP payloads before publication."""
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            members = archive.infolist()
+            if not members:
+                raise RuntimeError(f"{artifact_label} did not return a usable ZIP archive")
+            if archive.testzip() is not None:
+                raise RuntimeError(f"{artifact_label} did not return a valid ZIP archive")
+    except (zipfile.BadZipFile, OSError) as exc:
+        raise RuntimeError(f"{artifact_label} did not return a valid ZIP archive") from exc
 
 
 def _validate_component(value: str, *, field: str) -> str:

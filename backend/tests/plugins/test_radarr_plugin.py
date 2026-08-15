@@ -4,7 +4,7 @@ from typing import Any
 import httpx
 import pytest
 
-from app.core.plugins.base import BackupContext
+from app.core.plugins.base import BackupContext, RestoreContext
 from app.plugins.radarr import RadarrPlugin
 
 
@@ -31,11 +31,41 @@ async def test_validate_and_test(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_backup_writes_artifact(monkeypatch, tmp_path):
+async def test_backup_waits_for_its_command_and_writes_verified_artifact(
+    monkeypatch, tmp_path, make_servarr_zip
+):
+    requests: list[tuple[str, str]] = []
+    backup_lists = 0
+
     async def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/api/v3/system/backup") and request.method == "GET":
-            return httpx.Response(200, content=b"zipdata")
-        return httpx.Response(200, json={"status": "ok"})
+        nonlocal backup_lists
+        requests.append((request.method, request.url.path))
+        assert request.url.params.get("apikey") is None
+        assert request.headers["X-Api-Key"] == "token"
+        if request.method == "GET" and request.url.path == "/api/v3/system/backup":
+            backup_lists += 1
+            if backup_lists == 1:
+                return httpx.Response(200, json=[])
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "id": 12,
+                        "type": "manual",
+                        "path": "/backup/manual/radarr-test.zip",
+                        "time": "2026-08-15T00:00:00Z",
+                    }
+                ],
+            )
+        if request.method == "POST" and request.url.path == "/api/v3/command":
+            return httpx.Response(201, json={"id": 44, "status": "queued"})
+        if request.method == "GET" and request.url.path == "/api/v3/command/44":
+            return httpx.Response(
+                200, json={"id": 44, "status": "completed", "result": "successful"}
+            )
+        if request.method == "GET" and request.url.path == "/backup/manual/radarr-test.zip":
+            return httpx.Response(200, content=make_servarr_zip("radarr.db"))
+        return httpx.Response(404)
 
     transport = httpx.MockTransport(handler)
     orig_client = httpx.AsyncClient
@@ -58,3 +88,54 @@ async def test_backup_writes_artifact(monkeypatch, tmp_path):
     artifact_path = result.get("artifact_path")
     assert artifact_path and os.path.exists(artifact_path)
     assert artifact_path.endswith(".zip")
+    assert ("GET", "/api/v3/command/44") in requests
+
+
+@pytest.mark.asyncio
+async def test_restore_uploads_restarts_and_waits_for_new_process(
+    monkeypatch, tmp_path, make_servarr_zip
+):
+    artifact = tmp_path / "radarr-backup.zip"
+    artifact.write_bytes(make_servarr_zip("radarr.db"))
+    status_calls = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal status_calls
+        if request.method == "GET" and request.url.path == "/api/v3/system/status":
+            status_calls += 1
+            if status_calls == 1:
+                assert request.headers["X-Api-Key"] == "destination-key"
+                return httpx.Response(200, json={"version": "6.3.0", "startTime": "old"})
+            assert request.headers["X-Api-Key"] == "test-key"
+            return httpx.Response(200, json={"version": "6.3.0", "startTime": "new"})
+        if request.method == "POST" and request.url.path == "/api/v3/system/backup/restore/upload":
+            assert request.headers["X-Api-Key"] == "destination-key"
+            assert b"radarr-backup.zip" in request.content
+            return httpx.Response(200, json={"restartRequired": True})
+        if request.method == "POST" and request.url.path == "/api/v3/system/restart":
+            assert request.headers["X-Api-Key"] == "destination-key"
+            return httpx.Response(200, json={"restarting": True})
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    original_client = httpx.AsyncClient
+
+    def client(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        kwargs["transport"] = transport
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+
+    result = await RadarrPlugin(name="radarr").restore(
+        RestoreContext(
+            job_id="2",
+            source_target_id="1",
+            destination_target_id="2",
+            config={"base_url": "http://example.local", "api_key": "destination-key"},
+            artifact_path=str(artifact),
+        )
+    )
+
+    assert result["status"] == "success"
+    assert result["artifact_bytes"] == artifact.stat().st_size
+    assert status_calls >= 2

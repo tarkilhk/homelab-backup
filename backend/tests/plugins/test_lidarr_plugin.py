@@ -31,11 +31,26 @@ async def test_lidarr_validate_and_test(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_lidarr_backup_writes_artifact(monkeypatch, tmp_path):
+async def test_lidarr_backup_writes_artifact(monkeypatch, tmp_path, make_servarr_zip):
+    list_calls = 0
+
     async def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/api/v1/system/backup") and request.method == "GET":
-            return httpx.Response(200, content=b"zipdata")
-        return httpx.Response(200, json={"status": "ok"})
+        nonlocal list_calls
+        if request.method == "GET" and request.url.path == "/api/v1/system/backup":
+            list_calls += 1
+            if list_calls == 1:
+                return httpx.Response(200, json=[])
+            return httpx.Response(
+                200,
+                json=[{"id": 3, "type": "manual", "path": "/backup/manual/lidarr.zip"}],
+            )
+        if request.method == "POST" and request.url.path == "/api/v1/command":
+            return httpx.Response(201, json={"id": 5})
+        if request.method == "GET" and request.url.path == "/api/v1/command/5":
+            return httpx.Response(200, json={"status": "completed", "result": "successful"})
+        if request.method == "GET" and request.url.path == "/backup/manual/lidarr.zip":
+            return httpx.Response(200, content=make_servarr_zip("lidarr.db"))
+        return httpx.Response(404)
 
     transport = httpx.MockTransport(handler)
     orig_client = httpx.AsyncClient

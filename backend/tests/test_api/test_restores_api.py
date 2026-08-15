@@ -122,9 +122,11 @@ def test_restore_success(
         async def communicate(self):
             return b"", b""
 
+        async def wait(self):
+            return self.returncode
+
     async def fake_exec(*args, **kwargs):
-        # Verify psql command structure
-        assert args[0] == "psql", f"Expected psql, got {args[0]}"
+        assert args[0] == "pg_restore", f"Expected pg_restore, got {args[0]}"
         return DummyProcess()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
@@ -137,7 +139,7 @@ def test_restore_success(
         client,
         "Source Postgres",
         "postgresql",
-        {"host": "db.local", "user": "postgres", "password": "secret"},
+        {"host": "db.local", "user": "postgres", "password": "secret", "database": "source"},
     )
     source_tag_id = _get_tag_id_for_target(client, "Source Postgres")
     job = _create_job(db_session_override, source_tag_id, "Backup Source Postgres")
@@ -146,10 +148,15 @@ def test_restore_success(
         client,
         "Destination Postgres",
         "postgresql",
-        {"host": "db.other", "user": "postgres", "password": "secret"},
+        {
+            "host": "db.other",
+            "user": "postgres",
+            "password": "secret",
+            "database": "destination",
+        },
     )
 
-    artifact_path = tmp_path / "postgres-backup.sql"
+    artifact_path = tmp_path / "postgres-backup.dump"
     artifact_path.write_text("dummy backup data")
 
     source_target_run = _create_source_target_run(
@@ -183,7 +190,7 @@ def test_restore_success(
     assert data.get("display_tag_name") == dest_target.name
 
     # PostgreSQL plugin returns the original artifact path (doesn't copy it)
-    # because the restore actually executes via psql
+    # because the restore executes directly via pg_restore
     assert tr["artifact_path"] == str(artifact_path)
     assert tr["artifact_bytes"] == len("dummy backup data")
 
@@ -200,7 +207,7 @@ def test_restore_rejects_plugin_mismatch(
         client,
         "Source PiHole",
         "pihole",
-        {"base_url": "http://pihole.local", "login": "admin", "password": "pw"},
+        {"base_url": "http://pihole.local", "password": "pw"},
     )
     source_tag_id = _get_tag_id_for_target(client, "Source PiHole")
     job = _create_job(db_session_override, source_tag_id, "Backup PiHole")
@@ -292,8 +299,11 @@ def test_restore_from_file_path_only(
         async def communicate(self):
             return b"", b""
 
+        async def wait(self):
+            return self.returncode
+
     async def fake_exec(*args, **kwargs):
-        assert args[0] == "psql", f"Expected psql, got {args[0]}"
+        assert args[0] == "pg_restore", f"Expected pg_restore, got {args[0]}"
         return DummyProcess()
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
@@ -307,10 +317,15 @@ def test_restore_from_file_path_only(
         client,
         "Destination Postgres",
         "postgresql",
-        {"host": "db.other", "user": "postgres", "password": "secret"},
+        {
+            "host": "db.other",
+            "user": "postgres",
+            "password": "secret",
+            "database": "destination",
+        },
     )
 
-    artifact_path = tmp_path / "orphaned-backup.sql"
+    artifact_path = tmp_path / "orphaned-backup.dump"
     artifact_path.write_text("orphaned backup data")
     write_backup_sidecar(
         str(artifact_path),

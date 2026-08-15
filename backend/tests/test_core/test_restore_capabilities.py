@@ -6,16 +6,16 @@ from app.core.plugins.loader import get_plugin, list_plugins
 def test_plugins_publish_honest_restore_capabilities() -> None:
     expected = {
         "calcom": "automatic",
-        "mysql": "automatic",
+        "mysql": "partial",
         "postgresql": "automatic",
-        "vaultwarden": "manual",
-        "wordpress": "partial",
-        "invoiceninja": "manual",
-        "jellyfin": "manual",
-        "lidarr": "manual",
-        "pihole": "manual",
-        "radarr": "manual",
-        "sonarr": "manual",
+        "vaultwarden": "automatic",
+        "wordpress": "automatic",
+        "invoiceninja": "partial",
+        "jellyfin": "automatic",
+        "lidarr": "automatic",
+        "pihole": "automatic",
+        "radarr": "automatic",
+        "sonarr": "automatic",
     }
 
     listed = {item["key"]: item["restore_capability"] for item in list_plugins()}

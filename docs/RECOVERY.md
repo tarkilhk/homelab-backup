@@ -4,6 +4,9 @@ Homelab Backup is only trustworthy after both backup and restore paths have been
 tested for the services you depend on. Treat this guide as the minimum recovery
 contract, not as a substitute for periodic restore drills.
 
+See [PLUGIN_COMPATIBILITY.md](PLUGIN_COMPATIBILITY.md) for the exact homelab image
+mapping, isolated drill evidence, and current deployment prerequisites.
+
 ## Artifact contract
 
 Finalized artifacts use this layout:
@@ -26,17 +29,17 @@ files, partial files, and artifacts with missing or inconsistent sidecars.
 
 | Plugin | Capability | Meaning |
 | --- | --- | --- |
-| Cal.com | Automatic | Executes a PostgreSQL restore. |
-| MySQL | Automatic | Executes the SQL restore against the configured database. |
-| PostgreSQL | Automatic | Executes `psql` with `ON_ERROR_STOP` enabled. |
-| WordPress | Partial | Restores the database; site files remain a manual step. |
-| Invoice Ninja | Manual | Use the application import workflow. |
-| Jellyfin | Manual | Restore the exported data using Jellyfin's documented process. |
-| Lidarr | Manual | Upload/import the backup through Lidarr. |
-| Pi-hole | Manual | Import the Teleporter archive in Pi-hole. |
-| Radarr | Manual | Upload/import the backup through Radarr. |
-| Sonarr | Manual | Upload/import the backup through Sonarr. |
-| Vaultwarden | Manual | Stop the container, restore data, remove stale SQLite WAL files, then start and verify it. |
+| Cal.com | Automatic | Restores a validated PostgreSQL custom archive transactionally. |
+| MySQL | Partial | Imports only into an empty database and validates tables; MySQL DDL is non-transactional, so a failed import requires the destination to be reset before retry. |
+| PostgreSQL | Automatic | Restores a validated custom archive transactionally with cleanup and stop-on-error semantics. |
+| WordPress | Automatic | Replaces site files, imports the database, validates both, and rolls back on failure. The destination must be an isolated mounted WordPress root. |
+| Invoice Ninja | Partial | Queues the official company import. Invoice Ninja exposes no terminal import status, so application-level verification remains required. |
+| Jellyfin | Automatic | Stages a validated archive in Jellyfin's shared backup directory and invokes the official restore endpoint. Success requires an observed restart and readiness transition. |
+| Lidarr | Automatic | Uploads a validated archive, restarts Lidarr, and waits for a new ready process. |
+| Pi-hole | Automatic | Imports a validated Teleporter archive and proves the service can export again. |
+| Radarr | Automatic | Uploads a validated archive, restarts Radarr, and waits for a new ready process. |
+| Sonarr | Automatic | Uploads a validated archive, restarts Sonarr, and waits for a new ready process. |
+| Vaultwarden | Automatic | Stops the destination, restores a validated component manifest through an isolated helper, checks SQLite, proves Docker health or `/alive`, and rolls back before restart on failure. |
 
 The backend rejects automated restore requests for manual-only plugins. Copying an
 artifact into another directory is not reported as a successful restore.
@@ -88,9 +91,51 @@ and decide separately whether repository history should be rewritten.
   command (introduced in Vaultwarden 1.32.1). The generated SQLite snapshot is
   checked with `PRAGMA quick_check` before publication. Attachments and
   `config.json`, when present, are bundled with that snapshot.
-- Vaultwarden automated restore is disabled because overwriting a live SQLite
-  database or leaving a stale `db.sqlite3-wal` can corrupt the restored state.
-- PostgreSQL restores stop on the first SQL error; a zero exit status is required
-  before success is recorded.
-- Pi-hole v6 backup uses session-ID and CSRF headers and terminates the API session
-  after downloading the Teleporter archive. Pi-hole restoration remains manual.
+- Vaultwarden restore requires `data_path` to exactly match a writable Docker
+  mount. The backend needs Docker-socket access. A Docker healthcheck is preferred;
+  otherwise configure an unauthenticated `health_url` or allow the backend to
+  reach the container's auto-detected `/alive` endpoint. Restore commands are
+  bounded and the rollback artifact remains available through readiness checks.
+- MySQL restore is intentionally partial: use a new, empty, isolated database.
+  A failed non-transactional import may leave objects behind and must not be
+  retried until that destination is reset.
+- PostgreSQL and Cal.com restores use validated custom archives and stop on the
+  first error inside a transaction.
+- WordPress restore rejects roots, symlinks, paths overlapping `/backups`, and
+  artifacts stored below the destination. Files and database are rolled back when
+  any restore or validation step fails.
+- Pi-hole v6 backup uses SID authentication and validates Teleporter contents.
+- Jellyfin's server-generated source archives are outside Homelab Backup retention;
+  manage that shared directory with Jellyfin's own backup retention policy.
+
+## Locally verified component versions
+
+The following isolated drills were run with synthetic data and no published ports:
+
+- MySQL 8.4.0 and PostgreSQL 16
+- Pi-hole 2026.07.2
+- Jellyfin 10.11.11
+- Lidarr 3.1.0.4875, Radarr 6.3.0.10514, and Sonarr 4.0.19.2979
+- Vaultwarden 1.37.1
+- WordPress 7.0.2
+- Invoice Ninja 5.13.31
+
+Each completed drill includes a non-destructive connection test, two distinct
+validated backups with sidecars, and an isolated restore. Invoice Ninja remains
+partial even though the local import marker arrived, because its API does not
+provide a terminal status. Re-run drills after any component-version upgrade.
+
+Use `backend/scripts/plugin_drill.py` to repeat that contract. Provide source and
+destination plugin configurations as JSON files mounted from outside the
+repository; never commit them. The destination must be an isolated disposable
+service. The script independently recomputes artifact sizes and SHA-256 digests,
+validates both sidecars, and requires the declared restore outcome. For example:
+
+```bash
+cd backend
+.venv/bin/python scripts/plugin_drill.py postgresql \
+  --component-version 16 \
+  --target-slug postgresql-drill \
+  --source-config /run/secrets/postgresql-source.json \
+  --destination-config /run/secrets/postgresql-destination.json
+```

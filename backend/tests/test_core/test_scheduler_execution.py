@@ -9,7 +9,8 @@ from sqlalchemy.orm import sessionmaker
 from app.core.db import Base
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
 from app.core.plugins.sidecar import write_backup_sidecar
-from app.core.scheduler import scheduled_tick_with_session
+from app.core.scheduler import _perform_target_run, scheduled_tick_with_session
+from app.core.target_locks import get_target_operation_lock
 from app.domain.enums import RunStatus, TargetRunStatus
 from app.models import Job, Run, Tag, Target, TargetRun, TargetTag
 from app.services.jobs import _get_job_lock
@@ -133,6 +134,49 @@ def test_overlapping_schedule_persists_a_skipped_run(tmp_path: Path) -> None:
         assert runs[0].status == RunStatus.SKIPPED.value
         assert runs[0].finished_at is not None
         assert runs[0].message == "Skipped: previous run is still in progress"
+
+
+def test_target_overlap_is_recorded_as_skipped(
+    db_session,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    tag = Tag(display_name="target overlap")
+    db_session.add(tag)
+    db_session.flush()
+    job = Job(
+        tag_id=tag.id,
+        name="Target overlap",
+        schedule_cron="* * * * *",
+        enabled=True,
+    )
+    target = Target(
+        name="Busy target",
+        slug="busy-target",
+        plugin_name="artifact-test",
+        plugin_config_json="{}",
+    )
+    run = Run(status="running", operation="backup")
+    db_session.add_all([job, target, run])
+    db_session.commit()
+    plugin = _ArtifactPlugin(tmp_path / "busy-artifacts")
+    plugin.artifact_root.mkdir()
+    monkeypatch.setattr("app.core.scheduler.get_plugin", lambda _name: plugin)
+    lock = get_target_operation_lock(int(target.id))
+    assert lock.acquire(blocking=False)
+    try:
+        result = _perform_target_run(
+            db_session,
+            job,
+            run,
+            target_id=int(target.id),
+        )
+    finally:
+        lock.release()
+
+    assert result["status"] == TargetRunStatus.SKIPPED.value
+    attempt = db_session.query(TargetRun).one()
+    assert attempt.status == TargetRunStatus.SKIPPED.value
 
 
 def test_scheduled_job_with_no_targets_persists_a_failed_run(tmp_path: Path) -> None:

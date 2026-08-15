@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from typing import Generator
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
-from sqlalchemy.pool import StaticPool
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
-from app.main import app
 from app.core.db import Base, get_session
+from app.main import app
 
 
 class _DummyScheduler:
@@ -34,6 +35,7 @@ def db_session_override() -> Generator[Session, None, None]:
 
     # Ensure models are registered with Base before creating tables
     import app.models  # noqa: F401
+
     Base.metadata.create_all(bind=engine)
 
     db = TestingSessionLocal()
@@ -45,7 +47,9 @@ def db_session_override() -> Generator[Session, None, None]:
 
 
 @pytest.fixture
-def client(db_session_override: Session, monkeypatch: pytest.MonkeyPatch) -> Generator[TestClient, None, None]:
+def client(
+    db_session_override: Session, monkeypatch: pytest.MonkeyPatch
+) -> Generator[TestClient, None, None]:
     """FastAPI TestClient with DB and scheduler overrides."""
 
     def override_get_session() -> Generator[Session, None, None]:
@@ -60,15 +64,22 @@ def client(db_session_override: Session, monkeypatch: pytest.MonkeyPatch) -> Gen
     # Avoid touching real DB or scheduling during app startup in tests
     monkeypatch.setattr("app.main.init_db", lambda: None, raising=True)
     monkeypatch.setattr("app.main.bootstrap_db", lambda: None, raising=True)
-    monkeypatch.setattr("app.main.schedule_jobs_on_startup", lambda scheduler, db: None, raising=True)
+    monkeypatch.setattr(
+        "app.main.schedule_jobs_on_startup", lambda scheduler, db: None, raising=True
+    )
 
     # Stub scheduler to avoid starting real APScheduler in tests
     monkeypatch.setattr("app.main.get_scheduler", lambda: _DummyScheduler(), raising=True)
 
+    @asynccontextmanager
+    async def route_only_lifespan(_app):  # type: ignore[no-untyped-def]
+        yield
+
+    # Route tests have a shared synchronous DB fixture. Keep application startup
+    # isolated here; the real startup/shutdown contract has a dedicated test.
+    monkeypatch.setattr(app.router, "lifespan_context", route_only_lifespan)
+
     with TestClient(app) as test_client:
         yield test_client
 
-    # Cleanup overrides
     app.dependency_overrides.clear()
-
-

@@ -3,23 +3,29 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+import tempfile
 from typing import Any, Dict
 
-from app.core.plugins.artifacts import write_backup_bytes
+from app.core.plugins.artifacts import create_backup_artifact, evict_file_cache
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
-from app.core.plugins.restore_utils import copy_artifact_for_restore
+from app.core.subprocesses import run_process_with_timeout
 
 BACKUP_BASE_PATH = "/backups"
+MAX_ERROR_BYTES = 64 * 1024
+STREAM_CHUNK_BYTES = 1024 * 1024
+FILE_CACHE_FLUSH_BYTES = 8 * 1024 * 1024
+CONNECT_TIMEOUT_SECONDS = 30.0
+BACKUP_TIMEOUT_SECONDS = 3600.0
+RESTORE_TIMEOUT_SECONDS = 3600.0
 
 
 class MySQLPlugin(BackupPlugin):
-    restore_capability = "automatic"
-    """MySQL backup plugin executed via a temporary Docker container.
+    restore_capability = "partial"
+    """MySQL backup plugin using the pinned MySQL client binaries.
+
     Research notes:
-    - `mysqldump` is the standard utility to export a MySQL database.
-    - To avoid relying on host binaries, this plugin runs `mysqldump` inside the
-      official `mysql` container and uses `aiomysql` for connectivity tests.
+    - mysqldump is the standard utility to export a MySQL database.
+    - Connectivity tests use the same pinned client shipped for backup/restore.
     SQL dumps are stored under
     `/backups/<slug>/<date>/mysql-dump-<timestamp>.sql`.
     """
@@ -46,57 +52,64 @@ class MySQLPlugin(BackupPlugin):
         return True
 
     async def test(self, config: Dict[str, Any]) -> bool:
-        """Check database connectivity using aiomysql."""
+        """Check database connectivity using the shipped MySQL client."""
         if not await self.validate_config(config):
             raise ValueError(
                 "Invalid configuration: host, user, password, and database are required"
             )
-        host = str(config.get("host"))
+        host = str(config["host"])
         port = int(config.get("port", 3306))
-        user = str(config.get("user"))
-        password = str(config.get("password"))
-        database = str(config.get("database"))
-
+        user = str(config["user"])
+        password = str(config["password"])
+        database = str(config["database"])
+        env = os.environ.copy()
+        env["MYSQL_PWD"] = password
         try:
-            import aiomysql  # type: ignore
-        except Exception as exc:  # pragma: no cover - environment dependent
-            self._logger.warning("aiomysql_not_available | error=%s", exc)
-            raise RuntimeError(
-                "MySQL driver (aiomysql) is not available. Please install it."
-            ) from exc
-
-        conn = None
-        try:
-            conn = await aiomysql.connect(
-                host=host,
-                port=port,
-                user=user,
-                password=password,
-                db=database,
+            process = await asyncio.create_subprocess_exec(
+                "mysql",
+                "-h",
+                host,
+                "-P",
+                str(port),
+                "-u",
+                user,
+                "--database",
+                database,
+                "--batch",
+                "--skip-column-names",
+                "-e",
+                "SELECT 1",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
             )
-            async with conn.cursor() as cur:
-                await cur.execute("SELECT 1")
-                row = await cur.fetchone()
-            return bool(row) and row[0] == 1
-        except Exception as exc:
+            stdout, stderr = await run_process_with_timeout(
+                process,
+                process.communicate(),
+                operation="mysql connection test",
+                timeout_seconds=CONNECT_TIMEOUT_SECONDS,
+            )
+        except FileNotFoundError as exc:
+            raise FileNotFoundError("mysql client command not found") from exc
+        except OSError as exc:
             self._logger.warning("mysql_test_failed | host=%s error=%s", host, exc)
             raise ConnectionError(f"Failed to connect to MySQL database: {exc}") from exc
-        finally:
-            if conn is not None:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+        if process.returncode != 0:
+            detail = stderr[:MAX_ERROR_BYTES].decode(errors="ignore").strip()
+            raise ConnectionError(f"Failed to connect to MySQL database: {detail}")
+        if stdout.decode(errors="ignore").strip() != "1":
+            raise ConnectionError("Failed to validate MySQL connection")
+        return True
 
     async def backup(self, context: BackupContext) -> Dict[str, Any]:
         cfg = getattr(context, "config", {}) or {}
-        host = str(cfg.get("host"))
-        port = int(cfg.get("port", 3306))
-        user = str(cfg.get("user"))
-        password = str(cfg.get("password"))
-        database = str(cfg.get("database"))
-        if not host or not user or not password or not database:
+        if not await self.validate_config(cfg):
             raise ValueError("mysql config requires host, user, password, database")
+        host = str(cfg["host"])
+        port = int(cfg.get("port", 3306))
+        user = str(cfg["user"])
+        password = str(cfg["password"])
+        database = str(cfg["database"])
 
         meta = context.metadata or {}
         target_slug = meta.get("target_slug") or str(context.target_id)
@@ -114,6 +127,15 @@ class MySQLPlugin(BackupPlugin):
             str(port),
             "-u",
             user,
+            "--single-transaction",
+            "--quick",
+            "--skip-lock-tables",
+            "--routines",
+            "--events",
+            "--triggers",
+            "--hex-blob",
+            "--no-tablespaces",
+            "--set-gtid-purged=OFF",
             database,
         ]
 
@@ -126,35 +148,75 @@ class MySQLPlugin(BackupPlugin):
             "<pending>",
         )
 
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
-            stdout_data, stderr_data = await proc.communicate()
-        except OSError as exc:
-            self._logger.error(
-                "mysqldump_exec_error | job_id=%s target_id=%s error=%s",
-                context.job_id,
-                context.target_id,
-                exc,
-            )
-            raise
-        if proc.returncode != 0:
-            err = stderr_data.decode(errors="ignore").strip()
-            raise RuntimeError(f"mysqldump failed: {err}")
-
-        artifact_path = write_backup_bytes(
+        with create_backup_artifact(
             self,
             context,
-            stdout_data,
             prefix="mysql-dump",
             suffix=".sql",
             backup_root=BACKUP_BASE_PATH,
-        )
-        return {"artifact_path": artifact_path}
+        ) as artifact:
+            try:
+                with (
+                    artifact.temporary_path.open("wb") as artifact_file,
+                    tempfile.TemporaryFile(mode="w+b") as error_file,
+                ):
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=error_file,
+                        env=env,
+                    )
+                    if proc.stdout is None:
+                        raise RuntimeError("mysqldump stdout pipe was not created")
+                    stdout = proc.stdout
+
+                    async def stream_dump() -> int:
+                        eviction_offset = 0
+                        pending_eviction_bytes = 0
+                        while chunk := await stdout.read(STREAM_CHUNK_BYTES):
+                            artifact_file.write(chunk)
+                            pending_eviction_bytes += len(chunk)
+                            if pending_eviction_bytes >= FILE_CACHE_FLUSH_BYTES:
+                                artifact_file.flush()
+                                os.fsync(artifact_file.fileno())
+                                evict_file_cache(
+                                    artifact_file.fileno(),
+                                    eviction_offset,
+                                    pending_eviction_bytes,
+                                )
+                                eviction_offset += pending_eviction_bytes
+                                pending_eviction_bytes = 0
+                        artifact_file.flush()
+                        os.fsync(artifact_file.fileno())
+                        evict_file_cache(
+                            artifact_file.fileno(), eviction_offset, pending_eviction_bytes
+                        )
+                        return await proc.wait()
+
+                    returncode = await run_process_with_timeout(
+                        proc,
+                        stream_dump(),
+                        operation="mysqldump backup",
+                        timeout_seconds=BACKUP_TIMEOUT_SECONDS,
+                    )
+                    error_file.seek(0)
+                    stderr_data = error_file.read(MAX_ERROR_BYTES + 1)
+            except OSError as exc:
+                self._logger.error(
+                    "mysqldump_exec_error | job_id=%s target_id=%s error=%s",
+                    context.job_id,
+                    context.target_id,
+                    exc,
+                )
+                raise
+            if returncode != 0:
+                truncated = len(stderr_data) > MAX_ERROR_BYTES
+                err = stderr_data[:MAX_ERROR_BYTES].decode(errors="ignore").strip()
+                if truncated:
+                    err = f"{err} [truncated]"
+                raise RuntimeError(f"mysqldump failed: {err}")
+
+        return {"artifact_path": str(artifact.final_path)}
 
     async def restore(self, context: RestoreContext) -> Dict[str, Any]:
         """Restore a MySQL database from a SQL dump file using mysql command.
@@ -163,14 +225,13 @@ class MySQLPlugin(BackupPlugin):
         Uses the same pattern as PostgreSQL: direct command execution with env vars.
         """
         cfg = context.config or {}
-        host = str(cfg.get("host"))
-        port = int(cfg.get("port", 3306))
-        user = str(cfg.get("user"))
-        password = str(cfg.get("password"))
-        database = str(cfg.get("database"))
-
-        if not host or not user or not password or not database:
+        if not await self.validate_config(cfg):
             raise ValueError("mysql config requires host, user, password, database")
+        host = str(cfg["host"])
+        port = int(cfg.get("port", 3306))
+        user = str(cfg["user"])
+        password = str(cfg["password"])
+        database = str(cfg["database"])
 
         artifact_path = context.artifact_path
         if not artifact_path or not os.path.exists(artifact_path):
@@ -191,6 +252,52 @@ class MySQLPlugin(BackupPlugin):
         env = os.environ.copy()
         env["MYSQL_PWD"] = password
 
+        preflight = await asyncio.create_subprocess_exec(
+            "mysql",
+            "-h",
+            host,
+            "-P",
+            str(port),
+            "-u",
+            user,
+            "--database",
+            database,
+            "--batch",
+            "--skip-column-names",
+            "-e",
+            (
+                "SELECT "
+                "(SELECT COUNT(*) FROM information_schema.tables "
+                "WHERE table_schema = DATABASE()) + "
+                "(SELECT COUNT(*) FROM information_schema.routines "
+                "WHERE routine_schema = DATABASE()) + "
+                "(SELECT COUNT(*) FROM information_schema.triggers "
+                "WHERE trigger_schema = DATABASE()) + "
+                "(SELECT COUNT(*) FROM information_schema.events "
+                "WHERE event_schema = DATABASE())"
+            ),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        preflight_stdout, preflight_stderr = await run_process_with_timeout(
+            preflight,
+            preflight.communicate(),
+            operation="mysql restore preflight",
+            timeout_seconds=CONNECT_TIMEOUT_SECONDS,
+        )
+        if preflight.returncode != 0:
+            detail = preflight_stderr[:MAX_ERROR_BYTES].decode(errors="ignore").strip()
+            raise RuntimeError(f"mysql restore preflight failed: {detail}")
+        try:
+            existing_objects = int(preflight_stdout.decode().strip())
+        except ValueError as exc:
+            raise RuntimeError("mysql restore preflight returned an invalid table count") from exc
+        if existing_objects:
+            raise ValueError(
+                "MySQL restore destination database must be empty to avoid a partial overwrite"
+            )
+
         cmd = [
             "mysql",
             "-h",
@@ -202,19 +309,26 @@ class MySQLPlugin(BackupPlugin):
             database,
         ]
 
-        # Read the SQL dump and pipe it to mysql via stdin
-        with open(artifact_path, "rb") as f:
-            sql_content = f.read()
-
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
-            stdout_data, stderr_data = await proc.communicate(input=sql_content)
+            with (
+                open(artifact_path, "rb") as sql_file,
+                tempfile.TemporaryFile(mode="w+b") as error_file,
+            ):
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdin=sql_file,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=error_file,
+                    env=env,
+                )
+                returncode = await run_process_with_timeout(
+                    proc,
+                    proc.wait(),
+                    operation="mysql restore",
+                    timeout_seconds=RESTORE_TIMEOUT_SECONDS,
+                )
+                error_file.seek(0)
+                stderr_data = error_file.read(MAX_ERROR_BYTES + 1)
         except OSError as exc:
             self._logger.error(
                 "mysql_restore_exec_error | job_id=%s source=%s dest=%s error=%s",
@@ -225,9 +339,40 @@ class MySQLPlugin(BackupPlugin):
             )
             raise
 
-        if proc.returncode != 0:
-            err = stderr_data.decode(errors="ignore").strip()
-            raise RuntimeError(f"mysql restore failed: {err}")
+        if returncode != 0:
+            truncated = len(stderr_data) > MAX_ERROR_BYTES
+            err = stderr_data[:MAX_ERROR_BYTES].decode(errors="ignore").strip()
+            if truncated:
+                err = f"{err} [truncated]"
+            raise RuntimeError(
+                f"mysql restore failed: {err}. The destination may contain partial data and "
+                "must be reset before retrying"
+            )
+
+        validator = await asyncio.create_subprocess_exec(
+            "mysqlcheck",
+            "-h",
+            host,
+            "-P",
+            str(port),
+            "-u",
+            user,
+            "--check",
+            "--databases",
+            database,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+            env=env,
+        )
+        _, validation_error = await run_process_with_timeout(
+            validator,
+            validator.communicate(),
+            operation="mysql restore validation",
+            timeout_seconds=CONNECT_TIMEOUT_SECONDS,
+        )
+        if validator.returncode != 0:
+            detail = validation_error[:MAX_ERROR_BYTES].decode(errors="ignore").strip()
+            raise RuntimeError(f"mysql restore validation failed: {detail}")
 
         artifact_bytes = os.path.getsize(artifact_path)
 

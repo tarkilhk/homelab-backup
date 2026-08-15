@@ -98,6 +98,25 @@ jobs:
       - name: Build backend image
         run: docker build --tag homelab-backup-backend-health-test ./backend
 
+      - name: Verify plugin runtime tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          image=homelab-backup-backend-health-test
+          docker run --rm --entrypoint mysql "${image}" --version | grep '8.4.0'
+          docker run --rm --entrypoint mysqldump \
+            "${image}" --version | grep '8.4.0'
+          docker run --rm --entrypoint mysqlcheck \
+            "${image}" --version
+          docker run --rm --entrypoint pg_dump \
+            "${image}" --version | grep 'PostgreSQL) 16.'
+          docker run --rm --entrypoint pg_restore \
+            "${image}" --version | grep 'PostgreSQL) 16.'
+          docker run --rm --entrypoint wp \
+            "${image}" cli version | grep 'WP-CLI 2.12.0'
+          docker run --rm --entrypoint php "${image}" -r \
+            'exit(extension_loaded("mysqli") ? 0 : 1);'
+
       - name: Verify declared health check
         shell: bash
         run: |

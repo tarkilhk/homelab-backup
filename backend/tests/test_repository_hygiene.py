@@ -52,3 +52,16 @@ def test_repository_does_not_track_runtime_databases() -> None:
     assert tracked_runtime_databases == [], (
         "Runtime database or backup files are tracked by Git: " f"{tracked_runtime_databases}"
     )
+
+
+def test_backend_pins_database_clients_to_deployed_server_majors() -> None:
+    dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
+    contents = dockerfile.read_text(encoding="utf-8")
+
+    assert "FROM mysql:8.4.0 AS mysql-client" in contents
+    assert "FROM postgres:16-bookworm AS postgres-client" in contents
+    assert "FROM wordpress:cli-2.12.0-php8.2 AS wordpress-cli" in contents
+    assert "mariadb-client-core" in contents
+    assert "ln -s /usr/bin/mariadb-check /usr/local/bin/mysqlcheck" in contents
+    assert "default-mysql-client" not in contents
+    assert "apt-get install -y postgresql-client" not in contents

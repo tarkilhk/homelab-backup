@@ -8,403 +8,126 @@ from app.plugins.calcom import CalcomPlugin
 
 
 class DummyProcess:
-    def __init__(self, returncode=0, stdout=b"", stderr=b""):
+    def __init__(self, returncode=0, stdout=b"", stderr=b"", stdout_stream=None):
         self.returncode = returncode
         self._stdout = stdout
         self._stderr = stderr
+        self.stdout = stdout_stream
 
     async def communicate(self):
         return self._stdout, self._stderr
 
+    async def wait(self):
+        return self.returncode
 
-@pytest.mark.asyncio
-async def test_test_success(monkeypatch):
-    async def fake_exec(*args, **kwargs):
-        assert args[0] == "psql"
-        assert "--set" in args and "ON_ERROR_STOP=on" in args
-        assert "-c" in args and "SELECT 1" in args
-        return DummyProcess(returncode=0, stdout=b"1\n", stderr=b"")
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+class DummyStream:
+    def __init__(self, *chunks):
+        self.chunks = list(chunks)
 
-    plugin = CalcomPlugin(name="calcom")
-    ok = await plugin.test({"database_url": "postgresql://user:pass@host/db"})
-    assert ok is True
+    async def read(self, size):
+        assert 0 < size <= 1024 * 1024
+        return self.chunks.pop(0) if self.chunks else b""
 
 
 @pytest.mark.asyncio
-async def test_test_uses_direct_url_when_provided(monkeypatch):
+async def test_test_uses_direct_url_without_exposing_credentials_in_argv(monkeypatch):
+    monkeypatch.setenv("PGPASSWORD", "ambient-secret")
+    monkeypatch.setenv("PGSERVICE", "ambient-service")
+
     async def fake_exec(*args, **kwargs):
-        assert args[1] == "postgresql://direct:pw@db/calcom"
-        return DummyProcess(returncode=0, stdout=b"1\n", stderr=b"")
+        assert args == (
+            "psql",
+            "-X",
+            "--set",
+            "ON_ERROR_STOP=on",
+            "-tA",
+            "-c",
+            "SELECT 1",
+        )
+        assert kwargs["env"]["PGHOST"] == "directdb"
+        assert kwargs["env"]["PGUSER"] == "direct"
+        assert kwargs["env"]["PGPASSWORD"] == "secret value"
+        assert kwargs["env"]["PGDATABASE"] == "calcom"
+        assert "PGSERVICE" not in kwargs["env"]
+        assert "postgresql://" not in " ".join(args)
+        return DummyProcess(returncode=0, stdout=b"1\n")
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
 
-    plugin = CalcomPlugin(name="calcom")
-    ok = await plugin.test(
+    assert await CalcomPlugin("calcom").test(
         {
-            "database_url": "postgresql://pooled:pw@db-pool/calcom",
-            "database_direct_url": "postgresql://direct:pw@db/calcom",
+            "database_url": "postgresql://pooled:pw@pool/calcom",
+            "database_direct_url": "postgresql://direct:secret%20value@directdb/calcom",
         }
     )
-    assert ok is True
 
 
 @pytest.mark.asyncio
-async def test_test_raises_connection_error(monkeypatch):
+async def test_backup_creates_and_validates_custom_archive(tmp_path, monkeypatch):
+    calls: list[str] = []
+
     async def fake_exec(*args, **kwargs):
-        return DummyProcess(returncode=2, stdout=b"", stderr=b"authentication failed")
+        calls.append(args[0])
+        if args[0] == "pg_dump":
+            assert "--format=custom" in args
+            assert "--file" not in args
+            assert kwargs["stdout"] == asyncio.subprocess.PIPE
+            return DummyProcess(returncode=0, stdout_stream=DummyStream(b"PGDMP fixture"))
+        assert args[0] == "pg_restore"
+        assert "--list" in args
+        return DummyProcess(returncode=0)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    plugin = CalcomPlugin("calcom", base_dir=str(tmp_path))
 
-    plugin = CalcomPlugin(name="calcom")
-    with pytest.raises(ConnectionError, match="authentication failed"):
-        await plugin.test({"database_url": "postgresql://user:pass@host/db"})
-
-
-@pytest.mark.asyncio
-async def test_backup_writes_artifact(tmp_path, monkeypatch):
-    async def fake_exec(*args, **kwargs):
-        assert args[0] == "pg_dump"
-        assert "--no-owner" in args
-        assert "--no-privileges" in args
-        return DummyProcess(returncode=0, stdout=b"dump", stderr=b"")
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-
-    plugin = CalcomPlugin(name="calcom", base_dir=str(tmp_path))
-    ctx = BackupContext(
-        job_id="1",
-        target_id="1",
-        config={"database_url": "postgresql://user:pass@host/db"},
-        metadata={"target_slug": "calcom"},
+    result = await plugin.backup(
+        BackupContext(
+            job_id="1",
+            target_id="1",
+            config={"database_url": "postgresql://user:pw@db/calcom"},
+            metadata={"target_slug": "calcom"},
+        )
     )
-    result = await plugin.backup(ctx)
-    artifact = result.get("artifact_path")
-    assert artifact
-    p = Path(artifact)
-    assert p.exists()
-    assert p.read_bytes() == b"dump"
+
+    artifact = Path(result["artifact_path"])
+    assert artifact.suffix == ".dump"
+    assert artifact.read_bytes() == b"PGDMP fixture"
+    assert Path(f"{artifact}.meta.json").is_file()
+    assert calls == ["pg_dump", "pg_restore"]
 
 
 @pytest.mark.asyncio
-async def test_restore_sets_on_error_stop(tmp_path, monkeypatch):
-    artifact = tmp_path / "calcom-db-20250101T120000.sql"
-    artifact.write_text("SELECT 1;")
+async def test_restore_is_transactional_and_stops_on_error(tmp_path, monkeypatch):
+    artifact = tmp_path / "calcom-db.dump"
+    artifact.write_bytes(b"PGDMP fixture")
 
     async def fake_exec(*args, **kwargs):
-        assert args[0] == "psql"
-        assert "--set" in args and "ON_ERROR_STOP=on" in args
-        assert "-f" in args and str(artifact) in args
-        return DummyProcess(returncode=0, stdout=b"", stderr=b"")
+        assert args[0] == "pg_restore"
+        for option in (
+            "--exit-on-error",
+            "--single-transaction",
+            "--clean",
+            "--if-exists",
+            "--no-owner",
+            "--no-privileges",
+        ):
+            assert option in args
+        assert args[-1] == str(artifact)
+        assert kwargs["env"]["PGDATABASE"] == "calcom_restore"
+        return DummyProcess(returncode=0)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    plugin = CalcomPlugin(name="calcom", base_dir=str(tmp_path))
-    ctx = RestoreContext(
-        job_id="1",
-        source_target_id="1",
-        destination_target_id="2",
-        config={"database_url": "postgresql://user:pass@host/db"},
-        artifact_path=str(artifact),
-        metadata={"target_slug": "calcom"},
+
+    result = await CalcomPlugin("calcom").restore(
+        RestoreContext(
+            job_id="2",
+            source_target_id="1",
+            destination_target_id="2",
+            config={"database_url": "postgresql://user:pw@db/calcom_restore"},
+            artifact_path=str(artifact),
+        )
     )
-    result = await plugin.restore(ctx)
+
     assert result["status"] == "success"
-    assert result["artifact_path"] == str(artifact)
-    assert result["artifact_bytes"] == len("SELECT 1;")
-
-
-@pytest.mark.asyncio
-async def test_restore_retries_without_unsupported_settings(tmp_path, monkeypatch):
-    artifact = tmp_path / "calcom-db-20250101T120000.sql"
-    artifact.write_text(
-        "SET transaction_timeout = 0;\n"
-        "SET search_path = public;\n"
-        "SELECT 1;\n"
-    )
-
-    seen_paths: list[str] = []
-
-    async def fake_exec(*args, **kwargs):
-        assert args[0] == "psql"
-        assert "-f" in args
-        sql_path = str(args[args.index("-f") + 1])
-        seen_paths.append(sql_path)
-
-        if len(seen_paths) == 1:
-            assert sql_path == str(artifact)
-            return DummyProcess(
-                returncode=1,
-                stdout=b"",
-                stderr=(
-                    b'psql:/backups/calcom.sql:13: ERROR:  '
-                    b'unrecognized configuration parameter "transaction_timeout"'
-                ),
-            )
-
-        # Retry should use a sanitized temporary SQL file.
-        assert sql_path != str(artifact)
-        sql = Path(sql_path).read_text()
-        assert "transaction_timeout" not in sql
-        assert "SET search_path = public;" in sql
-        return DummyProcess(returncode=0, stdout=b"", stderr=b"")
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    plugin = CalcomPlugin(name="calcom", base_dir=str(tmp_path))
-    ctx = RestoreContext(
-        job_id="1",
-        source_target_id="1",
-        destination_target_id="2",
-        config={"database_url": "postgresql://user:pass@host/db"},
-        artifact_path=str(artifact),
-        metadata={"target_slug": "calcom"},
-    )
-
-    result = await plugin.restore(ctx)
-    assert result["status"] == "success"
-    assert seen_paths[0] == str(artifact)
-    assert len(seen_paths) == 2
-    assert not Path(seen_paths[1]).exists()
-
-
-@pytest.mark.asyncio
-async def test_restore_retries_after_schema_reset_when_objects_exist(tmp_path, monkeypatch):
-    artifact = tmp_path / "calcom-db-20250101T120000.sql"
-    artifact.write_text("SELECT 1;\n")
-
-    calls: list[tuple[str, ...]] = []
-
-    async def fake_exec(*args, **kwargs):
-        assert args[0] == "psql"
-        calls.append(tuple(str(a) for a in args))
-
-        # First restore attempt fails on existing object.
-        if "-f" in args and len([c for c in calls if "-f" in c]) == 1:
-            return DummyProcess(
-                returncode=1,
-                stdout=b"",
-                stderr=b'psql:/tmp/in.sql:28: ERROR:  type "AccessScope" already exists',
-            )
-
-        # Schema reset command should run next.
-        if "-c" in args:
-            sql_cmd = str(args[args.index("-c") + 1])
-            assert "DROP SCHEMA IF EXISTS public CASCADE" in sql_cmd
-            assert "CREATE SCHEMA public" in sql_cmd
-            return DummyProcess(returncode=0, stdout=b"", stderr=b"")
-
-        # Final restore attempt should succeed.
-        if "-f" in args:
-            return DummyProcess(returncode=0, stdout=b"", stderr=b"")
-
-        raise AssertionError(f"unexpected command: {args}")
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    plugin = CalcomPlugin(name="calcom", base_dir=str(tmp_path))
-    ctx = RestoreContext(
-        job_id="1",
-        source_target_id="1",
-        destination_target_id="2",
-        config={"database_url": "postgresql://user:pass@host/db"},
-        artifact_path=str(artifact),
-        metadata={"target_slug": "calcom"},
-    )
-
-    result = await plugin.restore(ctx)
-    assert result["status"] == "success"
-    # restore -> schema reset -> restore
-    assert len(calls) == 3
-
-
-@pytest.mark.asyncio
-async def test_restore_retries_after_schema_reset_on_drop_dependency_error(tmp_path, monkeypatch):
-    artifact = tmp_path / "calcom-db-20250101T120000.sql"
-    artifact.write_text("SELECT 1;\n")
-
-    calls: list[tuple[str, ...]] = []
-
-    async def fake_exec(*args, **kwargs):
-        assert args[0] == "psql"
-        calls.append(tuple(str(a) for a in args))
-
-        # First restore attempt fails with dependency/drop conflict.
-        if "-f" in args and len([c for c in calls if "-f" in c]) == 1:
-            return DummyProcess(
-                returncode=1,
-                stdout=b"",
-                stderr=(
-                    b"ERROR:  cannot drop constraint users_pkey on table public.users "
-                    b"because other objects depend on it\n"
-                    b"HINT:  Use DROP ... CASCADE to drop the dependent objects too."
-                ),
-            )
-
-        # Schema reset command should run next.
-        if "-c" in args:
-            sql_cmd = str(args[args.index("-c") + 1])
-            assert "DROP SCHEMA IF EXISTS public CASCADE" in sql_cmd
-            assert "CREATE SCHEMA public" in sql_cmd
-            return DummyProcess(returncode=0, stdout=b"", stderr=b"")
-
-        # Final restore attempt should succeed.
-        if "-f" in args:
-            return DummyProcess(returncode=0, stdout=b"", stderr=b"")
-
-        raise AssertionError(f"unexpected command: {args}")
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    plugin = CalcomPlugin(name="calcom", base_dir=str(tmp_path))
-    ctx = RestoreContext(
-        job_id="1",
-        source_target_id="1",
-        destination_target_id="2",
-        config={"database_url": "postgresql://user:pass@host/db"},
-        artifact_path=str(artifact),
-        metadata={"target_slug": "calcom"},
-    )
-
-    result = await plugin.restore(ctx)
-    assert result["status"] == "success"
-    # restore -> schema reset -> restore
-    assert len(calls) == 3
-
-
-@pytest.mark.asyncio
-async def test_restore_grants_permissions_to_explicit_role_across_dump_schemas(tmp_path, monkeypatch):
-    artifact = tmp_path / "calcom-db-20250101T120000.sql"
-    artifact.write_text(
-        "CREATE TABLE public.users (id int);\n"
-        'CREATE TABLE "workspace"."member" (id int);\n'
-        'CREATE INDEX idx_booking_id ON public."Booking" ("id");\n'
-        'SELECT "Booking"."id" FROM public."Booking";\n'
-        "SELECT 1;\n"
-    )
-
-    calls: list[tuple[str, ...]] = []
-
-    async def fake_exec(*args, **kwargs):
-        assert args[0] == "psql"
-        calls.append(tuple(str(a) for a in args))
-
-        if "-f" in args:
-            return DummyProcess(returncode=0, stdout=b"", stderr=b"")
-
-        if "-c" in args:
-            sql_cmd = str(args[args.index("-c") + 1])
-            assert 'TO "calcom_app"' in sql_cmd
-            assert 'GRANT USAGE, CREATE ON SCHEMA "public"' in sql_cmd
-            assert 'GRANT USAGE, CREATE ON SCHEMA "workspace"' in sql_cmd
-            assert 'SCHEMA "Booking"' not in sql_cmd
-            assert 'ALTER DEFAULT PRIVILEGES IN SCHEMA "public"' in sql_cmd
-            assert 'ALTER DEFAULT PRIVILEGES IN SCHEMA "workspace"' in sql_cmd
-            return DummyProcess(returncode=0, stdout=b"", stderr=b"")
-
-        raise AssertionError(f"unexpected command: {args}")
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    plugin = CalcomPlugin(name="calcom", base_dir=str(tmp_path))
-    ctx = RestoreContext(
-        job_id="1",
-        source_target_id="1",
-        destination_target_id="2",
-        config={
-            "database_url": "postgresql://appuser:pass@appdb/calcom",
-            "database_direct_url": "postgresql://admin:pass@directdb/calcom",
-            "restore_grant_role": "calcom_app",
-        },
-        artifact_path=str(artifact),
-        metadata={"target_slug": "calcom"},
-    )
-
-    result = await plugin.restore(ctx)
-    assert result["status"] == "success"
-    # restore + grants
-    assert len(calls) == 2
-
-
-@pytest.mark.asyncio
-async def test_restore_does_not_grant_when_role_not_configured(tmp_path, monkeypatch):
-    artifact = tmp_path / "calcom-db-20250101T120000.sql"
-    artifact.write_text("SELECT 1;\n")
-
-    calls: list[tuple[str, ...]] = []
-
-    async def fake_exec(*args, **kwargs):
-        assert args[0] == "psql"
-        calls.append(tuple(str(a) for a in args))
-        return DummyProcess(returncode=0, stdout=b"", stderr=b"")
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    plugin = CalcomPlugin(name="calcom", base_dir=str(tmp_path))
-    ctx = RestoreContext(
-        job_id="1",
-        source_target_id="1",
-        destination_target_id="2",
-        config={
-            "database_url": "postgresql://appuser:pass@appdb/calcom",
-            "database_direct_url": "postgresql://admin:pass@directdb/calcom",
-        },
-        artifact_path=str(artifact),
-        metadata={"target_slug": "calcom"},
-    )
-
-    result = await plugin.restore(ctx)
-    assert result["status"] == "success"
-    # only restore command (no grant command)
-    assert len(calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_restore_grant_works_after_sanitized_retry(tmp_path, monkeypatch):
-    artifact = tmp_path / "calcom-db-20250101T120000.sql"
-    artifact.write_text(
-        "SET transaction_timeout = 0;\n"
-        "CREATE TABLE public.users (id int);\n"
-    )
-
-    calls: list[tuple[str, ...]] = []
-
-    async def fake_exec(*args, **kwargs):
-        assert args[0] == "psql"
-        calls.append(tuple(str(a) for a in args))
-
-        if "-f" in args:
-            # First restore call fails for unsupported setting, second succeeds.
-            if len([c for c in calls if "-f" in c]) == 1:
-                return DummyProcess(
-                    returncode=1,
-                    stdout=b"",
-                    stderr=(
-                        b'psql:/tmp/in.sql:13: ERROR:  '
-                        b'unrecognized configuration parameter "transaction_timeout"'
-                    ),
-                )
-            return DummyProcess(returncode=0, stdout=b"", stderr=b"")
-
-        if "-c" in args:
-            sql_cmd = str(args[args.index("-c") + 1])
-            assert 'TO "calcom_app"' in sql_cmd
-            assert 'SCHEMA "public"' in sql_cmd
-            return DummyProcess(returncode=0, stdout=b"", stderr=b"")
-
-        raise AssertionError(f"unexpected command: {args}")
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    plugin = CalcomPlugin(name="calcom", base_dir=str(tmp_path))
-    ctx = RestoreContext(
-        job_id="1",
-        source_target_id="1",
-        destination_target_id="2",
-        config={
-            "database_url": "postgresql://appuser:pass@appdb/calcom",
-            "database_direct_url": "postgresql://admin:pass@directdb/calcom",
-            "restore_grant_role": "calcom_app",
-        },
-        artifact_path=str(artifact),
-        metadata={"target_slug": "calcom"},
-    )
-
-    result = await plugin.restore(ctx)
-    assert result["status"] == "success"
-    # first restore, retry restore, then grant
-    assert len(calls) == 3
+    assert result["artifact_bytes"] == artifact.stat().st_size

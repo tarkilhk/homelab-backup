@@ -3,6 +3,13 @@
   "required": ["base_url", "token"],
   "properties": {
     "base_url": { "type": "string", "format": "uri", "title": "Base URL", "default": "http://invoiceninja.local" },
-    "token": { "type": "string", "title": "API Token", "default": "your token" }
+    "token": { "type": "string", "title": "API Token", "default": "your token" },
+    "export_timeout_seconds": {
+      "type": "integer",
+      "title": "Export timeout (seconds)",
+      "default": 3300,
+      "minimum": 60,
+      "maximum": 3300
+    }
   }
 }

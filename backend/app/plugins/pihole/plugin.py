@@ -1,32 +1,31 @@
 from __future__ import annotations
 
-import json
+import asyncio
+import io
 import logging
 import os
-from datetime import datetime, timezone
+import zipfile
+from pathlib import Path
 from typing import Any, Dict
 
 import httpx
 
-from app.core.plugins.artifacts import write_backup_bytes
+from app.core.plugins.artifacts import validate_zip_bytes, write_backup_bytes
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
-from app.core.plugins.restore_utils import copy_artifact_for_restore
 
 BACKUP_BASE_PATH = "/backups"
 
 
 def _http_client(*, timeout: float) -> httpx.AsyncClient:
-    return httpx.AsyncClient(timeout=timeout, follow_redirects=True)
+    return httpx.AsyncClient(timeout=timeout, follow_redirects=False)
 
 
 class PiHolePlugin(BackupPlugin):
     """Pi-hole backup plugin using Teleporter export (session auth).
 
     Flow:
-    - POST {base_url}/api/auth with JSON {"password": ...} to obtain session cookie (sid)
-      and CSRF token
-    - GET {base_url}/api/teleporter with `X-CSRF-TOKEN` header and session cookie to
-      download a ZIP archive
+    - POST {base_url}/api/auth with JSON {"password": ...} to obtain a session ID.
+    - GET {base_url}/api/teleporter with the documented X-FTL-SID header.
     - Save artifact under `/backups/<slug>/<YYYY-MM-DD>/pihole-teleporter-<ts>.zip`
     """
 
@@ -34,13 +33,13 @@ class PiHolePlugin(BackupPlugin):
         super().__init__(name=name, version=version)
         self._logger = logging.getLogger(__name__)
 
+    restore_capability = "automatic"
+
     async def validate_config(self, config: Dict[str, Any]) -> bool:  # pragma: no cover - trivial
         # Minimal validation: ensure required keys exist
         if not isinstance(config, dict):
             return False
         base_url = config.get("base_url")
-        # Accept login for UI parity, but Pi-hole v6 auth only requires password
-        login = config.get("login")
         password = config.get("password")
         if not base_url or not isinstance(base_url, str):
             return False
@@ -49,60 +48,71 @@ class PiHolePlugin(BackupPlugin):
         return True
 
     async def test(self, config: Dict[str, Any]) -> bool:
-        """Connectivity test using provided configuration.
-
-        Attempt real authentication against Pi-hole v6 API:
-        - POST {base_url}/api/auth with JSON {"password": ...}
-        - Expect a JSON body containing a valid session and CSRF token
-        Returns True on success, raises exception on failure.
-        """
-        # Basic shape check first
+        """Prove authentication and the Teleporter export path end to end."""
         if not await self.validate_config(config):
             raise ValueError("Invalid configuration: base_url and password are required")
+        await self._download_teleporter(config, timeout=10.0)
+        return True
 
+    def _validate_teleporter(self, content: bytes) -> None:
+        validate_zip_bytes(content, artifact_label="Pi-hole Teleporter")
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            names = {name.strip("/") for name in archive.namelist()}
+        if "etc/pihole/pihole.toml" not in names:
+            raise RuntimeError("Pi-hole Teleporter archive is missing etc/pihole/pihole.toml")
+
+    async def _download_teleporter(self, config: Dict[str, Any], *, timeout: float) -> bytes:
         base_url = str(config.get("base_url", "")).rstrip("/")
-        # Login retained for UX parity; Pi-hole v6 uses password-only auth
         password = config.get("password")
-
         auth_url = f"{base_url}/api/auth"
+        teleporter_url = f"{base_url}/api/teleporter"
 
-        try:
-            async with _http_client(timeout=10.0) as client:
-                resp = await client.post(
+        async with _http_client(timeout=timeout) as client:
+            sid: str | None = None
+            try:
+                auth_resp = await client.post(
                     auth_url,
                     json={"password": str(password)},
                     headers={"Accept": "application/json"},
                 )
-                # Non-2xx means auth failed or endpoint not reachable
-                if resp.status_code // 100 != 2:
-                    self._logger.warning(
-                        "pihole_test_auth_non_2xx | url=%s status=%s", auth_url, resp.status_code
-                    )
+                if auth_resp.status_code // 100 != 2:
                     raise RuntimeError(
-                        f"Pi-hole authentication failed with status {resp.status_code}"
+                        f"Pi-hole authentication failed with status {auth_resp.status_code}"
                     )
-                data: Dict[str, Any] = resp.json()
-        except RuntimeError:
-            raise
-        except (httpx.HTTPError, ValueError) as exc:
-            # HTTP/network/JSON errors -> treat as failed auth
-            self._logger.warning("pihole_test_auth_error | url=%s error=%s", auth_url, exc)
-            raise ConnectionError(f"Failed to connect to Pi-hole server: {exc}") from exc
+                data: Dict[str, Any] = auth_resp.json()
+                session = data.get("session") if isinstance(data, dict) else None
+                if not isinstance(session, dict):
+                    raise ValueError("Pi-hole authentication failed: invalid session response")
+                sid_value = session.get("sid")
+                if session.get("valid") is not True or not sid_value:
+                    raise ValueError("Pi-hole authentication failed: invalid session response")
+                sid = str(sid_value)
 
-        # Accept either the documented v6 shape or be lenient if fields change slightly
-        session = data.get("session") if isinstance(data, dict) else None
-        if isinstance(session, dict):
-            valid = session.get("valid") is True
-            csrf_present = bool(session.get("csrf"))
-            sid_present = bool(session.get("sid"))
-            if valid and csrf_present and sid_present:
-                return True
-
-        # Fallback: if API returns another explicit success flag
-        if isinstance(data, dict) and data.get("success") is True:
-            return True
-
-        raise ValueError("Pi-hole authentication failed: invalid session response")
+                response = await client.get(
+                    teleporter_url,
+                    headers={
+                        "X-FTL-SID": sid,
+                        "X-Requested-With": "XMLHttpRequest",
+                        "Accept": "application/zip, application/octet-stream",
+                    },
+                )
+                if response.status_code // 100 != 2:
+                    raise RuntimeError(
+                        f"Pi-hole Teleporter export failed with status {response.status_code}"
+                    )
+                content = response.content or b""
+                self._validate_teleporter(content)
+                return content
+            except (RuntimeError, ValueError):
+                raise
+            except httpx.HTTPError as exc:
+                raise ConnectionError(f"Failed to connect to Pi-hole server: {exc}") from exc
+            finally:
+                if sid:
+                    try:
+                        await client.delete(auth_url, headers={"X-FTL-SID": sid})
+                    except httpx.HTTPError:
+                        self._logger.warning("pihole_session_logout_failed")
 
     async def backup(self, context: BackupContext) -> Dict[str, Any]:
         # Determine directories following convention: /backups/<targetSlug>/<YYYY-MM-DD>/
@@ -112,7 +122,6 @@ class PiHolePlugin(BackupPlugin):
         # Read config
         cfg = getattr(context, "config", {}) or {}
         base_url = str(cfg.get("base_url", "")).rstrip("/")
-        login = cfg.get("login")  # not used by v6 API, retained for UX
         password = cfg.get("password")
         if not base_url or not password:
             raise ValueError("Pi-hole config must include base_url and password")
@@ -125,95 +134,7 @@ class PiHolePlugin(BackupPlugin):
             "<pending>",
         )
 
-        # Endpoints
-        auth_url = f"{base_url}/api/auth"
-        teleporter_url = f"{base_url}/api/teleporter"
-
-        async with _http_client(timeout=30.0) as client:
-            sid: str | None = None
-            try:
-                # 1) Authenticate (password only)
-                self._logger.info(
-                    "pihole_auth_request | job_id=%s target_id=%s url=%s",
-                    context.job_id,
-                    context.target_id,
-                    auth_url,
-                )
-                auth_resp = await client.post(
-                    auth_url,
-                    json={"password": str(password)},
-                    headers={"Accept": "application/json"},
-                )
-                self._logger.info(
-                    "pihole_auth_response | job_id=%s target_id=%s status=%s",
-                    context.job_id,
-                    context.target_id,
-                    auth_resp.status_code,
-                )
-                auth_resp.raise_for_status()
-                auth_data = auth_resp.json()
-                session = auth_data.get("session") or {}
-                csrf_token = session.get("csrf")
-                sid_value = session.get("sid")
-                if not csrf_token or not sid_value or session.get("valid") is not True:
-                    raise RuntimeError("Pi-hole auth did not return a valid session")
-                sid = str(sid_value)
-
-                # 2) Teleporter download with CSRF header and session cookie
-                self._logger.info(
-                    "pihole_backup_request | job_id=%s target_id=%s url=%s auth=session",
-                    context.job_id,
-                    context.target_id,
-                    teleporter_url,
-                )
-                resp = await client.get(
-                    teleporter_url,
-                    headers={
-                        "X-FTL-SID": sid,
-                        "X-FTL-CSRF": str(csrf_token),
-                        "X-Requested-With": "XMLHttpRequest",
-                        "Accept": "application/zip, application/octet-stream",
-                    },
-                )
-                self._logger.info(
-                    "pihole_backup_response | job_id=%s target_id=%s status=%s bytes=%s",
-                    context.job_id,
-                    context.target_id,
-                    resp.status_code,
-                    len(resp.content or b""),
-                )
-                if resp.status_code // 100 != 2:
-                    raise RuntimeError(
-                        f"Pi-hole Teleporter export failed with status {resp.status_code}"
-                    )
-                resp.raise_for_status()
-                content = resp.content
-            except RuntimeError:
-                raise
-            except httpx.HTTPError as exc:
-                self._logger.error(
-                    "pihole_backup_http_error | job_id=%s target_id=%s error=%s",
-                    context.job_id,
-                    context.target_id,
-                    str(exc),
-                )
-                raise
-            finally:
-                if sid:
-                    try:
-                        await client.delete(
-                            auth_url,
-                            headers={"X-FTL-SID": sid},
-                        )
-                    except httpx.HTTPError:
-                        self._logger.warning(
-                            "pihole_session_logout_failed | job_id=%s target_id=%s",
-                            context.job_id,
-                            context.target_id,
-                        )
-
-        if not content:
-            raise RuntimeError("Pi-hole Teleporter returned no content")
+        content = await self._download_teleporter(cfg, timeout=30.0)
 
         artifact_path = write_backup_bytes(
             self,
@@ -234,22 +155,74 @@ class PiHolePlugin(BackupPlugin):
         return {"artifact_path": artifact_path}
 
     async def restore(self, context: RestoreContext) -> Dict[str, Any]:
-        """Restore a Pi-hole backup.
+        cfg = context.config or {}
+        if not await self.validate_config(cfg):
+            raise ValueError("Pi-hole config must include base_url and password")
+        artifact_path = context.artifact_path
+        if not artifact_path or not os.path.isfile(artifact_path):
+            raise FileNotFoundError(f"Artifact not found: {artifact_path}")
+        content = Path(artifact_path).read_bytes()
+        self._validate_teleporter(content)
 
-        Note: Pi-hole v6 Teleporter restoration. This function copies the backup file
-        to a restore directory. To complete the restore:
-        1. Access Pi-hole web interface
-        2. Navigate to Settings → Teleporter
-        3. Use the "Import" feature to upload the backup ZIP file
+        base_url = str(cfg.get("base_url", "")).rstrip("/")
+        password = str(cfg.get("password", ""))
+        auth_url = f"{base_url}/api/auth"
+        teleporter_url = f"{base_url}/api/teleporter"
+        async with _http_client(timeout=60.0) as client:
+            sid: str | None = None
+            try:
+                auth_response = await client.post(
+                    auth_url,
+                    json={"password": password},
+                    headers={"Accept": "application/json"},
+                )
+                auth_response.raise_for_status()
+                session = auth_response.json().get("session") or {}
+                sid_value = session.get("sid")
+                if session.get("valid") is not True or not sid_value:
+                    raise RuntimeError("Pi-hole auth did not return a valid session")
+                sid = str(sid_value)
+                with open(artifact_path, "rb") as artifact_file:
+                    response = await client.post(
+                        teleporter_url,
+                        headers={"X-FTL-SID": sid},
+                        files={
+                            "file": (
+                                os.path.basename(artifact_path),
+                                artifact_file,
+                                "application/zip",
+                            )
+                        },
+                    )
+                if response.status_code // 100 != 2:
+                    raise RuntimeError(
+                        f"Pi-hole Teleporter import failed with status {response.status_code}"
+                    )
+            finally:
+                if sid:
+                    try:
+                        await client.delete(auth_url, headers={"X-FTL-SID": sid})
+                    except httpx.HTTPError:
+                        pass
 
-        The Teleporter import will restore settings, blocklists, and configurations.
-        """
-        return copy_artifact_for_restore(
-            context,
-            logger=self._logger,
-            restore_root="/backups",
-            prefix="pihole",
-        )
+        deadline = asyncio.get_running_loop().time() + 120.0
+        while True:
+            try:
+                await self._download_teleporter(cfg, timeout=15.0)
+                break
+            except (ConnectionError, RuntimeError, ValueError, httpx.HTTPError):
+                if asyncio.get_running_loop().time() >= deadline:
+                    raise RuntimeError(
+                        "Pi-hole did not become ready after Teleporter import"
+                    ) from None
+                await asyncio.sleep(2.0)
+
+        return {
+            "status": "success",
+            "artifact_path": artifact_path,
+            "artifact_bytes": os.path.getsize(artifact_path),
+            "message": "Pi-hole Teleporter import completed and backup path revalidated",
+        }
 
     async def get_status(
         self, context: BackupContext

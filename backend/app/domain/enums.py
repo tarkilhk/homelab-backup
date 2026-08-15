@@ -20,6 +20,8 @@ class TargetRunStatus(str, Enum):
     RUNNING = "running"
     SUCCESS = "success"
     FAILED = "failed"
+    PARTIAL = "partial"
+    SKIPPED = "skipped"
 
 
 class TargetRunOperation(str, Enum):

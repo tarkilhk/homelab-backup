@@ -30,6 +30,7 @@ from app.core.notifier import send_failure_email
 from app.core.plugins.artifacts import validate_backup_artifact
 from app.core.plugins.base import BackupContext
 from app.core.plugins.loader import get_plugin
+from app.core.target_locks import get_target_operation_lock
 from app.domain.enums import (
     MaintenanceJobType,
     RunOperation,
@@ -217,6 +218,25 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
     db.commit()
     db.refresh(target_run)
 
+    operation_lock = get_target_operation_lock(target_id)
+    if not operation_lock.acquire(blocking=False):
+        finished_at = datetime.now(timezone.utc)
+        message = "Skipped: another backup or restore is already using this target"
+        target_run.finished_at = finished_at
+        target_run.status = TargetRunStatus.SKIPPED.value
+        target_run.message = message
+        target_run.logs_text = (
+            target_run.logs_text or ""
+        ) + f"\nSkipped at {finished_at.isoformat()}: target busy"
+        db.add(target_run)
+        db.commit()
+        db.refresh(target_run)
+        return {
+            "target_id": target_id,
+            "status": TargetRunStatus.SKIPPED.value,
+            "error": "target_busy",
+        }
+
     try:
         target = db.get(TargetModel, target_id)
         target_slug = target.slug if target is not None else f"target-{target_id}"
@@ -396,6 +416,8 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
             "Target run failed | job_id=%s run_id=%s target_id=%s", job.id, run.id, target_id
         )
         return {"target_id": target_id, "status": TargetRunStatus.FAILED.value, "error": str(exc)}
+    finally:
+        operation_lock.release()
 
 
 def run_job_immediately(db: Session, job_id: int, triggered_by: str = "manual") -> RunModel:
@@ -430,6 +452,7 @@ def _finalize_run_from_results(db: Session, run: RunModel, results: list[dict]) 
         total = len(results)
         success_count = sum(1 for r in results if r.get("status") == TargetRunStatus.SUCCESS.value)
         fail_count = sum(1 for r in results if r.get("status") == TargetRunStatus.FAILED.value)
+        skipped_count = sum(1 for r in results if r.get("status") == TargetRunStatus.SKIPPED.value)
         if total == 0:
             run.status = RunStatus.FAILED.value
             run.message = "Failed: no targets resolved for this job"
@@ -439,15 +462,21 @@ def _finalize_run_from_results(db: Session, run: RunModel, results: list[dict]) 
             return
         any_fail = fail_count > 0
         any_success = success_count > 0
-        run.status = (
-            RunStatus.PARTIAL.value
-            if (any_fail and any_success)
-            else (RunStatus.FAILED.value if any_fail else RunStatus.SUCCESS.value)
-        )
+        if skipped_count == total:
+            run.status = RunStatus.SKIPPED.value
+        elif any_fail or skipped_count:
+            run.status = RunStatus.PARTIAL.value if any_success else RunStatus.FAILED.value
+        else:
+            run.status = RunStatus.SUCCESS.value
         if run.status == RunStatus.SUCCESS.value:
             run.message = f"Completed successfully for {success_count}/{total} targets"
         elif run.status == RunStatus.PARTIAL.value:
-            run.message = f"Partial: {success_count} succeeded, {fail_count} failed (of {total})"
+            run.message = (
+                f"Partial: {success_count} succeeded, {fail_count} failed, "
+                f"{skipped_count} skipped (of {total})"
+            )
+        elif run.status == RunStatus.SKIPPED.value:
+            run.message = f"Skipped: all {skipped_count} targets were already in use"
         else:
             run.message = f"Failed: {fail_count}/{total} targets failed"
         db.add(run)

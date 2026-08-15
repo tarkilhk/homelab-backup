@@ -128,10 +128,12 @@ destination plugin.
 Retention cleanup must be previewed and explicitly confirmed. A filesystem
 deletion failure preserves the database record so the failure remains visible.
 
-Restore support is plugin-specific: some plugins restore automatically, WordPress
-currently restores only its database, and several plugins intentionally provide a
-manual workflow. See [docs/RECOVERY.md](docs/RECOVERY.md) for the capability matrix,
-restore drills, and current limitations.
+Restore support is plugin-specific. Cal.com, PostgreSQL, WordPress, Jellyfin,
+Pi-hole, Vaultwarden, and the Servarr plugins have automatic workflows with
+plugin-specific readiness checks. MySQL is partial because its DDL import is not
+transactional, and Invoice Ninja is partial because the vendor API only queues an
+import. See [docs/RECOVERY.md](docs/RECOVERY.md) for prerequisites, the exact
+capability matrix, isolated drill versions, and safety limits.
 
 The application has no built-in user authentication. Keep the API and UI on a
 trusted network or place them behind an authenticated reverse proxy. A Docker

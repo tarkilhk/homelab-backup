@@ -4,8 +4,10 @@ import asyncio
 import hashlib
 import json
 import os
-import threading
+import shutil
+import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 from sqlalchemy.orm import Session, joinedload
@@ -13,6 +15,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.plugins.artifacts import validate_restore_artifact
 from app.core.plugins.base import RestoreContext
 from app.core.plugins.loader import get_plugin
+from app.core.target_locks import get_target_operation_lock
 from app.domain.enums import (
     RunOperation,
     RunStatus,
@@ -215,17 +218,67 @@ class RestoreService:
             metadata=metadata,
         )
 
-        result_container: dict[str, object] = {}
+        operation_lock = get_target_operation_lock(destination_target_id)
+        if not operation_lock.acquire(blocking=False):
+            finished_at = datetime.now(timezone.utc)
+            message = "Skipped: another backup or restore is already using this target"
+            target_run.finished_at = finished_at
+            target_run.status = TargetRunStatus.SKIPPED.value
+            target_run.message = message
+            target_run.logs_text = (
+                target_run.logs_text or ""
+            ) + f"\nSkipped at {finished_at.isoformat()}: target busy"
+            run.finished_at = finished_at
+            run.status = RunStatus.SKIPPED.value
+            run.message = message
+            run.logs_text = (
+                run.logs_text or ""
+            ) + f"\nSkipped at {finished_at.isoformat()}: target busy"
+            self.db.add_all([target_run, run])
+            self.db.commit()
+            result_run = (
+                self.db.query(RunModel)
+                .options(
+                    joinedload(RunModel.job).joinedload(JobModel.tag),
+                    joinedload(RunModel.target_runs).joinedload(TargetRunModel.target),
+                )
+                .filter(RunModel.id == run.id)
+                .first()
+            ) or run
+            _assign_display_fields(result_run)
+            return result_run
 
-        def _runner() -> None:
+        result_container: dict[str, object] = {}
+        try:
             try:
-                result_container["result"] = asyncio.run(plugin.restore(context))
+                artifact_parent = str(Path(artifact_path).parent)
+                with tempfile.TemporaryDirectory(
+                    prefix=".homelab-backup-restore-",
+                    dir=artifact_parent,
+                ) as staging_dir:
+                    staged_artifact = Path(staging_dir) / Path(artifact_path).name
+                    try:
+                        os.link(artifact_path, staged_artifact)
+                    except OSError:
+                        shutil.copyfile(artifact_path, staged_artifact)
+
+                    staged_size = staged_artifact.stat().st_size
+                    staged_digest = hashlib.sha256()
+                    with staged_artifact.open("rb") as staged_file:
+                        for chunk in iter(lambda: staged_file.read(1024 * 1024), b""):
+                            staged_digest.update(chunk)
+                    if (
+                        staged_size != validated_artifact.size_bytes
+                        or staged_digest.hexdigest() != validated_artifact.sha256
+                    ):
+                        raise ValueError("Restore artifact changed while preparing restore")
+
+                    context.artifact_path = str(staged_artifact)
+                    result_container["result"] = asyncio.run(plugin.restore(context))
             except Exception as exc:  # noqa: BLE001
                 result_container["error"] = exc
-
-        thread = threading.Thread(target=_runner, daemon=True)
-        thread.start()
-        thread.join()
+        finally:
+            operation_lock.release()
 
         finished_at = datetime.now(timezone.utc)
         try:
@@ -240,6 +293,7 @@ class RestoreService:
             if status_value not in {
                 TargetRunStatus.SUCCESS.value,
                 TargetRunStatus.FAILED.value,
+                TargetRunStatus.PARTIAL.value,
             }:
                 raise RuntimeError("Restore plugin returned an invalid status")
             message_value: Optional[str] = None
@@ -268,7 +322,11 @@ class RestoreService:
             run.status = (
                 RunStatus.SUCCESS.value
                 if status_value == TargetRunStatus.SUCCESS.value
-                else RunStatus.FAILED.value
+                else (
+                    RunStatus.PARTIAL.value
+                    if status_value == TargetRunStatus.PARTIAL.value
+                    else RunStatus.FAILED.value
+                )
             )
             run.message = target_run.message
             run.logs_text = (

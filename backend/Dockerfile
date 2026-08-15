@@ -1,4 +1,8 @@
-FROM python:3.11-slim
+FROM mysql:8.4.0 AS mysql-client
+FROM postgres:16-bookworm AS postgres-client
+FROM wordpress:cli-2.12.0-php8.2 AS wordpress-cli
+
+FROM python:3.11-slim-bookworm
 
 # Set working directory
 WORKDIR /app
@@ -6,13 +10,27 @@ WORKDIR /app
 # Set environment variables
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
+ENV PATH="/usr/local/lib/postgresql/16/bin:${PATH}"
 
-# Install system dependencies including PostgreSQL and MySQL clients
+# Install only the runtime libraries required by the version-pinned clients.
 RUN apt-get update && apt-get install -y \
     gcc \
-    postgresql-client \
-    default-mysql-client \
+    libncurses6 \
+    libpq5 \
+    libssl3 \
+    libstdc++6 \
+    libtinfo6 \
+    mariadb-client-core \
+    php-cli \
+    php-mysql \
+    zlib1g \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --from=mysql-client /usr/bin/mysql /usr/local/bin/mysql
+COPY --from=mysql-client /usr/bin/mysqldump /usr/local/bin/mysqldump
+COPY --from=postgres-client /usr/lib/postgresql/16/bin/ /usr/local/lib/postgresql/16/bin/
+COPY --from=wordpress-cli /usr/local/bin/wp /usr/local/bin/wp
+RUN ln -s /usr/bin/mariadb-check /usr/local/bin/mysqlcheck
 
 # Copy dependency files
 COPY pyproject.toml ./
