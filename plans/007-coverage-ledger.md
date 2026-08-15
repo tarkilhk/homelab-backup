@@ -47,7 +47,7 @@ included in a broad image job, or a plugin directory exists.
 | Monica | `blocked` | Declared Monica 4.1.2/MariaDB 12.3 state shows near-zero recent use. Confirm valuable company CRM data before researching a composite plugin. |
 | Metabase | `planned-plugin` | Named shared-PostgreSQL database is authoritative; explicit production target/run evidence remains. |
 | SFTPGo control plane | `plugin-local` | Exact 2.7.5 live SQLite milestone and two restores are committed. |
-| SFTPGo client payload | `unclassified` | `/srv/sftpgo` and NAS mappings require a value/ownership decision; bulk payload is outside the control-plane plugin. |
+| SFTPGo client payload | `blocked` | `/srv/sftpgo` and NAS mappings are intentionally outside the control-plane plugin; an explicit value/ownership and bulk-data-policy decision is required before adding any payload coverage. |
 | Hermes gateway/UI/client-work/reminders | `blocked` | Live state is under `/home/tarkil/.hermes`; a constrained host-state plugin needs exact-version/consistency research and explicit host-access approval. |
 | Hermes Workspace | `blocked` | Runbook references stale/absent deployment tasks; one runtime check or user declaration is needed to classify it active or retired. |
 | OneCLI PostgreSQL | `planned-plugin` | Existing PostgreSQL mechanism is suitable; named target/run evidence remains. |
@@ -70,22 +70,22 @@ included in a broad image job, or a plugin directory exists.
 | Service/scope | Current category | Evidence or remaining gap |
 | --- | --- | --- |
 | Paperless-ngx | `blocked` | Exact 2.20.15 native export/restore plan is complete; production container-execution privilege decision is pending. |
-| Immich PostgreSQL/assets | `unclassified` | Active exact v3.1.0 deployment; coordinated database/upload boundary and downtime requirement need primary research. |
+| Immich PostgreSQL/assets | `blocked` | Exact v3.1.0 research requires read-only verification of the effective managed-media root, explicit bounded downtime approval, and a narrow all-writer quiescence path; the raw Docker socket is rejected. |
 | Immich machine-learning cache | `stateless` | Model cache is reproducible. |
 | Immich Folder Album Creator | `stateless` | Automation declaration is in Git; NAS photos are external payload. |
 | Immich Power Tools | `unclassified` | Determine whether `/app/data` contains unique state beyond Immich and Git configuration. |
-| Home Assistant | `unclassified` | Supervisor-native backup is selected; existing NAS sync has a malformed destination path and current artifact evidence is unproven. |
-| Mosquitto/ESPHome/HACS/AdGuard on HAOS | `unclassified` | Expected inside a full Supervisor backup; verify inclusion and isolated HAOS restore evidence. |
-| Firefly III | `unclassified` | Active 6.6.3 MariaDB/uploads deployment; consistency/restore boundary needs primary research. |
+| Home Assistant | `blocked` | Full Supervisor backup/download is supported, but exact research found the multi-component archive is sequential and deployed add-ons use hot backup; strict consistency needs explicit quiescence/downtime approval before implementation. |
+| Mosquitto/ESPHome/HACS/AdGuard on HAOS | `blocked` | Full Supervisor backup includes these components, but Mosquitto, ESPHome, and AdGuard currently declare hot backup semantics; they inherit the Home Assistant quiescence/downtime gate. |
+| Firefly III | `blocked` | Exact 6.6.3 source ordering permits attachment DB/file races that no online before/after fence can rule out; a consistent MariaDB/uploads artifact needs explicit brief app-downtime approval and a narrow lifecycle path. |
 | Sure | `unclassified` | Active digest-pinned Rails/PostgreSQL/storage deployment; consistency/restore boundary needs primary research. |
 | Hindsight | `unclassified` | Active 0.8.6 PostgreSQL plus `.codex` files; determine authoritative/encrypted file boundary. |
-| Quartz | `unclassified` | Confirm whether authoritative content is in Git or only on the Claw host. |
+| Quartz | `blocked` | Ansible keeps user-authored content outside the framework checkout at `/opt/claw/quartz/content` and only seeds a Git-declared placeholder when empty. Protecting that authoritative host state requires an explicitly approved constrained Claw read-only path. |
 | Termix | `plugin-local` | Exact 2.3.2 read-only encrypted-state plugin, two distinct backups, two create-only restores, and two authenticated exact-image boots pass locally; production mount/target/schedule evidence remains. |
-| Mealie | `unclassified` | Active v3.22.0 PostgreSQL plus `/app/data`; native/consistent backup boundary needs research. |
+| Mealie | `blocked` | Native v3.22.0 export is not a transactional PostgreSQL/files snapshot and native restore requires unsafe cluster privilege. A dependable logical dump plus `/app/data` capture needs explicit brief Mealie downtime and narrow lifecycle/read-only mount approval. |
 | Wallabag | `unclassified` | Active 2.6.14 data/images deployment; exact database and restore boundary need research. |
 | YouTube-DL Material configuration | `unclassified` | Active 4.3.2 MongoDB/appdata deployment; determine which subscriptions/config are valuable. |
 | YouTube-DL media payload | `external` | Audio/video payload follows NAS/media policy and is excluded from application artifacts. |
-| Speedtest Tracker | `unprotected` | Active 1.14.7 declaration has no persistent volume; fix persistence before a plugin can protect history. |
+| Speedtest Tracker | `unprotected` | Measurement history is telemetry and is deliberately excluded by the active goal; its current declaration also has no persistent volume. |
 
 ## Media and observability
 
@@ -102,16 +102,16 @@ included in a broad image job, or a plugin directory exists.
 | Calibre | `unclassified` | Determine whether library metadata is authoritative or externally protected with books. |
 | Bazarr | `unclassified` | Configuration/history only; media/subtitle payload policy needs confirmation. |
 | Jellyseerr | `unclassified` | Configuration/request history may merit native/config backup. |
-| Jellystat | `planned-plugin` | Authoritative DB can use PostgreSQL; decide whether telemetry history is intentionally retained. |
-| Tautulli | `unclassified` | Configuration/history only; telemetry history is excluded by default. |
+| Jellystat | `unprotected` | Playback/statistics history is excluded telemetry; desired runtime configuration is declared in Git, so no PostgreSQL target belongs in this program. |
+| Tautulli | `unprotected` | Playback/statistics history is excluded telemetry; the remaining convenience configuration does not justify a bespoke plugin in this program. |
 | Wrapperr | `stateless` | Generated presentation over other service data unless contrary evidence appears. |
 | Profilarr | `unclassified` | Determine whether authoritative profiles are in Git or only app storage. |
-| Tracearr | `unclassified` | PostgreSQL/config versus excluded telemetry history requires classification. |
-| Maloja/Multi-Scrobbler | `unclassified` | Config/scrobble history value requires explicit decision. |
-| Transmission/Flood | `unclassified` | Queues are excluded; determine whether non-Git config merits coverage. |
+| Tracearr | `unprotected` | TimescaleDB/Redis contain excluded playback telemetry and queues; desired service configuration is declared in Git. |
+| Maloja/Multi-Scrobbler | `unprotected` | Scrobble history is excluded telemetry and Multi-Scrobbler's queue/cache is disposable; desired integration configuration is declared in Git. |
+| Transmission/Flood | `unprotected` | Torrent/session queues are explicitly excluded, and the remaining convenience UI settings are cheaply reconstructed from the Git-declared deployment; no bespoke plugin is warranted. |
 | CleanupArr/Houndarr | `stateless` | Automation is Git-declared; runtime queues/cache are disposable. |
 | Grafana provisioned state | `git-rebuild` | Provisioning and dashboards are declared in `homelab-infra`. |
-| Grafana UI-only state | `unclassified` | API export only if a read-only audit finds material non-provisioned state. |
+| Grafana UI-only state | `blocked` | A read-only API audit on 2026-08-15 found all 20 dashboards plus alerting policy/rules in Git, but the still-used `prometheus` datasource UID is UI-only while only Mimir and Loki are provisioned. Migrate that datasource to Git or explicitly accept its rebuild before skipping an API export. |
 | Prometheus/Mimir/Loki | `unprotected` | Telemetry history is deliberately excluded absent a new retention requirement. |
 | Exporters/Alloy/Telegraf/rsyslog/MCPs | `stateless` | Desired configuration is in Git; runtime state is disposable. |
 
