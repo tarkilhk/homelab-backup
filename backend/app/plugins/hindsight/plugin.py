@@ -10,6 +10,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict
 
+from app.core.plugins.artifacts import create_backup_artifact, evict_file_cache
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
 from app.core.subprocesses import run_process_with_timeout
 
@@ -17,6 +18,12 @@ POSTGRES_SERVER_MAJOR = 18
 VECTOR_VERSION = "0.8.6"
 ALEMBIC_HEAD = "c7d1e9a4b3f2"
 CONNECT_TIMEOUT_SECONDS = 30.0
+BACKUP_TIMEOUT_SECONDS = 3600.0
+BACKUP_BASE_PATH = "/backups"
+STREAM_CHUNK_BYTES = 1024 * 1024
+FILE_CACHE_FLUSH_BYTES = 8 * 1024 * 1024
+MAX_TOC_BYTES = 1024 * 1024
+MAX_TOC_ENTRIES = 1000
 RESTORE_DATABASE_PREFIX = "hlb_hindsight_restore_"
 RESTORE_SENTINEL = "homelab-backup:hindsight-restore:v1"
 _SAFE_HOST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -160,7 +167,10 @@ class HindsightPlugin(BackupPlugin):
                 password_file.flush()
                 os.fsync(password_file.fileno())
         except BaseException:
-            os.close(descriptor)
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
             path.unlink(missing_ok=True)
             raise
         return path
@@ -255,7 +265,149 @@ class HindsightPlugin(BackupPlugin):
         return True
 
     async def backup(self, context: BackupContext) -> Dict[str, Any]:
-        raise NotImplementedError("Hindsight backup is not implemented")
+        config = context.config or {}
+        if not await self.validate_config(config) or config.get("mode") != "source":
+            raise ValueError("Hindsight backup requires a valid source configuration")
+        await self.test(config)
+
+        password_file = self._password_file(config)
+        try:
+            with create_backup_artifact(
+                self,
+                context,
+                prefix="hindsight-postgresql",
+                suffix=".dump",
+                backup_root=BACKUP_BASE_PATH,
+            ) as artifact:
+                descriptor = os.open(
+                    artifact.temporary_path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                with (
+                    os.fdopen(descriptor, "wb") as artifact_file,
+                    tempfile.TemporaryFile(mode="w+b") as error_file,
+                ):
+                    try:
+                        process = await asyncio.create_subprocess_exec(
+                            "pg_dump",
+                            "-h",
+                            str(config["host"]),
+                            "-p",
+                            str(config.get("port", 5432)),
+                            "-U",
+                            str(config["user"]),
+                            "--format=custom",
+                            "--no-owner",
+                            "--no-privileges",
+                            str(config["database"]),
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=error_file,
+                            env=self._environment(password_file),
+                        )
+                    except FileNotFoundError as exc:
+                        raise FileNotFoundError(
+                            "PostgreSQL 18 pg_dump client is unavailable"
+                        ) from exc
+                    if process.stdout is None:
+                        raise RuntimeError("pg_dump did not provide an output stream")
+                    dump_stdout = process.stdout
+
+                    async def stream_dump() -> int:
+                        eviction_offset = 0
+                        pending_eviction = 0
+                        while chunk := await dump_stdout.read(STREAM_CHUNK_BYTES):
+                            artifact_file.write(chunk)
+                            pending_eviction += len(chunk)
+                            if pending_eviction >= FILE_CACHE_FLUSH_BYTES:
+                                artifact_file.flush()
+                                os.fsync(artifact_file.fileno())
+                                evict_file_cache(
+                                    artifact_file.fileno(),
+                                    eviction_offset,
+                                    pending_eviction,
+                                )
+                                eviction_offset += pending_eviction
+                                pending_eviction = 0
+                        artifact_file.flush()
+                        os.fsync(artifact_file.fileno())
+                        evict_file_cache(artifact_file.fileno(), eviction_offset, pending_eviction)
+                        return await process.wait()
+
+                    returncode = await run_process_with_timeout(
+                        process,
+                        stream_dump(),
+                        operation="Hindsight pg_dump backup",
+                        timeout_seconds=BACKUP_TIMEOUT_SECONDS,
+                    )
+                    error_file.seek(0)
+                    stderr = error_file.read(MAX_TOC_BYTES + 1)
+                if returncode != 0:
+                    raise RuntimeError("Hindsight pg_dump failed")
+                if stderr:
+                    raise RuntimeError("Hindsight pg_dump emitted warning output")
+                with artifact.temporary_path.open("rb") as archive_file:
+                    archive_header = archive_file.read(5)
+                if archive_header != b"PGDMP":
+                    raise RuntimeError("Hindsight pg_dump produced a malformed archive")
+                toc = await self._inspect_archive(artifact.temporary_path)
+                self._validate_archive_toc(toc)
+            return {"artifact_path": str(artifact.final_path)}
+        finally:
+            password_file.unlink(missing_ok=True)
+
+    async def _inspect_archive(self, artifact_path: Path) -> bytes:
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "pg_restore",
+                "--list",
+                str(artifact_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError as exc:
+            raise FileNotFoundError("PostgreSQL 18 pg_restore client is unavailable") from exc
+        stdout, _ = await run_process_with_timeout(
+            process,
+            process.communicate(),
+            operation="Hindsight archive inspection",
+            timeout_seconds=CONNECT_TIMEOUT_SECONDS,
+        )
+        if process.returncode != 0:
+            raise RuntimeError("Hindsight archive inspection failed")
+        if len(stdout) > MAX_TOC_BYTES:
+            raise RuntimeError("Hindsight archive TOC exceeds the safety limit")
+        return stdout
+
+    def _validate_archive_toc(self, toc: bytes) -> None:
+        try:
+            text = toc.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise RuntimeError("Hindsight archive has a malformed TOC") from exc
+        lines = text.splitlines()
+        if (
+            not text
+            or "\x00" in text
+            or len(lines) > MAX_TOC_ENTRIES
+            or not any("Dumped from database version 18." in line for line in lines)
+            or not any(" EXTENSION - vector" in line for line in lines)
+        ):
+            raise RuntimeError("Hindsight archive has a malformed TOC")
+        tables = {
+            match.group(1)
+            for line in lines
+            if (match := re.search(r"\sTABLE public ([^ ]+)\s", line)) is not None
+        }
+        missing = REQUIRED_TABLES - tables
+        unexpected = tables - REQUIRED_TABLES
+        if missing:
+            raise RuntimeError(
+                "Hindsight archive schema is missing required table " + sorted(missing)[0]
+            )
+        if unexpected:
+            raise RuntimeError(
+                "Hindsight archive schema contains unexpected table " + sorted(unexpected)[0]
+            )
 
     async def restore(self, context: RestoreContext) -> Dict[str, Any]:
         raise NotImplementedError("Hindsight restore is not implemented")
