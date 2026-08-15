@@ -15,6 +15,7 @@ Each executor must read its plan fully, honor STOP conditions, and update status
 | 008 | Add Termix 2.3.2 encrypted-state backup and isolated restore | P0 | M | 001 foundation | DONE (local) |
 | 009 | Add Audiobookshelf 2.36.0 control-plane backup and isolated restore | P1 | M | 001 foundation | DONE (local) |
 | 010 | Add pfSense native encrypted configuration export and isolated restore proof | P1 | L | 001 foundation; restore-authority decision | BLOCKED |
+| 011 | Add Hindsight 0.8.6 PostgreSQL backup and isolated restore | P1 | M | 001 foundation | IN PROGRESS |
 
 Status: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`, or `REJECTED`.
 
