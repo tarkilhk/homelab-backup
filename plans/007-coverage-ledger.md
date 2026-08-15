@@ -73,7 +73,7 @@ included in a broad image job, or a plugin directory exists.
 | Immich PostgreSQL/assets | `blocked` | Exact v3.1.0 research requires read-only verification of the effective managed-media root, explicit bounded downtime approval, and a narrow all-writer quiescence path; the raw Docker socket is rejected. |
 | Immich machine-learning cache | `stateless` | Model cache is reproducible. |
 | Immich Folder Album Creator | `stateless` | Automation declaration is in Git; NAS photos are external payload. |
-| Immich Power Tools | `unclassified` | Determine whether `/app/data` contains unique state beyond Immich and Git configuration. |
+| Immich Power Tools | `blocked` | Exact v0.22.0 `/app/data/app.db` contains unique settings, credentials, workflow, import, and run state. It must be captured and restored as a version-linked child of the Immich composite, so it inherits the managed-media-root, downtime, and narrow lifecycle gates. |
 | Home Assistant | `blocked` | Full Supervisor backup/download is supported, but exact research found the multi-component archive is sequential and deployed add-ons use hot backup; strict consistency needs explicit quiescence/downtime approval before implementation. |
 | Mosquitto/ESPHome/HACS/AdGuard on HAOS | `blocked` | Full Supervisor backup includes these components, but Mosquitto, ESPHome, and AdGuard currently declare hot backup semantics; they inherit the Home Assistant quiescence/downtime gate. |
 | Firefly III | `blocked` | Exact 6.6.3 source ordering permits attachment DB/file races that no online before/after fence can rule out; a consistent MariaDB/uploads artifact needs explicit brief app-downtime approval and a narrow lifecycle path. |
@@ -106,7 +106,7 @@ included in a broad image job, or a plugin directory exists.
 | Jellystat | `unprotected` | Playback/statistics history is excluded telemetry; desired runtime configuration is declared in Git, so no PostgreSQL target belongs in this program. |
 | Tautulli | `unprotected` | Playback/statistics history is excluded telemetry; the remaining convenience configuration does not justify a bespoke plugin in this program. |
 | Wrapperr | `stateless` | Generated presentation over other service data unless contrary evidence appears. |
-| Profilarr | `unclassified` | Determine whether authoritative profiles are in Git or only app storage. |
+| Profilarr | `planned-plugin` | Exact v1.1.5 state spans the SQLite control plane and its profile Git repository. A locally buildable online plugin can combine SQLite's backup API with a clean, stable `git bundle --all`; dirty/in-progress repositories fail closed, and the unsafe native raw-copy backup is excluded. |
 | Tracearr | `unprotected` | TimescaleDB/Redis contain excluded playback telemetry and queues; desired service configuration is declared in Git. |
 | Maloja/Multi-Scrobbler | `unprotected` | Scrobble history is excluded telemetry and Multi-Scrobbler's queue/cache is disposable; desired integration configuration is declared in Git. |
 | Transmission/Flood | `unprotected` | Torrent/session queues are explicitly excluded, and the remaining convenience UI settings are cheaply reconstructed from the Git-declared deployment; no bespoke plugin is warranted. |
