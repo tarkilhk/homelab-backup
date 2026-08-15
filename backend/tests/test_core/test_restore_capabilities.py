@@ -8,6 +8,7 @@ def test_plugins_publish_honest_restore_capabilities() -> None:
         "audiobookshelf": "partial",
         "calcom": "automatic",
         "gitea": "automatic",
+        "hindsight": "partial",
         "homelab_backup": "partial",
         "mysql": "partial",
         "postgresql": "automatic",
