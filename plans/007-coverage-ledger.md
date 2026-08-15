@@ -55,7 +55,7 @@ included in a broad image job, or a plugin directory exists.
 | Airbyte | `blocked` | Declared abctl/Kind deployment lacks an exact version and verified active connections. Confirm current use and checkpoint value before selecting native/PV coverage. |
 | GenBI | `blocked` | Manual-only stack contains several stores. Confirm which object/catalog/notebook/database data is authoritative before splitting coverage by mechanism. |
 | Cloudflare | `planned-plugin` | Read-only account export is a selected Wave 1 boundary; exact scopes and isolated replay validation remain. |
-| pfSense | `planned-plugin` | Native config export selected; exact API/export and isolated restore appliance drill remain. |
+| pfSense | `blocked` | Native encrypted full-config export and an isolated appliance drill are specified, but the narrowest WebGUI privilege combines backup and destructive restore while the plugin has no safe automatic restore seam. Implementation awaits an explicit privilege decision and an approved restore contract. |
 | Synology DSM configuration | `planned-plugin` | Native DSM configuration export selected; API/export and isolated restore evidence remain. |
 | Synology datasets/photos | `external` | Bulk dataset protection belongs to storage replication/backup, not this application; current external evidence still needs final audit. |
 | Homelab Backup Docker host | `plugin-local` | Exact 0.2.1 self-backup and two isolated boots are committed. |
@@ -82,7 +82,7 @@ included in a broad image job, or a plugin directory exists.
 | Quartz | `blocked` | Ansible keeps user-authored content outside the framework checkout at `/opt/claw/quartz/content` and only seeds a Git-declared placeholder when empty. Protecting that authoritative host state requires an explicitly approved constrained Claw read-only path. |
 | Termix | `plugin-local` | Exact 2.3.2 read-only encrypted-state plugin, two distinct backups, two create-only restores, and two authenticated exact-image boots pass locally; production mount/target/schedule evidence remains. |
 | Mealie | `blocked` | Native v3.22.0 export is not a transactional PostgreSQL/files snapshot and native restore requires unsafe cluster privilege. A dependable logical dump plus `/app/data` capture needs explicit brief Mealie downtime and narrow lifecycle/read-only mount approval. |
-| Wallabag | `unclassified` | Active 2.6.14 data/images deployment; exact database and restore boundary need research. |
+| Wallabag | `blocked` | Exact 2.6.14 SQLite, site-credential key, and downloaded-image boundary is known, but coherent capture needs approved brief downtime and narrow lifecycle control. Production activation also awaits a default Symfony-secret decision and live image-digest verification. |
 | YouTube-DL Material configuration | `unclassified` | Active 4.3.2 MongoDB/appdata deployment; determine which subscriptions/config are valuable. |
 | YouTube-DL media payload | `external` | Audio/video payload follows NAS/media policy and is excluded from application artifacts. |
 | Speedtest Tracker | `unprotected` | Measurement history is telemetry and is deliberately excluded by the active goal; its current declaration also has no persistent volume. |
