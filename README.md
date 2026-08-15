@@ -154,5 +154,18 @@ The system supports adding new plugins to back up different services. See `ADDIN
 - `deploy/`: `docker-compose.yml` for local/NAS deployment
 - `db/`: local database folders (mapped in compose)
 
+## Versions and releases
+
+The root [`VERSION`](VERSION) file is the canonical application version. Its
+SemVer value is mirrored in the backend and frontend package manifests, exposed
+by the backend OpenAPI document, and checked by CI together with the current
+entry in [`CHANGELOG.md`](CHANGELOG.md).
+
+Every push to `main` publishes the mutable `backend-latest` and
+`frontend-latest` images plus commit-specific `backend-sha-<shortsha>` and
+`frontend-sha-<shortsha>` images. Pushing a matching `vX.Y.Z` Git tag publishes
+only the immutable `backend-vX.Y.Z` and `frontend-vX.Y.Z` release image tags.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the release checklist.
+
 ## License
 GPL-3.0-or-later (see `LICENSE`).

@@ -57,6 +57,12 @@ def setup_logging(level: str | None = None) -> None:
     # This will hide all access logs, but eliminates the health check spam
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
+    # HTTPX includes full request URLs in its INFO/DEBUG records. Some vendor
+    # APIs put short-lived credentials in query strings, so those records must
+    # never inherit the application log level.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+
     # SQLAlchemy: keep quiet by default; detailed SQL is controlled via engine echo
     # Only show SQL engine logs when DEBUG is enabled at the root
     sqlalchemy_engine_level = (

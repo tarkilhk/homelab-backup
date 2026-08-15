@@ -17,6 +17,29 @@ env:
   IMAGE_PREFIX: ${{ vars.DOCKERHUB_ORG || secrets.DOCKERHUB_USERNAME }}
 
 jobs:
+  version:
+    name: Validate Release Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Validate synchronized SemVer and release tag
+        id: validate
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: >-
+          python backend/scripts/check_version.py
+          --tag "${RELEASE_TAG}"
+          --github-output "${GITHUB_OUTPUT}"
+
   secret-scan:
     name: Current Tree Secret Scan
     runs-on: ubuntu-latest
@@ -153,7 +176,7 @@ jobs:
   build-and-push:
     name: Build and Push Docker Images
     runs-on: ubuntu-latest
-    needs: [secret-scan, test-backend, test-frontend, test-backend-image]
+    needs: [version, secret-scan, test-backend, test-frontend, test-backend-image]
     if: github.event_name != 'pull_request'  # do not push images for PRs
     permissions:
       contents: read
@@ -182,10 +205,12 @@ jobs:
         with:
           images: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/homelab-backup
+          flavor: |
+            latest=false
           tags: |
-            type=sha,prefix=backend-sha-,format=short
-            type=raw,value=backend-latest
-            type=ref,event=tag,prefix=backend-
+            type=sha,prefix=backend-sha-,format=short,enable={{is_default_branch}}
+            type=raw,value=backend-latest,enable={{is_default_branch}}
+            type=semver,pattern=backend-v{{version}}
 
       # Frontend image metadata and tags
       - name: Docker meta (frontend)
@@ -194,10 +219,12 @@ jobs:
         with:
           images: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/homelab-backup
+          flavor: |
+            latest=false
           tags: |
-            type=sha,prefix=frontend-sha-,format=short
-            type=raw,value=frontend-latest
-            type=ref,event=tag,prefix=frontend-
+            type=sha,prefix=frontend-sha-,format=short,enable={{is_default_branch}}
+            type=raw,value=frontend-latest,enable={{is_default_branch}}
+            type=semver,pattern=frontend-v{{version}}
 
       - name: Build and push backend image
         uses: docker/build-push-action@v6

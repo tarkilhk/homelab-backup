@@ -3,6 +3,7 @@
 import base64
 import logging
 from contextlib import asynccontextmanager
+from importlib.metadata import version as installed_package_version
 from pathlib import Path
 from typing import AsyncGenerator
 
@@ -61,7 +62,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(
     title="Homelab Backup API",
     description="Backup system with plugin architecture",
-    version="0.1.0",
+    version=installed_package_version("homelab-backup"),
     docs_url=None,
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
