@@ -172,14 +172,22 @@ with create_backup_artifact(
 ) as artifact:
     await stream_export_to(artifact.temporary_path)
     validate_vendor_archive(artifact.temporary_path)
+    artifact.sidecar_metadata.update({"validation": "passed"})
 
 return {"artifact_path": str(artifact.final_path)}
 ```
 
 On normal exit the helper verifies a non-empty regular file, flushes it,
-atomically renames it, and writes `<artifact_path>.meta.json`. On failure it
-removes partial output. Direct writes to the final path and direct sidecar calls
-are outside the plugin contract.
+atomically renames it, and writes `<artifact_path>.meta.json` with the final
+artifact size and SHA-256 digest. Artifact validation and restore enforce that
+identity. On failure the helper removes partial output. Direct writes to the
+final path and direct sidecar calls are outside the plugin contract.
+
+`sidecar_metadata` is optional and must contain only JSON-serializable,
+non-secret validation evidence. Plugin identity, target, creation time,
+artifact path, artifact size/hash, and plugin version are reserved keys and
+cannot be overridden. Never put credentials, configuration values, application
+rows, private paths, or user content in a sidecar.
 
 Vendor validation must go beyond “non-empty.” Examples include ZIP CRC and
 required members, SQL dump headers, parseable JSON, SQLite integrity checks, or

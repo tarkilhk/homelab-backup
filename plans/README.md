@@ -16,6 +16,7 @@ Each executor must read its plan fully, honor STOP conditions, and update status
 | 009 | Add Audiobookshelf 2.36.0 control-plane backup and isolated restore | P1 | M | 001 foundation | DONE (local) |
 | 010 | Add pfSense native encrypted configuration export and isolated restore proof | P1 | L | 001 foundation; restore-authority decision | BLOCKED |
 | 011 | Add Hindsight 0.8.6 PostgreSQL backup and isolated restore | P1 | M | 001 foundation | DONE (local) |
+| 012 | Add Bazarr 1.5.6 native backup and isolated restore | P1 | M | 001 foundation | DONE (local) |
 
 Status: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`, or `REJECTED`.
 

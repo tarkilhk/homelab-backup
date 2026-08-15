@@ -25,6 +25,7 @@ dependencies = [
     "cryptography>=45.0.0",
     "pysqlite3-binary==0.5.4.post2",
     "Pillow==12.3.0",
+    "PyYAML>=6.0.2",
 ]
 
 classifiers = [

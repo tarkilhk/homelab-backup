@@ -1,0 +1,51 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["mode"],
+  "allOf": [
+    {
+      "if": {
+        "properties": {"mode": {"const": "source"}},
+        "required": ["mode"]
+      },
+      "then": {
+        "required": ["base_url", "api_key", "backup_directory"]
+      }
+    },
+    {
+      "if": {
+        "properties": {"mode": {"const": "restore_destination"}},
+        "required": ["mode"]
+      },
+      "then": {
+        "required": ["restore_directory"]
+      }
+    }
+  ],
+  "properties": {
+    "mode": {
+      "type": "string",
+      "title": "Mode",
+      "enum": ["source", "restore_destination"],
+      "default": "source"
+    },
+    "base_url": {
+      "type": "string",
+      "format": "uri",
+      "title": "Bazarr URL"
+    },
+    "api_key": {
+      "type": "string",
+      "title": "Bazarr API key"
+    },
+    "backup_directory": {
+      "type": "string",
+      "title": "Bazarr native backup directory",
+      "default": "/sources/bazarr/backups"
+    },
+    "restore_directory": {
+      "type": "string",
+      "title": "Isolated restore directory"
+    }
+  }
+}

@@ -27,6 +27,17 @@ All notable changes to Homelab Backup are recorded here. This project follows
   two fresh exact-image boots and restarts. Backup attempts snapshot only their
   non-secret database identity, and restore execution is disabled outside an
   explicitly authorized isolated drill.
+- A Bazarr 1.5.6/LinuxServer ls349 control-plane plugin using the native online
+  SQLite backup, strict attribution and artifact validation, structural sidecar
+  evidence, and RestoreService-staged create-only local restores verified by
+  two exact-image boots and restarts. Media and subtitle payloads remain
+  separate recovery prerequisites.
+
+### Changed
+
+- Sidecars now bind every newly written artifact to its byte size and SHA-256
+  digest. Artifacts created by older versions without both fields are rejected
+  by validation and restore; create fresh backups before upgrading.
 
 ## [0.2.1] - 2026-08-15
 

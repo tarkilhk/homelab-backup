@@ -10,6 +10,7 @@ carrying these versions forward by assumption.
 | Plugin | Homelab component declaration | Verification | Restore result |
 | --- | --- | --- | --- |
 | Audiobookshelf | `ghcr.io/advplyr/audiobookshelf:2.36.0` (drill pinned OCI index `sha256:180acad33d69c99ed208676465d8edcb268fa46967735579a7810859885b1a8e`) | Two online SQLite snapshots plus bounded item/author native metadata through genuine read-only binds, exact schema/integrity/reference validation, private artifacts, valid sidecars, and independent phase hashes passed locally; audiobook and ebook media are excluded | Two fresh create-only restores and separate exact-image boots/restarts proved login, libraries, items, authors, collections, playlists, bookmarks, covers, and phase-specific state; capability remains `partial` because the plugin does not control destination lifecycle |
+| Bazarr | `ghcr.io/linuxserver/bazarr:v1.5.6-ls349` (drill pinned linux/amd64 manifest `sha256:4b00f5886f3307563cf06c1068037eccfc529f04070d42e2aa47f53128eed17e`) | Two native online SQLite backups attributed through exact status/list/trigger polling, copied from a genuine read-only backup bind, strictly validated, privately published, and bound to structural sidecar evidence passed locally | Two RestoreService-staged create-only restores and separate exact-image boots/restarts proved phase-specific profiles, languages, history, blacklist, notifier structure, and settings; capability remains `partial` because media, subtitles, Sonarr, and Radarr are external prerequisites |
 | Cal.com | `calcom/cal.com:v6.2.0`, PostgreSQL `16` | PostgreSQL 16 connectivity and two validated Cal.com custom-format database archives | Isolated transactional restore passed |
 | Gitea | `gitea/gitea:1.27.1` on primary and NAS | Exact-image native dump, two fresh labeled restore destinations, nested package volumes, repository/issue/release/package markers, streamed size/hash/sidecar checks, absolute transfer deadlines, and bounded-memory evidence passed locally | Isolated SQLite import, hook regeneration, repository `git fsck`, exact file equality, health, and a third post-mutation rollback destination passed; production backup remains gated on downtime and Docker access |
 | Hindsight | `ghcr.io/vectorize-io/hindsight:0.8.6` with `pgvector/pgvector:pg18-trixie` (drill pinned OCI manifests `sha256:47eba343fe1cc0feb30839fa9bae4d1bb592676a2e7a7c3b8c80689ac93fbf8c` and `sha256:ff8da7b0714e5efa413d77f43e24d93064dd66469d418d12608c1bbc91fcf045`) | Two online PostgreSQL 18 custom dumps under a denied-write role, supported concurrent API writes, complete normalized 0.8.6 TOC/schema validation, private artifacts, valid sidecars, and independent phase hashes passed locally | Two fresh sentinel-only transactional restores and separate exact-image boots/restarts proved retained/curated/deleted API state, native upload bytes, webhook-secret recovery with API redaction, phase separation, and real rollback; capability remains `partial` because OAuth/configuration is external and exact 0.8.6 has no supported HTTP file-download route |
@@ -117,3 +118,13 @@ therefore require the repository's protected backup destination. Production
 restore remains forbidden. The restore code is disabled by default and runs
 only when `HOMELAB_BACKUP_ALLOW_ISOLATED_RESTORE=1` is deliberately set for a
 disposable local drill; destination-owner credentials exist only there.
+
+The Bazarr plugin is locally verified but not yet deployed. Production
+activation needs an approved Bazarr API key and network route plus only the
+native backup directory mounted read-only at `/sources/bazarr/backups`. The
+probe refuses versions other than Bazarr 1.5.6/LinuxServer ls349 and refuses
+PostgreSQL mode. It does not need `/config`, media, subtitle, Docker-socket, or
+host-control access and does not stop Bazarr. Production restore remains
+forbidden; restore is disabled unless
+`HOMELAB_BACKUP_ALLOW_ISOLATED_RESTORE=1` is deliberately set for a disposable
+local drill.

@@ -202,22 +202,30 @@ Target configuration should contain only:
 
 - a Bazarr base URL;
 - its API key as a secret field;
-- the literal local read-only mount path for Bazarr's native backup directory;
-  and
-- bounded connect/request/poll timeouts.
+- the literal local read-only mount path for Bazarr's native backup directory.
 
-`test()` performs authenticated `GET /api/system/backups`, validates the response
-shape, and confirms the configured local directory is readable and resolves
-inside the one allowlisted mount. It does not trigger a backup or inspect
-configuration values. Authentication uses `X-API-KEY`; do not use query or form
-authentication because URLs are commonly logged. Bazarr accepts all three but
-offers no backup-scoped token
+Connect, request, poll, stability, and operation deadlines are fixed plugin
+limits rather than user-facing compatibility knobs.
+
+`test()` performs authenticated `GET /api/system/status` and
+`GET /api/system/backups`, requires exact version 1.5.6 with
+`package_version` equal to `v1.5.6-ls349 by linuxserver.io`, migration head
+`df76a4410347`, and `database_engine` formatted as `Sqlite <non-empty-version>`.
+It validates the backup-list response shape and confirms the configured local
+directory is readable and resolves inside the one allowlisted mount. The status
+check is required because
+`POSTGRES_ENABLED` can override the YAML database setting, so an apparently
+valid native backup configuration cannot prove the live engine. `test()` does
+not trigger a backup or inspect configuration values. Authentication uses
+`X-API-KEY`; do not use query or form authentication because URLs are commonly
+logged. Bazarr accepts all three but offers no backup-scoped token
 ([authentication source](https://github.com/morpheus65535/bazarr/blob/5dc1d278e1b459b8bcb388097d150074307cb9ae/bazarr/api/utils.py)).
 
 `backup()` executes this bounded state machine:
 
-1. Acquire the target's overlap lock. List existing native backups through
-   authenticated `GET /api/system/backups` and take a local directory baseline.
+1. Acquire the target's overlap lock. Reconfirm exact version 1.5.6 and SQLite
+   mode through authenticated `GET /api/system/status`, list existing native
+   backups through `GET /api/system/backups`, and take a local directory baseline.
 2. Record a monotonic start time, then send exactly one authenticated
    `POST /api/system/backups`. A 204 only means the job was queued; it is not
    proof of artifact creation.
@@ -236,9 +244,10 @@ offers no backup-scoped token
    required validation fails, record the attempt as failed and do not claim a
    usable artifact.
 
-Only `GET` and `POST` on `/api/system/backups` are allowlisted. The same resource
-also exposes `PATCH` restore and `DELETE`; the plugin must have no code path that
-can issue either verb. The broad API key is stored encrypted/secret through the
+Only `GET /api/system/status` plus `GET` and `POST` on
+`/api/system/backups` are allowlisted. The backup resource also exposes `PATCH`
+restore and `DELETE`; the plugin must have no code path that can issue either
+verb. The broad API key is stored encrypted/secret through the
 existing target mechanism, sent only to the configured Bazarr origin, redacted
 from exceptions, and never placed in metrics, sidecars, filenames, or logs.
 

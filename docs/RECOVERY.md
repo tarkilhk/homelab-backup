@@ -29,6 +29,7 @@ files, partial files, and artifacts with missing or inconsistent sidecars.
 
 | Plugin | Capability | Meaning |
 | --- | --- | --- |
+| Bazarr | Partial | Creates validated Bazarr 1.5.6 SQLite and YAML state only in a fresh sentinel-marked local directory. Media, subtitle files, Sonarr, Radarr, and exact-image boot verification remain separate recovery prerequisites. |
 | Cal.com | Automatic | Restores a validated PostgreSQL custom archive transactionally. |
 | Gitea | Automatic | Restores a validated native dump into an explicitly labeled isolated Gitea 1.27.1 container, verifies application state, and rolls back on failure. |
 | Homelab Backup | Partial | Creates a validated database only in a fresh sentinel-marked offline directory. Booting and verifying the exact recorded backend image remains a separate operator step. |
@@ -164,6 +165,38 @@ Restore is create-only and offline:
 
 Never restore SFTPGo in production through Homelab Backup.
 
+### Bazarr control-plane recovery
+
+The `bazarr` plugin asks exact Bazarr 1.5.6/LinuxServer ls349 to create its
+native online backup, then copies the uniquely attributed stable ZIP from a
+dedicated read-only mount. It requires exactly `bazarr.db` and `config.yaml`,
+SQLite mode, the pinned Alembic migration and table set, clean integrity and
+foreign-key checks, and bounded resource use. The artifact contains credentials
+and requires protected storage; the sidecar contains only approved non-secret
+structural evidence.
+
+This is deliberately control-plane-only. Movies, television episodes,
+subtitle files, Sonarr, Radarr, proxy state, and NAS data are excluded and must
+be restored independently. A `partial` result never proves those prerequisites.
+
+Restore is create-only and local:
+
+1. Use Bazarr 1.5.6 in LinuxServer image ls349.
+2. Create a private disposable parent under `/tmp` or `/restore` containing
+   only `.bazarr-restore-destination` with
+   `bazarr-v1.5.6-isolated-restore-v1` followed by one newline.
+3. Set `HOMELAB_BACKUP_ALLOW_ISOLATED_RESTORE=1` only inside the isolated
+   restore runner and configure an absent child `restore_directory`.
+4. Restore through `RestoreService`. It stages and hashes the artifact, then
+   creates only `config/config.yaml` and `db/bazarr.db` with private modes.
+5. Boot the exact pinned image without production reachability, verify
+   representative state through Bazarr, restart it, and independently classify
+   the separately restored media/subtitle payload as matching, missing, or
+   mismatched.
+
+Never expose the restore authorization variable on a production backend and
+never invoke Bazarr's native `PATCH` restore through this plugin.
+
 ## Plugin-specific cautions
 
 - Vaultwarden backup requires a version with the built-in `/vaultwarden backup`
@@ -201,6 +234,7 @@ The following isolated drills were run with synthetic data and no published port
 - Gitea 1.27.1
 - Homelab Backup backend 0.2.1
 - SFTPGo 2.7.5 (`9888a3d`, pinned Alpine image digest)
+- Bazarr 1.5.6 in LinuxServer image ls349
 
 Each completed drill includes a non-destructive connection test, two distinct
 validated backups with sidecars, and an isolated restore. Invoice Ninja remains
