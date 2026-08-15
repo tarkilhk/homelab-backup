@@ -932,6 +932,7 @@ def _assert_application_state(
     assert [(collection["id"], collection["name"]) for collection in collections] == [
         (ids["collection_id"], f"{phase}-collection")
     ]
+    assert {book["id"] for book in collections[0]["books"]} == {ids["item_id"]}
     playlists = _request_json(container, "GET", "/api/playlists", token=token)["playlists"]
     expected_playlists = [(ids["playlist_id"], f"{phase}-playlist")]
     if phase == "phase-b":
@@ -939,6 +940,8 @@ def _assert_application_state(
     assert sorted((playlist["id"], playlist["name"]) for playlist in playlists) == sorted(
         expected_playlists
     )
+    for playlist in playlists:
+        assert {item["libraryItemId"] for item in playlist["items"]} == {ids["item_id"]}
     progress = _request_json(container, "GET", "/api/me/progress", token=token)["mediaProgress"]
     assert len(progress) == 1
     assert progress[0]["libraryItemId"] == ids["item_id"]
