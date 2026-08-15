@@ -129,7 +129,7 @@ def create_backup_artifact(
         committed = True
         _fsync_directory(artifact_dir)
         write_backup_sidecar(str(final_path), plugin, context)
-    except Exception:
+    except BaseException:
         temporary_path.unlink(missing_ok=True)
         if committed:
             Path(f"{final_path}.meta.json").unlink(missing_ok=True)

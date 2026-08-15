@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from pathlib import Path
 from typing import Any
@@ -129,6 +130,25 @@ def test_failed_backup_does_not_expose_partial_artifact(
         ) as artifact:
             artifact.temporary_path.write_bytes(b"partial")
             raise RuntimeError("export failed")
+
+    assert artifact.final_path.exists() is False
+    assert artifact.temporary_path.exists() is False
+
+
+def test_cancelled_backup_does_not_expose_partial_artifact(
+    tmp_path: Path,
+    context: BackupContext,
+) -> None:
+    with pytest.raises(asyncio.CancelledError):
+        with create_backup_artifact(
+            _Plugin(),
+            context,
+            prefix="cancelled",
+            suffix=".db",
+            backup_root=tmp_path,
+        ) as artifact:
+            artifact.temporary_path.write_bytes(b"credential-bearing partial")
+            raise asyncio.CancelledError
 
     assert artifact.final_path.exists() is False
     assert artifact.temporary_path.exists() is False
