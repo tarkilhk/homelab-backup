@@ -11,6 +11,8 @@ Each executor must read its plan fully, honor STOP conditions, and update status
 | 004 | Add a quiesced Standard Notes composite backup and isolated restore plugin | P0 | L | 001 foundation; downtime decision | BLOCKED |
 | 005 | Add SFTPGo v2.7.5 control-plane backup and isolated restore | P0 | M | 001 foundation | DONE (local) |
 | 006 | Add Paperless-ngx 2.20.15 native export and isolated restore | P0 | L | 001 foundation; execution-path approval | BLOCKED |
+| 007 | Close every service inventory row in a coverage ledger | P0 | XL | 001 inventory | IN PROGRESS |
+| 008 | Add Termix 2.3.2 encrypted-state backup and isolated restore | P0 | M | 001 foundation | IN PROGRESS |
 
 Status: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`, or `REJECTED`.
 
