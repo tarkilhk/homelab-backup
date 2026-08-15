@@ -9,6 +9,9 @@ All notable changes to Homelab Backup are recorded here. This project follows
 
 - A version-pinned Gitea 1.27.1 plugin with consistent native dumps, bounded
   Docker transfers, isolated labeled-destination restores, and verified rollback.
+- A Homelab Backup self-backup plugin with consistent online SQLite snapshots,
+  private versioned artifacts, and strict create-only offline restores verified
+  by two isolated exact-image boots.
 
 ## [0.2.1] - 2026-08-15
 

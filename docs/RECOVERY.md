@@ -30,6 +30,8 @@ files, partial files, and artifacts with missing or inconsistent sidecars.
 | Plugin | Capability | Meaning |
 | --- | --- | --- |
 | Cal.com | Automatic | Restores a validated PostgreSQL custom archive transactionally. |
+| Gitea | Automatic | Restores a validated native dump into an explicitly labeled isolated Gitea 1.27.1 container, verifies application state, and rolls back on failure. |
+| Homelab Backup | Partial | Creates a validated database only in a fresh sentinel-marked offline directory. Booting and verifying the exact recorded backend image remains a separate operator step. |
 | MySQL | Partial | Imports only into an empty database and validates tables; MySQL DDL is non-transactional, so a failed import requires the destination to be reset before retry. |
 | PostgreSQL | Automatic | Restores a validated custom archive transactionally with cleanup and stop-on-error semantics. |
 | WordPress | Automatic | Replaces site files, imports the database, validates both, and rolls back on failure. The destination must be an isolated mounted WordPress root. |
@@ -85,6 +87,45 @@ must not be committed. The current-tree secret scan does not erase earlier Git
 objects. If an old public revision contained credentials, rotate those credentials
 and decide separately whether repository history should be rewritten.
 
+### Homelab Backup self-recovery
+
+The `homelab_backup` plugin snapshots the running SQLite database through
+SQLite's online backup API. It does not copy a live database file or its WAL.
+The resulting ZIP contains exactly `manifest.json` and
+`homelab_backup.db`; the manifest binds the artifact to the exact application
+version, SQLite payload size and SHA-256, normalized schema, required tables,
+and non-secret row counts. The ZIP is deliberately mode `0600` because target
+configuration rows can contain credentials in cleartext.
+
+The artifact is database-only. It includes targets/configuration, groups/tags,
+jobs/schedules and retention policies, settings, maintenance state, run history,
+and the artifact catalog. It excludes `/backups` artifact bytes, environment and
+Compose files, images, source, and frontend state. Recover or replicate each
+instance's artifact tree—including sidecars—separately. A restored catalog may
+truthfully contain paths whose artifact files are not mounted yet.
+
+Restore is intentionally create-only and offline:
+
+1. Use the exact application version recorded in the manifest.
+2. Create a fresh isolated directory outside `/app/db` and `/backups`.
+3. Create the regular sentinel file
+   `.homelab-backup-restore-destination` containing exactly
+   `homelab-backup-isolated-restore-v1` followed by one newline. Leave the
+   directory otherwise empty.
+4. Configure a separate restore target whose `database_path` is that
+   directory's `homelab_backup.db`. The plugin rejects existing database,
+   WAL/SHM, symlink, overlapping-artifact, and live-path destinations.
+5. Restore the artifact. A `partial` result means the database was created,
+   hashed, schema/integrity/foreign-key/count checked, and set to mode `0600`.
+6. Mount a copy of that directory at `/app/db` in an isolated backend using the
+   exact recorded image. Do not attach production networks, mounts, or the
+   Docker socket. Confirm `/ready` and representative API-visible records before
+   planning a real recovery cutover.
+
+Never place the restore sentinel in a production database directory and never
+restore over `/app/db/homelab_backup.db`. Cross-version and in-place restores
+are outside this plugin contract.
+
 ## Plugin-specific cautions
 
 - Vaultwarden backup requires a version with the built-in `/vaultwarden backup`
@@ -119,6 +160,8 @@ The following isolated drills were run with synthetic data and no published port
 - Vaultwarden 1.37.1
 - WordPress 7.0.2
 - Invoice Ninja 5.13.31
+- Gitea 1.27.1
+- Homelab Backup backend 0.2.1
 
 Each completed drill includes a non-destructive connection test, two distinct
 validated backups with sidecars, and an isolated restore. Invoice Ninja remains

@@ -7,6 +7,7 @@ def test_plugins_publish_honest_restore_capabilities() -> None:
     expected = {
         "calcom": "automatic",
         "gitea": "automatic",
+        "homelab_backup": "partial",
         "mysql": "partial",
         "postgresql": "automatic",
         "vaultwarden": "automatic",
