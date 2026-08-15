@@ -1,8 +1,10 @@
 # Plugin compatibility and deployment map
 
 This matrix ties each plugin to the component declaration in `homelab-infra` and
-to the isolated verification performed for this release. It contains no service
-credentials. Re-run the drill contract after changing any component image.
+to the isolated verification performed for v0.2.1. It contains no service
+credentials. Re-run the drill contract after changing any component image. A
+new release must update this file from current manifests and fresh local drill
+evidence rather than carrying these versions forward by assumption.
 
 | Plugin | Homelab component declaration | Verification | Restore result |
 | --- | --- | --- | --- |
@@ -16,7 +18,10 @@ credentials. Re-run the drill contract after changing any component image.
 | Radarr | `ghcr.io/linuxserver/radarr:6.3.0.10514-ls313` | Connectivity and two validated native archives passed | Isolated upload, restart, and readiness passed |
 | Sonarr | `ghcr.io/linuxserver/sonarr:4.0.19.2979-ls320` | Connectivity and two validated native archives passed | Isolated upload, restart, and readiness passed |
 | Vaultwarden | `vaultwarden/server:1.37.1` | Connectivity, two validated component archives, exact-image command checks, and synthetic component replacement passed | Isolated restore, SQLite validation, rollback-safe restart, and application readiness passed |
-| WordPress | `wordpress:7.0.2` with MySQL `8.4.0` | Connectivity and two full files-plus-database archives passed | Isolated replacement, validation, and rollback-capable restore passed |
+
+The repository still contains the previously verified WordPress plugin.
+Current program scope excludes WordPress because the service is no longer used.
+No new deployment or coverage claim should be inferred for it.
 
 The authoritative declarations are currently under these `homelab-infra` paths:
 
@@ -27,28 +32,24 @@ The authoritative declarations are currently under these `homelab-infra` paths:
 - `docker.compose/tarkilnas-system/pihole/pihole.yaml`
 - `docker.compose/system/postgres/postgres.yaml`
 - `docker.compose/tarkilnas-system/vaultwarden/vaultwarden.yaml`
-- `docker.compose/work/wordpress/wordpress.yaml`
 
-## Current deployment prerequisites and gaps
+## Current deployment state and prerequisites
 
-The Docker-host backup backend currently mounts only `/backups` and `/app/db`.
-Therefore Jellyfin and WordPress cannot be configured there yet: their plugins
-also require the Jellyfin server backup directory or WordPress document root to
-be mounted into the backend. This is a deployment prerequisite, not a plugin
-fallback; the plugin intentionally refuses inaccessible paths.
+The Docker-host and TarkilNAS deployments were moved to the v0.2.1 backend and
+frontend images and redeployed. The Docker-host backend now has the declared
+Jellyfin backup-directory mount used by the verified native backup flow. Exact
+image tags, mounts, and network membership remain authoritative in
+`homelab-infra`; inspect them again before every service-specific drill.
 
 The TarkilNAS backend has the Docker socket required by Vaultwarden. Docker-socket
 access is host-equivalent privilege even when the socket is mounted read-only, so
 the backend must remain on a trusted network and target only the declared local
 Vaultwarden container.
 
-The production observations made before this release showed successful
-PostgreSQL and Vaultwarden backups, an Invoice Ninja export, and a Pi-hole v6 401
-from the legacy authentication flow. The Pi-hole implementation now uses the v6
-SID contract and passes against 2026.07.2 locally. The repaired image has not yet
-been deployed for the final production backup-only validation, so those earlier
-runs are not evidence for the new image.
+The repaired v0.2.1 deployment completed its backup-only production validation
+for the configured targets after the isolated local drills. Historical runs made
+by older images are not evidence for a newly changed plugin or component image.
 
-No production restore is permitted. Production validation is limited to
+No production restore is permitted. Production validation remains limited to
 non-destructive connectivity checks and native backup/export triggers. Every
 restore drill uses an isolated local destination.
