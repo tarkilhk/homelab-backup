@@ -1,5 +1,5 @@
 FROM mysql:8.4.0 AS mysql-client
-FROM postgres:16-bookworm AS postgres-client
+FROM postgres:18-bookworm AS postgres-client
 FROM wordpress:cli-2.12.0-php8.2 AS wordpress-cli
 
 FROM python:3.11-slim-bookworm
@@ -10,7 +10,7 @@ WORKDIR /app
 # Set environment variables
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
-ENV PATH="/usr/local/lib/postgresql/16/bin:${PATH}"
+ENV PATH="/usr/local/lib/postgresql/18/bin:${PATH}"
 
 # Install only the runtime libraries required by the version-pinned clients.
 RUN apt-get update && apt-get install -y \
@@ -28,7 +28,7 @@ RUN apt-get update && apt-get install -y \
 
 COPY --from=mysql-client /usr/bin/mysql /usr/local/bin/mysql
 COPY --from=mysql-client /usr/bin/mysqldump /usr/local/bin/mysqldump
-COPY --from=postgres-client /usr/lib/postgresql/16/bin/ /usr/local/lib/postgresql/16/bin/
+COPY --from=postgres-client /usr/lib/postgresql/18/bin/ /usr/local/lib/postgresql/18/bin/
 COPY --from=wordpress-cli /usr/local/bin/wp /usr/local/bin/wp
 RUN ln -s /usr/bin/mariadb-check /usr/local/bin/mysqlcheck
 

@@ -132,9 +132,9 @@ jobs:
           docker run --rm --entrypoint mysqlcheck \
             "${image}" --version
           docker run --rm --entrypoint pg_dump \
-            "${image}" --version | grep 'PostgreSQL) 16.'
+            "${image}" --version | grep 'PostgreSQL) 18.'
           docker run --rm --entrypoint pg_restore \
-            "${image}" --version | grep 'PostgreSQL) 16.'
+            "${image}" --version | grep 'PostgreSQL) 18.'
           docker run --rm --entrypoint wp \
             "${image}" cli version | grep 'WP-CLI 2.12.0'
           docker run --rm --entrypoint php "${image}" -r \
