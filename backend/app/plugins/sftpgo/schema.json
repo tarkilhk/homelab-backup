@@ -1,0 +1,11 @@
+{
+  "type": "object",
+  "required": ["database_path"],
+  "properties": {
+    "database_path": {
+      "type": "string",
+      "title": "Database path",
+      "default": "/sources/sftpgo/config/sftpgo.db"
+    }
+  }
+}

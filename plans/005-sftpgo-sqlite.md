@@ -6,7 +6,7 @@
 - **Effort**: M
 - **Risk**: HIGH
 - **Depends on**: Plan 001 foundation contract
-- **State**: IN PROGRESS
+- **State**: DONE (local)
 - **Production status**: BLOCKED until the local milestone and later
   infrastructure rollout are complete; production restore remains forbidden
 - **Researched at**: `drakkan/sftpgo:v2.7.5-alpine`, upstream commit
@@ -156,13 +156,13 @@ No production restore is permitted.
 
 ## Done criteria
 
-- [ ] All ten test-first slices pass.
-- [ ] Two consecutive exact-image backup-to-fresh-restore drills pass.
-- [ ] Full backend and frontend checks pass.
-- [ ] Standards/spec review has no unresolved P0/P1 findings.
-- [ ] Compatibility/recovery/changelog documentation records exact version,
+- [x] All ten test-first slices pass.
+- [x] Two consecutive exact-image backup-to-fresh-restore drills pass.
+- [x] Full backend and frontend checks pass.
+- [x] Standards/spec review has no unresolved P0/P1 findings.
+- [x] Compatibility/recovery/changelog documentation records exact version,
       DB-only scope, sensitive artifact handling, and local evidence.
-- [ ] The milestone is committed independently with this plan marked DONE.
+- [x] The milestone is committed independently with this plan marked DONE.
 
 ## STOP conditions
 

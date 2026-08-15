@@ -40,6 +40,7 @@ files, partial files, and artifacts with missing or inconsistent sidecars.
 | Lidarr | Automatic | Uploads a validated archive, restarts Lidarr, and waits for a new ready process. |
 | Pi-hole | Automatic | Imports a validated Teleporter archive and proves the service can export again. |
 | Radarr | Automatic | Uploads a validated archive, restarts Radarr, and waits for a new ready process. |
+| SFTPGo | Partial | Creates a validated SFTPGo 2.7.5 provider database only in a fresh sentinel-marked offline directory; application boot verification remains separate. |
 | Sonarr | Automatic | Uploads a validated archive, restarts Sonarr, and waits for a new ready process. |
 | Vaultwarden | Automatic | Stops the destination, restores a validated component manifest through an isolated helper, checks SQLite, proves Docker health or `/alive`, and rolls back before restart on failure. |
 
@@ -126,6 +127,43 @@ Never place the restore sentinel in a production database directory and never
 restore over `/app/db/homelab_backup.db`. Cross-version and in-place restores
 are outside this plugin contract.
 
+### SFTPGo control-plane recovery
+
+The `sftpgo` plugin reads `/var/lib/sftpgo/sftpgo.db` through a dedicated
+read-only mount and uses SQLite's online backup API while SFTPGo remains live.
+The private `.db` artifact contains the exact 2.7.5/schema-33 provider state:
+administrators, users and public keys, groups, virtual folders, shares, API
+keys, roles, IP lists, events, quotas, and provider configuration. The copied
+database is validated for its complete schema, integrity, foreign keys, and an
+administrator before publication. Active transfers, shared sessions, task
+locks, and Defender history are removed from the copy only.
+
+This is deliberately control-plane-only. It does not include `/srv/sftpgo`,
+any `/nas/*` client/media payload, generated SSH host keys, environment files,
+or Compose declarations. SFTP is disabled in the currently verified deployment;
+if it is enabled later, host-key continuity and writable user payload require a
+new backup contract.
+
+Restore is create-only and offline:
+
+1. Use SFTPGo 2.7.5, schema version 33.
+2. Create a fresh directory outside `/sources/sftpgo`, `/var/lib/sftpgo`, and
+   `/backups`.
+3. Add `.sftpgo-restore-destination` containing exactly
+   `sftpgo-v2.7.5-isolated-restore-v1` followed by one newline. Leave the
+   directory otherwise empty.
+4. Configure the destination target's `database_path` as that directory's
+   `sftpgo.db`. Existing DB/WAL/SHM files, symlinks, and overlapping paths are
+   rejected.
+5. Restore the artifact. `partial` means the mode-`0600` database was created
+   atomically and revalidated; it does not claim a service boot.
+6. Mount a copy at `/var/lib/sftpgo/sftpgo.db` in an isolated exact-image
+   container. Authenticate, confirm the SQLite provider, and inspect
+   representative users, keys, groups, folders, shares, API keys, roles, and
+   rules before any recovery cutover.
+
+Never restore SFTPGo in production through Homelab Backup.
+
 ## Plugin-specific cautions
 
 - Vaultwarden backup requires a version with the built-in `/vaultwarden backup`
@@ -162,6 +200,7 @@ The following isolated drills were run with synthetic data and no published port
 - Invoice Ninja 5.13.31
 - Gitea 1.27.1
 - Homelab Backup backend 0.2.1
+- SFTPGo 2.7.5 (`9888a3d`, pinned Alpine image digest)
 
 Each completed drill includes a non-destructive connection test, two distinct
 validated backups with sidecars, and an isolated restore. Invoice Ninja remains

@@ -12,6 +12,9 @@ All notable changes to Homelab Backup are recorded here. This project follows
 - A Homelab Backup self-backup plugin with consistent online SQLite snapshots,
   private versioned artifacts, and strict create-only offline restores verified
   by two isolated exact-image boots.
+- A SFTPGo 2.7.5 control-plane plugin with credential-free online SQLite
+  snapshots, transient-state scrubbing, and create-only restores verified by
+  two fresh exact-image boots.
 
 ## [0.2.1] - 2026-08-15
 

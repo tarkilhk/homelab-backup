@@ -9,7 +9,7 @@ Each executor must read its plan fully, honor STOP conditions, and update status
 | 002 | Add a consistent Gitea 1.27.1 backup and isolated restore plugin | P0 | L | 001 foundation | DONE (local) |
 | 003 | Add consistent Homelab Backup self-backup and offline restore | P0 | M | 001 foundation | DONE (local) |
 | 004 | Add a quiesced Standard Notes composite backup and isolated restore plugin | P0 | L | 001 foundation; downtime decision | BLOCKED |
-| 005 | Add SFTPGo v2.7.5 control-plane backup and isolated restore | P0 | M | 001 foundation | IN PROGRESS |
+| 005 | Add SFTPGo v2.7.5 control-plane backup and isolated restore | P0 | M | 001 foundation | DONE (local) |
 
 Status: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`, or `REJECTED`.
 

@@ -17,6 +17,7 @@ def test_plugins_publish_honest_restore_capabilities() -> None:
         "lidarr": "automatic",
         "pihole": "automatic",
         "radarr": "automatic",
+        "sftpgo": "partial",
         "sonarr": "automatic",
     }
 
