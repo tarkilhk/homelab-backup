@@ -9,13 +9,14 @@ from typing import Any
 
 import pytest
 
-from app.core.plugins.base import BackupContext
+from app.core.plugins.base import BackupContext, RestoreContext
 from app.core.plugins.loader import get_plugin, get_plugin_schema_path, list_plugins
 from app.core.plugins.sidecar import read_backup_sidecar
 
 HINDSIGHT_VERSION = "0.8.6"
 POSTGRES_SERVER_VERSION_NUM = 180006
 VECTOR_VERSION = "0.8.6"
+PG_TRGM_VERSION = "1.6"
 ALEMBIC_HEAD = "c7d1e9a4b3f2"
 REQUIRED_TABLES = frozenset(
     {
@@ -163,6 +164,7 @@ def _source_fingerprint_bytes() -> bytes:
                 "server_version_num": POSTGRES_SERVER_VERSION_NUM,
                 "database": SOURCE_CONFIG["database"],
                 "vector_version": VECTOR_VERSION,
+                "pg_trgm_version": PG_TRGM_VERSION,
                 "alembic_heads": [ALEMBIC_HEAD],
                 "tables": sorted(REQUIRED_TABLES),
                 "rls_tables": [],
@@ -178,7 +180,9 @@ def _toc_bytes(*, missing: str | None = None, unexpected: str | None = None) -> 
         "; Dumped from database version 18.6",
         "1; 3079 16385 EXTENSION - vector",
         "2; 0 0 COMMENT - EXTENSION vector",
-        "3; 2615 2200 SCHEMA - public hindsight",
+        "3; 3079 16386 EXTENSION - pg_trgm",
+        "4; 0 0 COMMENT - EXTENSION pg_trgm",
+        "5; 2615 2200 SCHEMA - public hindsight",
     ]
     object_id = 100
     for table in sorted(REQUIRED_TABLES - ({missing} if missing else set())):
@@ -289,6 +293,180 @@ class _BackupBoundary:
         )
 
 
+def _destination_fingerprint_bytes(
+    *,
+    database_comment: str = "homelab-backup:hindsight-restore:v1",
+    tables: list[str] | None = None,
+    vector_version: str = VECTOR_VERSION,
+) -> bytes:
+    return (
+        json.dumps(
+            {
+                "server_version_num": POSTGRES_SERVER_VERSION_NUM,
+                "database": DESTINATION_CONFIG["database"],
+                "database_comment": database_comment,
+                "vector_version": vector_version,
+                "pg_trgm_version": None,
+                "tables": [] if tables is None else tables,
+                "views": [],
+                "sequences": [],
+            }
+        )
+        + "\n"
+    ).encode()
+
+
+def _restored_fingerprint_bytes() -> bytes:
+    return (
+        json.dumps(
+            {
+                "server_version_num": POSTGRES_SERVER_VERSION_NUM,
+                "database": DESTINATION_CONFIG["database"],
+                "vector_version": VECTOR_VERSION,
+                "pg_trgm_version": PG_TRGM_VERSION,
+                "alembic_heads": [ALEMBIC_HEAD],
+                "tables": sorted(REQUIRED_TABLES),
+                "rls_tables": [],
+                "invalid_indexes": [],
+            }
+        )
+        + "\n"
+    ).encode()
+
+
+def _restore_context(
+    artifact_path: Path,
+    *,
+    config: dict[str, object] | None = None,
+    source_target_id: str = "hindsight-source-id",
+    destination_target_id: str = "hindsight-restore-id",
+) -> RestoreContext:
+    return RestoreContext(
+        job_id="hindsight-restore-job",
+        source_target_id=source_target_id,
+        destination_target_id=destination_target_id,
+        config=dict(config or DESTINATION_CONFIG),
+        artifact_path=str(artifact_path),
+        metadata={"source_target_slug": "hindsight-source"},
+    )
+
+
+def _write_restore_artifact(path: Path, payload: bytes | None = None) -> Path:
+    path.write_bytes(payload or b"PGDMP\x01\x0f synthetic Hindsight restore archive")
+    path.chmod(0o600)
+    return path
+
+
+class _RestoreBoundary:
+    def __init__(
+        self,
+        *,
+        toc: bytes | None = None,
+        destination_fingerprint: bytes | None = None,
+        restore_returncode: int = 0,
+        restore_stderr: bytes = b"",
+        block_restore: bool = False,
+    ) -> None:
+        self.toc = _toc_bytes() if toc is None else toc
+        self.destination_fingerprint = (
+            _destination_fingerprint_bytes()
+            if destination_fingerprint is None
+            else destination_fingerprint
+        )
+        self.restore_returncode = restore_returncode
+        self.restore_stderr = restore_stderr
+        self.blocking_process = _BlockingProcess() if block_restore else None
+        self.calls: list[tuple[str, ...]] = []
+        self.password_files: list[Path] = []
+        self.allowlist_paths: list[Path] = []
+        self.allowlist_contents: list[str] = []
+        self.restore_attempts = 0
+        self.restored = False
+
+    def _assert_private_credentials(self, args: tuple[str, ...], kwargs: dict[str, Any]) -> None:
+        password = str(DESTINATION_CONFIG["password"])
+        assert password not in args
+        env = kwargs["env"]
+        assert "PGPASSWORD" not in env
+        password_file = Path(env["PGPASSFILE"])
+        self.password_files.append(password_file)
+        assert password_file.is_file()
+        assert stat.S_IMODE(password_file.stat().st_mode) == 0o600
+        assert password in password_file.read_text(encoding="utf-8")
+
+    @staticmethod
+    def _write_stderr(kwargs: dict[str, Any], payload: bytes) -> None:
+        target = kwargs.get("stderr")
+        if payload and target is not None and hasattr(target, "write"):
+            target.write(payload)
+
+    def _capture_allowlist(self, args: tuple[str, ...]) -> None:
+        assert "--use-list" in args
+        allowlist = Path(args[args.index("--use-list") + 1])
+        self.allowlist_paths.append(allowlist)
+        assert allowlist.is_file()
+        assert stat.S_IMODE(allowlist.stat().st_mode) == 0o600
+        contents = allowlist.read_text(encoding="utf-8")
+        self.allowlist_contents.append(contents)
+        assert " EXTENSION - vector" not in contents
+        assert " COMMENT - EXTENSION vector" not in contents
+        assert " EXTENSION - pg_trgm" in contents
+        assert " COMMENT - EXTENSION pg_trgm" in contents
+        for table in REQUIRED_TABLES:
+            assert f" TABLE public {table} " in contents
+
+    async def exec(self, *args: str, **kwargs: Any) -> Any:
+        argv = tuple(args)
+        self.calls.append(argv)
+        assert "shell" not in kwargs
+        assert args[0] not in {"bash", "sh", "/bin/bash", "/bin/sh"}
+
+        if args[0] == "psql":
+            self._assert_private_credentials(argv, kwargs)
+            sql = " ".join(args).upper()
+            forbidden = ("DROP ", "TRUNCATE ", "DELETE ", "CREATE ", "ALTER ")
+            assert not any(keyword in sql for keyword in forbidden)
+            if "ANALYZE" in sql:
+                assert self.restored
+                return _CompletedProcess()
+            output = (
+                _restored_fingerprint_bytes() if self.restored else self.destination_fingerprint
+            )
+            return _CompletedProcess(stdout=output)
+
+        assert args[0] == "pg_restore"
+        if "--list" in args:
+            return _CompletedProcess(stdout=self.toc)
+
+        self.restore_attempts += 1
+        self._assert_private_credentials(argv, kwargs)
+        self._capture_allowlist(argv)
+        required_arguments = {
+            "--single-transaction",
+            "--exit-on-error",
+            "--no-owner",
+            "--no-privileges",
+            "--dbname",
+            "--use-list",
+        }
+        assert required_arguments.issubset(argv)
+        assert not {"--clean", "--create", "--if-exists", "--disable-triggers"}.intersection(argv)
+        assert argv[argv.index("-h") + 1] == str(DESTINATION_CONFIG["host"])
+        assert argv[argv.index("-p") + 1] == str(DESTINATION_CONFIG["port"])
+        assert argv[argv.index("-U") + 1] == str(DESTINATION_CONFIG["user"])
+        assert argv[argv.index("--dbname") + 1] == str(DESTINATION_CONFIG["database"])
+        assert argv[-1].endswith(".dump")
+        self._write_stderr(kwargs, self.restore_stderr)
+        if self.blocking_process is not None:
+            return self.blocking_process
+        if self.restore_returncode == 0:
+            self.restored = True
+        return _CompletedProcess(
+            returncode=self.restore_returncode,
+            stderr=self.restore_stderr,
+        )
+
+
 @pytest.mark.asyncio
 async def test_hindsight_discovery_schema_and_partial_restore_contract() -> None:
     plugin_class = _plugin_class()
@@ -372,6 +550,7 @@ async def test_source_connectivity_requires_the_exact_read_only_fingerprint(
         "server_version_num": POSTGRES_SERVER_VERSION_NUM,
         "database": SOURCE_CONFIG["database"],
         "vector_version": VECTOR_VERSION,
+        "pg_trgm_version": PG_TRGM_VERSION,
         "alembic_heads": [ALEMBIC_HEAD],
         "tables": sorted(REQUIRED_TABLES),
         "rls_tables": [],
@@ -553,5 +732,238 @@ async def test_backup_cancellation_reaps_child_and_removes_every_partial_file(
     assert process.terminated or process.killed
     assert process.reaped
     assert not [path for path in backup_root.rglob("*") if path.is_file()]
+    assert boundary.password_files
+    assert all(not path.exists() for path in boundary.password_files)
+
+
+@pytest.mark.asyncio
+async def test_restore_accepts_only_destination_mode_and_distinct_targets(
+    tmp_path: Path,
+) -> None:
+    artifact = _write_restore_artifact(tmp_path / "hindsight.dump")
+    plugin = _plugin_class()(name="hindsight")
+
+    with pytest.raises(ValueError, match="restore.destination|destination mode"):
+        await plugin.restore(_restore_context(artifact, config=SOURCE_CONFIG))
+
+    with pytest.raises(ValueError, match="distinct|same|source.*destination"):
+        await plugin.restore(
+            _restore_context(
+                artifact,
+                source_target_id="same-target",
+                destination_target_id="same-target",
+            )
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("destination_fingerprint", "message"),
+    (
+        (
+            _destination_fingerprint_bytes(database_comment="wrong-sentinel"),
+            "sentinel|comment",
+        ),
+        (
+            _destination_fingerprint_bytes(tables=["existing_state"]),
+            "empty|existing|table",
+        ),
+        (
+            _destination_fingerprint_bytes(vector_version="0.8.5"),
+            "vector|version",
+        ),
+    ),
+    ids=("wrong-sentinel", "nonempty", "wrong-vector"),
+)
+async def test_restore_requires_exact_empty_sentinel_destination_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    destination_fingerprint: bytes,
+    message: str,
+) -> None:
+    artifact = _write_restore_artifact(tmp_path / "hindsight.dump")
+    boundary = _RestoreBoundary(destination_fingerprint=destination_fingerprint)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", boundary.exec)
+
+    with pytest.raises((RuntimeError, ValueError), match=message):
+        await _plugin_class()(name="hindsight").restore(_restore_context(artifact))
+
+    assert boundary.restore_attempts == 0
+    assert artifact.read_bytes().startswith(b"PGDMP")
+    assert boundary.password_files
+    assert all(not path.exists() for path in boundary.password_files)
+
+
+@pytest.mark.asyncio
+async def test_restore_uses_vector_only_allowlist_and_returns_verified_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"PGDMP\x01\x0f immutable Hindsight restore archive"
+    artifact = _write_restore_artifact(tmp_path / "hindsight.dump", payload)
+    boundary = _RestoreBoundary()
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", boundary.exec)
+    plugin = _plugin_class()(name="hindsight")
+
+    result = await plugin.restore(_restore_context(artifact))
+
+    assert result["status"] == "success"
+    message = str(result["message"]).lower()
+    assert "boot" in message
+    assert "config" in message or "oauth" in message
+    assert plugin.restore_capability == "partial"
+    assert boundary.restore_attempts == 1
+    assert boundary.restored
+    assert artifact.read_bytes() == payload
+
+    inspect_index = next(
+        index for index, call in enumerate(boundary.calls) if call[:2] == ("pg_restore", "--list")
+    )
+    preflight_index = next(index for index, call in enumerate(boundary.calls) if call[0] == "psql")
+    restore_index = next(
+        index
+        for index, call in enumerate(boundary.calls)
+        if call[0] == "pg_restore" and "--list" not in call
+    )
+    assert inspect_index < preflight_index < restore_index
+    assert boundary.allowlist_contents
+    assert boundary.allowlist_paths
+    assert all(not path.exists() for path in boundary.allowlist_paths)
+    assert boundary.password_files
+    assert all(not path.exists() for path in boundary.password_files)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("variant", "message"),
+    (
+        ("missing-file", "not found|missing|artifact"),
+        ("corrupt-header", "malformed|archive|header"),
+        ("missing-table", "file_storage|missing|schema"),
+        ("unexpected-table", "unexpected|schema|table"),
+    ),
+)
+async def test_restore_refuses_untrusted_archive_before_destination_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    variant: str,
+    message: str,
+) -> None:
+    artifact = tmp_path / "hindsight.dump"
+    toc = _toc_bytes()
+    if variant == "missing-file":
+        pass
+    elif variant == "corrupt-header":
+        _write_restore_artifact(artifact, b"not a PostgreSQL archive")
+    else:
+        _write_restore_artifact(artifact)
+        if variant == "missing-table":
+            toc = _toc_bytes(missing="file_storage")
+        else:
+            toc = _toc_bytes(unexpected="unresearched_state")
+    boundary = _RestoreBoundary(toc=toc)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", boundary.exec)
+
+    with pytest.raises((FileNotFoundError, RuntimeError, ValueError), match=message):
+        await _plugin_class()(name="hindsight").restore(_restore_context(artifact))
+
+    assert boundary.restore_attempts == 0
+    assert not boundary.restored
+    assert all(not path.exists() for path in boundary.password_files)
+
+
+@pytest.mark.asyncio
+async def test_restore_transaction_failure_preserves_destination_and_cleans_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"PGDMP\x01\x0f immutable failed-restore archive"
+    artifact = _write_restore_artifact(tmp_path / "hindsight.dump", payload)
+    secret = str(DESTINATION_CONFIG["password"])
+    boundary = _RestoreBoundary(
+        restore_returncode=1,
+        restore_stderr=f"transaction aborted near {secret}".encode(),
+    )
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", boundary.exec)
+
+    with pytest.raises(RuntimeError, match="restore|transaction") as error:
+        await _plugin_class()(name="hindsight").restore(_restore_context(artifact))
+
+    assert secret not in str(error.value)
+    assert boundary.restore_attempts == 1
+    assert not boundary.restored
+    assert artifact.read_bytes() == payload
+    assert all(
+        not {"--clean", "--create", "--if-exists", "--disable-triggers"}.intersection(call)
+        for call in boundary.calls
+    )
+    assert boundary.allowlist_paths
+    assert all(not path.exists() for path in boundary.allowlist_paths)
+    assert boundary.password_files
+    assert all(not path.exists() for path in boundary.password_files)
+
+
+@pytest.mark.asyncio
+async def test_restore_timeout_reaps_child_and_cleans_ephemeral_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"PGDMP\x01\x0f immutable timeout archive"
+    artifact = _write_restore_artifact(tmp_path / "hindsight.dump", payload)
+    hindsight_module = _plugin_module()
+    boundary = _RestoreBoundary(block_restore=True)
+    monkeypatch.setattr(hindsight_module, "RESTORE_TIMEOUT_SECONDS", 0.01, raising=False)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", boundary.exec)
+
+    with pytest.raises((RuntimeError, TimeoutError), match="timed out"):
+        await _plugin_class()(name="hindsight").restore(_restore_context(artifact))
+
+    process = boundary.blocking_process
+    assert process is not None
+    assert process.terminated or process.killed
+    assert process.reaped
+    assert not boundary.restored
+    assert artifact.read_bytes() == payload
+    assert boundary.allowlist_paths
+    assert all(not path.exists() for path in boundary.allowlist_paths)
+    assert boundary.password_files
+    assert all(not path.exists() for path in boundary.password_files)
+
+
+@pytest.mark.asyncio
+async def test_restore_cancellation_reaps_child_and_cleans_ephemeral_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"PGDMP\x01\x0f immutable cancelled archive"
+    artifact = _write_restore_artifact(tmp_path / "hindsight.dump", payload)
+    boundary = _RestoreBoundary(block_restore=True)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", boundary.exec)
+    task = asyncio.create_task(
+        _plugin_class()(name="hindsight").restore(_restore_context(artifact))
+    )
+    process = boundary.blocking_process
+    assert process is not None
+    started_task = asyncio.create_task(process.started.wait())
+    completed, _ = await asyncio.wait(
+        {task, started_task},
+        timeout=1.0,
+        return_when=asyncio.FIRST_COMPLETED,
+    )
+    if task in completed:
+        started_task.cancel()
+        await task
+    assert started_task in completed
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert process.terminated or process.killed
+    assert process.reaped
+    assert not boundary.restored
+    assert artifact.read_bytes() == payload
+    assert boundary.allowlist_paths
+    assert all(not path.exists() for path in boundary.allowlist_paths)
     assert boundary.password_files
     assert all(not path.exists() for path in boundary.password_files)

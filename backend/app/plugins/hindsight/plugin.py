@@ -16,6 +16,7 @@ from app.core.subprocesses import run_process_with_timeout
 
 POSTGRES_SERVER_MAJOR = 18
 VECTOR_VERSION = "0.8.6"
+PG_TRGM_VERSION = "1.6"
 ALEMBIC_HEAD = "c7d1e9a4b3f2"
 CONNECT_TIMEOUT_SECONDS = 30.0
 BACKUP_TIMEOUT_SECONDS = 3600.0
@@ -26,6 +27,7 @@ MAX_TOC_BYTES = 1024 * 1024
 MAX_TOC_ENTRIES = 1000
 RESTORE_DATABASE_PREFIX = "hlb_hindsight_restore_"
 RESTORE_SENTINEL = "homelab-backup:hindsight-restore:v1"
+RESTORE_TIMEOUT_SECONDS = 3600.0
 _SAFE_HOST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$-]*$")
 
@@ -62,6 +64,9 @@ SELECT json_build_object(
   'vector_version', (
     SELECT extversion FROM pg_extension WHERE extname = 'vector'
   ),
+  'pg_trgm_version', (
+    SELECT extversion FROM pg_extension WHERE extname = 'pg_trgm'
+  ),
   'alembic_heads', (
     SELECT COALESCE(json_agg(version_num ORDER BY version_num), '[]'::json)
     FROM alembic_version
@@ -89,6 +94,9 @@ SELECT json_build_object(
   ),
   'vector_version', (
     SELECT extversion FROM pg_extension WHERE extname = 'vector'
+  ),
+  'pg_trgm_version', (
+    SELECT extversion FROM pg_extension WHERE extname = 'pg_trgm'
   ),
   'tables', (
     SELECT COALESCE(json_agg(tablename ORDER BY tablename), '[]'::json)
@@ -242,6 +250,8 @@ class HindsightPlugin(BackupPlugin):
         if value.get("vector_version") != VECTOR_VERSION:
             raise RuntimeError("Hindsight pgvector version did not match 0.8.6")
         if config["mode"] == "source":
+            if value.get("pg_trgm_version") != PG_TRGM_VERSION:
+                raise RuntimeError("Hindsight pg_trgm version did not match 1.6")
             if value.get("alembic_heads") != [ALEMBIC_HEAD]:
                 raise RuntimeError("Hindsight database migration revision did not match 0.8.6")
             if set(value.get("tables", [])) != REQUIRED_TABLES:
@@ -254,6 +264,8 @@ class HindsightPlugin(BackupPlugin):
             raise ValueError("Hindsight restore destination has an unsafe database name")
         if value.get("database_comment") != RESTORE_SENTINEL:
             raise RuntimeError("Hindsight restore destination sentinel did not match")
+        if value.get("pg_trgm_version") is not None:
+            raise RuntimeError("Hindsight restore destination must not preinstall pg_trgm")
         if any(value.get(key) != [] for key in ("tables", "views", "sequences")):
             raise RuntimeError("Hindsight restore destination must be empty")
 
@@ -391,6 +403,7 @@ class HindsightPlugin(BackupPlugin):
             or len(lines) > MAX_TOC_ENTRIES
             or not any("Dumped from database version 18." in line for line in lines)
             or not any(" EXTENSION - vector" in line for line in lines)
+            or not any(" EXTENSION - pg_trgm" in line for line in lines)
         ):
             raise RuntimeError("Hindsight archive has a malformed TOC")
         tables = {
@@ -410,7 +423,154 @@ class HindsightPlugin(BackupPlugin):
             )
 
     async def restore(self, context: RestoreContext) -> Dict[str, Any]:
-        raise NotImplementedError("Hindsight restore is not implemented")
+        config = context.config or {}
+        if not await self.validate_config(config) or config.get("mode") != "restore_destination":
+            raise ValueError("Hindsight restore requires a valid restore_destination mode")
+        if context.source_target_id == context.destination_target_id:
+            raise ValueError("Hindsight restore requires distinct source and destination targets")
+
+        artifact = Path(context.artifact_path)
+        if not artifact.exists():
+            raise FileNotFoundError(f"Hindsight restore artifact not found: {artifact}")
+        if not artifact.is_file() or artifact.is_symlink():
+            raise ValueError("Hindsight restore artifact must be a regular file")
+        with artifact.open("rb") as artifact_file:
+            if artifact_file.read(5) != b"PGDMP":
+                raise RuntimeError("Hindsight restore artifact has a malformed archive header")
+
+        toc = await self._inspect_archive(artifact)
+        self._validate_archive_toc(toc)
+        fingerprint = await self._fingerprint(config)
+        self._validate_fingerprint(config, fingerprint)
+
+        allowlist = self._write_restore_allowlist(toc)
+        password_file = self._password_file(config)
+        try:
+            with tempfile.TemporaryFile(mode="w+b") as error_file:
+                try:
+                    process = await asyncio.create_subprocess_exec(
+                        "pg_restore",
+                        "-h",
+                        str(config["host"]),
+                        "-p",
+                        str(config.get("port", 5432)),
+                        "-U",
+                        str(config["user"]),
+                        "--dbname",
+                        str(config["database"]),
+                        "--use-list",
+                        str(allowlist),
+                        "--single-transaction",
+                        "--exit-on-error",
+                        "--no-owner",
+                        "--no-privileges",
+                        str(artifact),
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=error_file,
+                        env=self._environment(password_file),
+                    )
+                except FileNotFoundError as exc:
+                    raise FileNotFoundError(
+                        "PostgreSQL 18 pg_restore client is unavailable"
+                    ) from exc
+                await run_process_with_timeout(
+                    process,
+                    process.communicate(),
+                    operation="Hindsight transactional restore",
+                    timeout_seconds=RESTORE_TIMEOUT_SECONDS,
+                )
+                error_file.seek(0)
+                stderr = error_file.read(MAX_TOC_BYTES + 1)
+            if process.returncode != 0:
+                raise RuntimeError("Hindsight transactional restore failed")
+            if stderr:
+                raise RuntimeError("Hindsight transactional restore emitted warning output")
+
+            await self._analyze_restored_database(config, password_file)
+            restored_config = dict(config)
+            restored_config["mode"] = "source"
+            restored = await self._fingerprint(restored_config)
+            self._validate_fingerprint(restored_config, restored)
+            if restored.get("invalid_indexes", []) != []:
+                raise RuntimeError("Hindsight restored database contains invalid indexes")
+        finally:
+            password_file.unlink(missing_ok=True)
+            allowlist.unlink(missing_ok=True)
+
+        return {
+            "status": "success",
+            "artifact_path": str(artifact),
+            "artifact_bytes": artifact.stat().st_size,
+            "message": (
+                "Hindsight database restore completed; exact-image boot and "
+                "external OAuth/configuration proof remain required"
+            ),
+        }
+
+    def _write_restore_allowlist(self, toc: bytes) -> Path:
+        text = toc.decode("utf-8")
+        lines = text.splitlines(keepends=True)
+        kept: list[str] = []
+        omitted = 0
+        for line in lines:
+            if " EXTENSION - vector" in line or " COMMENT - EXTENSION vector" in line:
+                omitted += 1
+                continue
+            kept.append(line)
+        if omitted != 2:
+            raise RuntimeError("Hindsight archive vector TOC entries were ambiguous")
+        descriptor, raw_path = tempfile.mkstemp(prefix="hindsight-restore-toc-")
+        path = Path(raw_path)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as allowlist_file:
+                allowlist_file.writelines(kept)
+                allowlist_file.flush()
+                os.fsync(allowlist_file.fileno())
+        except BaseException:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+            path.unlink(missing_ok=True)
+            raise
+        return path
+
+    async def _analyze_restored_database(
+        self,
+        config: Dict[str, Any],
+        password_file: Path,
+    ) -> None:
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "psql",
+                "-X",
+                "-h",
+                str(config["host"]),
+                "-p",
+                str(config.get("port", 5432)),
+                "-U",
+                str(config["user"]),
+                "--dbname",
+                str(config["database"]),
+                "--set",
+                "ON_ERROR_STOP=on",
+                "-c",
+                "ANALYZE",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+                env=self._environment(password_file),
+            )
+        except FileNotFoundError as exc:
+            raise FileNotFoundError("PostgreSQL 18 psql client is unavailable") from exc
+        _, _ = await run_process_with_timeout(
+            process,
+            process.communicate(),
+            operation="Hindsight restored database analysis",
+            timeout_seconds=CONNECT_TIMEOUT_SECONDS,
+        )
+        if process.returncode != 0:
+            raise RuntimeError("Hindsight restored database analysis failed")
 
     async def get_status(self, context: BackupContext) -> Dict[str, Any]:
         try:
