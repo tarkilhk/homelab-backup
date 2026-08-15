@@ -130,6 +130,7 @@ class JellyfinPlugin(BackupPlugin):
         ) as artifact:
             with source_path.open("rb") as source, artifact.temporary_path.open("wb") as dest:
                 shutil.copyfileobj(source, dest, length=1024 * 1024)
+        source_path.unlink()
         return {"artifact_path": str(artifact.final_path)}
 
     async def restore(self, context: RestoreContext) -> Dict[str, Any]:

@@ -91,6 +91,7 @@ async def test_backup_writes_artifact(tmp_path, monkeypatch):
     result = await plugin.backup(ctx)
     artifact_path = result.get("artifact_path")
     assert artifact_path and os.path.isabs(artifact_path) and os.path.exists(artifact_path)
+    assert not (server_backup_dir / "jellyfin-backup-20260815010000.zip").exists()
 
 
 @pytest.mark.asyncio
