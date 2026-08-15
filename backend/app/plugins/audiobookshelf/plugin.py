@@ -579,8 +579,29 @@ def _copy_metadata_tree(source: Path, destination: Path) -> None:
             output.mkdir(mode=0o700, exist_ok=True)
         elif stat.S_ISREG(status.st_mode):
             output.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            with path.open("rb") as input_file, output.open("xb") as output_file:
-                shutil.copyfileobj(input_file, output_file, 1024 * 1024)
+            input_descriptor = os.open(
+                path,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            )
+            try:
+                opened_status = os.fstat(input_descriptor)
+                if (
+                    _status_identity(opened_status) != _status_identity(status)
+                    or opened_status.st_size != status.st_size
+                    or opened_status.st_mtime_ns != status.st_mtime_ns
+                ):
+                    raise RuntimeError("Audiobookshelf source changed during backup")
+                with (
+                    os.fdopen(
+                        input_descriptor,
+                        "rb",
+                        closefd=False,
+                    ) as input_file,
+                    output.open("xb") as output_file,
+                ):
+                    shutil.copyfileobj(input_file, output_file, 1024 * 1024)
+            finally:
+                os.close(input_descriptor)
             os.chmod(output, 0o600)
         else:
             raise ValueError("Audiobookshelf metadata source contains a special file")
@@ -1186,12 +1207,43 @@ def _stage_restore_archive(
         os.fsync(database_file.fileno())
     shutil.copytree(extracted / "metadata-items", staged_items, dirs_exist_ok=True)
     shutil.copytree(extracted / "metadata-authors", staged_authors, dirs_exist_ok=True)
+    _fsync_tree(staged_items)
+    _fsync_tree(staged_authors)
     staged_view = workspace / "staged-view"
     staged_view.mkdir(mode=0o700)
     os.symlink(staged_items, staged_view / "metadata-items")
     os.symlink(staged_authors, staged_view / "metadata-authors")
     staged_references = _validate_database(staged_database)
     _validate_staged_metadata(staged_view, staged_references)
+
+
+def _fsync_tree(root: Path) -> None:
+    directories: list[Path] = []
+    for current_root, directory_names, file_names in os.walk(root):
+        current = Path(current_root)
+        directories.append(current)
+        for name in directory_names:
+            candidate = current / name
+            if candidate.is_symlink():
+                raise ValueError("Audiobookshelf restore staging contains a symlink")
+        for name in file_names:
+            descriptor = os.open(
+                current / name,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            )
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+    for directory in reversed(directories):
+        descriptor = os.open(
+            directory,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 def _publish_restore(
@@ -1265,6 +1317,8 @@ def _worker_entry(
         paths = tuple(Path(value) for value in arguments)
         if operation == "validate":
             _validate_source(paths[0], paths[1])
+        elif operation == "validate-restore":
+            _validate_archive(paths[0], paths[1])
         elif operation == "backup":
             _build_archive(paths[0], paths[1], paths[2], paths[3])
         elif operation == "restore":
@@ -1325,7 +1379,7 @@ async def _await_worker(
     timeout_seconds: float,
 ) -> None:
     started = time.monotonic()
-    operation_label = "validation" if operation == "validate" else operation
+    operation_label = "validation" if operation in {"validate", "validate-restore"} else operation
     try:
         while process.is_alive():
             if time.monotonic() - started >= timeout_seconds:
@@ -1454,6 +1508,16 @@ class AudiobookshelfPlugin(BackupPlugin):
         validation_root: Path | None = None
         succeeded = False
         try:
+            workspace = Path(tempfile.mkdtemp(prefix="audiobookshelf-restore-preflight-"))
+            os.chmod(workspace, 0o700)
+            await _run_worker(
+                "validate-restore",
+                artifact,
+                workspace / "validated",
+                timeout_seconds=RESTORE_TIMEOUT_SECONDS,
+            )
+            _remove_private_workspace(workspace)
+            workspace = None
             config_destination = _open_restore_destination(
                 config_path,
                 sentinel_name=CONFIG_RESTORE_SENTINEL,

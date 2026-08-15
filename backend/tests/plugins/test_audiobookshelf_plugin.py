@@ -675,6 +675,99 @@ async def test_restore_is_create_only_and_revalidates(
 
 
 @pytest.mark.anyio
+async def test_restore_validates_artifact_before_destination_staging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.plugins.audiobookshelf.plugin as plugin_module
+
+    source_config, source_metadata = _source(tmp_path)
+    backup_root = tmp_path / "backups"
+    monkeypatch.setattr(plugin_module, "BACKUP_BASE_PATH", str(backup_root))
+    plugin = get_plugin("audiobookshelf")
+    artifact = Path(
+        (await plugin.backup(_backup_context(source_config, source_metadata, backup_root)))[
+            "artifact_path"
+        ]
+    )
+    config, metadata = _restore_destinations(tmp_path)
+    observations: dict[str, tuple[set[str], set[str]]] = {}
+    original_start_worker = plugin_module._start_worker
+
+    def observe_start(operation: str, *paths: Path):  # type: ignore[no-untyped-def]
+        if operation in {"validate-restore", "restore"}:
+            observations[operation] = (
+                {entry.name for entry in config.iterdir()},
+                {entry.name for entry in metadata.iterdir()},
+            )
+        return original_start_worker(operation, *paths)
+
+    monkeypatch.setattr(plugin_module, "_start_worker", observe_start)
+
+    await plugin.restore(_restore_context(artifact, config, metadata))
+
+    assert observations["validate-restore"] == (
+        {CONFIG_SENTINEL},
+        {METADATA_SENTINEL},
+    )
+    assert observations["restore"][0] != {CONFIG_SENTINEL}
+    assert observations["restore"][1] != {METADATA_SENTINEL}
+
+
+def test_metadata_copy_refuses_file_replaced_by_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.plugins.audiobookshelf.plugin as plugin_module
+
+    source = tmp_path / "source"
+    source.mkdir()
+    victim = source / "metadata.json"
+    victim.write_text("{}", encoding="utf-8")
+    secret = tmp_path / "secret"
+    secret.write_text("do-not-copy", encoding="utf-8")
+    original_open = plugin_module.os.open
+    replaced = False
+
+    def replace_before_open(path: os.PathLike[str] | str, flags: int, *args: int) -> int:
+        nonlocal replaced
+        if Path(path) == victim and not replaced:
+            replaced = True
+            victim.rename(source / "original-metadata.json")
+            victim.symlink_to(secret)
+        return original_open(path, flags, *args)
+
+    monkeypatch.setattr(plugin_module.os, "open", replace_before_open)
+
+    with pytest.raises(OSError):
+        plugin_module._copy_metadata_tree(source, tmp_path / "destination")
+    assert not (tmp_path / "destination" / "metadata.json").exists()
+
+
+def test_fsync_tree_flushes_files_and_nested_directories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.plugins.audiobookshelf.plugin as plugin_module
+
+    root = tmp_path / "metadata"
+    nested = root / "items" / "book-1"
+    nested.mkdir(parents=True)
+    (nested / "metadata.json").write_text("{}", encoding="utf-8")
+    observed_modes: list[int] = []
+
+    def record_fsync(file_descriptor: int) -> None:
+        observed_modes.append(os.fstat(file_descriptor).st_mode)
+
+    monkeypatch.setattr(plugin_module.os, "fsync", record_fsync)
+
+    plugin_module._fsync_tree(root)
+
+    assert any(stat.S_ISREG(mode) for mode in observed_modes)
+    assert sum(stat.S_ISDIR(mode) for mode in observed_modes) == 3
+
+
+@pytest.mark.anyio
 async def test_empty_native_metadata_roots_backup_and_restore(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
