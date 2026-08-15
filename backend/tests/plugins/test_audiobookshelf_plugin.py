@@ -700,6 +700,9 @@ async def test_restore_validates_artifact_before_destination_staging(
                 {entry.name for entry in config.iterdir()},
                 {entry.name for entry in metadata.iterdir()},
             )
+        if operation == "restore":
+            assert paths[0] != artifact
+            artifact.write_bytes(b"replaced after preflight")
         return original_start_worker(operation, *paths)
 
     monkeypatch.setattr(plugin_module, "_start_worker", observe_start)

@@ -1305,6 +1305,50 @@ def _remove_private_workspace(workspace: Path) -> None:
         raise RuntimeError("Audiobookshelf private workspace cleanup failed")
 
 
+def _copy_restore_artifact(artifact: Path, destination: Path) -> None:
+    source_descriptor = os.open(
+        artifact,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+    )
+    destination_descriptor: int | None = None
+    try:
+        before = os.fstat(source_descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("Audiobookshelf restore artifact must be a regular file")
+        destination_descriptor = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+            0o600,
+        )
+        with (
+            os.fdopen(
+                source_descriptor,
+                "rb",
+                closefd=False,
+            ) as source_file,
+            os.fdopen(
+                destination_descriptor,
+                "wb",
+                closefd=False,
+            ) as destination_file,
+        ):
+            shutil.copyfileobj(source_file, destination_file, 1024 * 1024)
+            destination_file.flush()
+            os.fsync(destination_descriptor)
+        after = os.fstat(source_descriptor)
+        if (
+            _status_identity(before) != _status_identity(after)
+            or before.st_size != after.st_size
+            or before.st_mtime_ns != after.st_mtime_ns
+            or before.st_ctime_ns != after.st_ctime_ns
+        ):
+            raise RuntimeError("Audiobookshelf restore artifact changed while being staged")
+    finally:
+        if destination_descriptor is not None:
+            os.close(destination_descriptor)
+        os.close(source_descriptor)
+
+
 def _worker_entry(
     connection: Connection,
     operation: str,
@@ -1510,14 +1554,14 @@ class AudiobookshelfPlugin(BackupPlugin):
         try:
             workspace = Path(tempfile.mkdtemp(prefix="audiobookshelf-restore-preflight-"))
             os.chmod(workspace, 0o700)
+            staged_artifact = workspace / "artifact.audiobookshelf"
+            _copy_restore_artifact(artifact, staged_artifact)
             await _run_worker(
                 "validate-restore",
-                artifact,
+                staged_artifact,
                 workspace / "validated",
                 timeout_seconds=RESTORE_TIMEOUT_SECONDS,
             )
-            _remove_private_workspace(workspace)
-            workspace = None
             config_destination = _open_restore_destination(
                 config_path,
                 sentinel_name=CONFIG_RESTORE_SENTINEL,
@@ -1530,11 +1574,11 @@ class AudiobookshelfPlugin(BackupPlugin):
             )
             _require_distinct_restore_destinations(config_destination, metadata_destination)
             staging = _create_restore_staging(config_destination, metadata_destination)
-            workspace = Path(tempfile.mkdtemp(prefix="audiobookshelf-restore-"))
-            os.chmod(workspace, 0o700)
+            staging_workspace = workspace / "staging"
+            staging_workspace.mkdir(mode=0o700)
             await _run_worker(
                 "restore",
-                artifact,
+                staged_artifact,
                 _stable_fd_path(
                     config_destination.file_descriptor,
                     staging.database_name,
@@ -1547,7 +1591,7 @@ class AudiobookshelfPlugin(BackupPlugin):
                     metadata_destination.file_descriptor,
                     staging.authors_name,
                 ),
-                workspace,
+                staging_workspace,
                 timeout_seconds=RESTORE_TIMEOUT_SECONDS,
             )
             _remove_private_workspace(workspace)
