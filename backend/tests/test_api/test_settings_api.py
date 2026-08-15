@@ -17,6 +17,12 @@ from app.domain.enums import RunStatus
 from app.models import Settings as SettingsModel
 
 
+def _test_client(app: FastAPI) -> TestClient:
+    """Create the deterministic synchronous client used by route tests."""
+
+    return TestClient(app, backend_options={"use_uvloop": True})
+
+
 @pytest.fixture()
 def app_with_db():
     """Create a test app with in-memory database."""
@@ -55,7 +61,7 @@ class TestGetSettings:
     def test_returns_default_settings_on_first_call(self, app_with_db):
         """First call creates and returns default settings."""
         app, _ = app_with_db
-        client = TestClient(app)
+        client = _test_client(app)
 
         response = client.get("/settings/")
         assert response.status_code == 200
@@ -78,7 +84,7 @@ class TestGetSettings:
         db.commit()
         db.close()
 
-        client = TestClient(app)
+        client = _test_client(app)
         response = client.get("/settings/")
         assert response.status_code == 200
 
@@ -94,7 +100,7 @@ class TestUpdateSettings:
     def test_updates_retention_policy(self, app_with_db):
         """Updates global retention policy."""
         app, _ = app_with_db
-        client = TestClient(app)
+        client = _test_client(app)
 
         policy = {"rules": [{"unit": "month", "window": 6, "keep": 1}]}
         response = client.put(
@@ -120,7 +126,7 @@ class TestUpdateSettings:
         db.commit()
         db.close()
 
-        client = TestClient(app)
+        client = _test_client(app)
         response = client.put(
             "/settings/",
             json={"global_retention_policy_json": None},
@@ -148,7 +154,7 @@ class TestRetentionPreview:
         db.commit()
         db.close()
 
-        client = TestClient(app)
+        client = _test_client(app)
         response = client.post("/settings/retention/preview?job_id=1&target_id=1")
         assert response.status_code == 200
 
@@ -161,7 +167,7 @@ class TestRetentionPreview:
     def test_preview_all_without_pair(self, app_with_db):
         """The global cleanup flow can preview every eligible pair."""
         app, _ = app_with_db
-        client = TestClient(app)
+        client = _test_client(app)
 
         response = client.post("/settings/retention/preview")
 
@@ -178,7 +184,7 @@ class TestRetentionPreview:
     def test_preview_rejects_partial_pair(self, app_with_db):
         """A pair-specific preview requires both identifiers."""
         app, _ = app_with_db
-        client = TestClient(app)
+        client = _test_client(app)
 
         response = client.post("/settings/retention/preview?job_id=1")
 
@@ -211,7 +217,7 @@ class TestRetentionRun:
         job_id = manual_job.id
         db.close()
 
-        client = TestClient(app)
+        client = _test_client(app)
         response = client.post("/settings/retention/run?confirmed=true")
 
         # Should succeed (even if no backups to clean)
@@ -246,7 +252,7 @@ class TestRetentionRun:
         db.commit()
         db.close()
 
-        client = TestClient(app)
+        client = _test_client(app)
         # Legacy behavior: specific job_id and target_id
         response = client.post("/settings/retention/run?job_id=1&target_id=1&confirmed=true")
 
@@ -259,7 +265,7 @@ class TestRetentionRun:
     def test_run_requires_explicit_confirmation(self, app_with_db):
         """Destructive retention cannot be invoked without an explicit gate."""
         app, SessionLocal = app_with_db
-        client = TestClient(app)
+        client = _test_client(app)
 
         response = client.post("/settings/retention/run")
 

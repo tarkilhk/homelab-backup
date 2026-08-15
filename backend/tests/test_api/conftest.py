@@ -79,7 +79,11 @@ def client(
     # isolated here; the real startup/shutdown contract has a dedicated test.
     monkeypatch.setattr(app.router, "lifespan_context", route_only_lifespan)
 
-    with TestClient(app) as test_client:
+    # The dev VM's default asyncio loop can miss the AnyIO portal wakeup and
+    # leave synchronous route tests blocked before their first request. Keep
+    # the shared TestClient on the same deterministic uvloop backend used by
+    # the newer async route tests.
+    with TestClient(app, backend_options={"use_uvloop": True}) as test_client:
         yield test_client
 
     app.dependency_overrides.clear()
