@@ -77,8 +77,9 @@ included in a broad image job, or a plugin directory exists.
 | Home Assistant | `blocked` | Full Supervisor backup/download is supported, but exact research found the multi-component archive is sequential and deployed add-ons use hot backup; strict consistency needs explicit quiescence/downtime approval before implementation. |
 | Mosquitto/ESPHome/HACS/AdGuard on HAOS | `blocked` | Full Supervisor backup includes these components, but Mosquitto, ESPHome, and AdGuard currently declare hot backup semantics; they inherit the Home Assistant quiescence/downtime gate. |
 | Firefly III | `blocked` | Exact 6.6.3 source ordering permits attachment DB/file races that no online before/after fence can rule out; a consistent MariaDB/uploads artifact needs explicit brief app-downtime approval and a narrow lifecycle path. |
-| Sure | `unclassified` | Active digest-pinned Rails/PostgreSQL/storage deployment; consistency/restore boundary needs primary research. |
-| Hindsight | `unclassified` | Active 0.8.6 PostgreSQL plus `.codex` files; determine authoritative/encrypted file boundary. |
+| Sure | `blocked` | Exact v0.7.1-hotfix.1 state spans PostgreSQL and local Active Storage; Rails write ordering prevents a proven online composite snapshot. A dependable artifact needs explicit brief web/worker downtime and a narrow Sure-only lifecycle path. |
+| Speakr | `unclassified` | Active DMZ deployment may contain commercially valuable transcripts/uploads. Confirm authoritative use, exact version, and its supported database/file recovery boundary before selecting coverage. |
+| Hindsight | `planned-plugin` | Exact 0.8.6 authoritative state, including native uploaded files, is wholly inside PostgreSQL 18; Codex OAuth is an excluded external prerequisite. An online Hindsight-specific logical backup and create-only local restore milestone is in progress. |
 | Quartz | `blocked` | Ansible keeps user-authored content outside the framework checkout at `/opt/claw/quartz/content` and only seeds a Git-declared placeholder when empty. Protecting that authoritative host state requires an explicitly approved constrained Claw read-only path. |
 | Termix | `plugin-local` | Exact 2.3.2 read-only encrypted-state plugin, two distinct backups, two create-only restores, and two authenticated exact-image boots pass locally; production mount/target/schedule evidence remains. |
 | Mealie | `blocked` | Native v3.22.0 export is not a transactional PostgreSQL/files snapshot and native restore requires unsafe cluster privilege. A dependable logical dump plus `/app/data` capture needs explicit brief Mealie downtime and narrow lifecycle/read-only mount approval. |
@@ -97,7 +98,7 @@ included in a broad image job, or a plugin directory exists.
 | Lidarr | `planned-plugin` | Existing Servarr plugin and exact local drill; production target/run evidence remains. |
 | Readarr | `planned-plugin` | Thin exact-version Servarr subclass remains a lower-priority milestone. |
 | Prowlarr | `planned-plugin` | Thin exact-version Servarr subclass remains a lower-priority milestone. |
-| Plex | `unclassified` | Valuable configuration/history only; research native/config-safe boundary. |
+| Plex | `blocked` | Exact 1.43.2 control-plane state requires the full Plex data directory while Plex is stopped or after a stopped atomic snapshot. Select a narrow external stop/snapshot/read-only-export/start mechanism before implementation; media payload remains excluded. |
 | Audiobookshelf | `plugin-local` | Exact 2.36.0 read-only SQLite plus bounded item/author metadata backup and two fresh exact-image restore/boot drills pass locally under Plan 009; media remains excluded. Production needs only the two documented read-only control-plane mounts. |
 | Calibre | `unclassified` | Determine whether library metadata is authoritative or externally protected with books. |
 | Bazarr | `unclassified` | Configuration/history only; media/subtitle payload policy needs confirmation. |
