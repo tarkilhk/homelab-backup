@@ -100,8 +100,8 @@ included in a broad image job, or a plugin directory exists.
 | Prowlarr | `planned-plugin` | Thin exact-version Servarr subclass remains a lower-priority milestone. |
 | Plex | `blocked` | Exact 1.43.2 control-plane state requires the full Plex data directory while Plex is stopped or after a stopped atomic snapshot. Select a narrow external stop/snapshot/read-only-export/start mechanism before implementation; media payload remains excluded. |
 | Audiobookshelf | `plugin-local` | Exact 2.36.0 read-only SQLite plus bounded item/author metadata backup and two fresh exact-image restore/boot drills pass locally under Plan 009; media remains excluded. Production needs only the two documented read-only control-plane mounts. |
-| Calibre | `unclassified` | Determine whether library metadata is authoritative or externally protected with books. |
-| Bazarr | `unclassified` | Configuration/history only; media/subtitle payload policy needs confirmation. |
+| Calibre | `blocked` | Exact v9.11.0 has worthwhile config/library metadata, but reliable capture requires the actual library root plus coordinated quiescence of Calibre and every writer sharing `/eBooks` (including Readarr). Ebook formats and other payload remain external. |
+| Bazarr | `planned-plugin` | Exact v1.5.6 exposes a native online SQLite/config backup. A narrow API plus read-only backup-directory plugin can be built locally without downtime; media and subtitle payload remain excluded. |
 | Jellyseerr | `blocked` | Exact 2.7.3 state spans WAL SQLite plus credential-bearing settings with no cross-file transaction. A dependable full-config capture needs explicit brief downtime with narrow lifecycle control or an audited atomic snapshot; media/cache/logs remain excluded. |
 | Jellystat | `unprotected` | Playback/statistics history is excluded telemetry; desired runtime configuration is declared in Git, so no PostgreSQL target belongs in this program. |
 | Tautulli | `unprotected` | Playback/statistics history is excluded telemetry; the remaining convenience configuration does not justify a bespoke plugin in this program. |
