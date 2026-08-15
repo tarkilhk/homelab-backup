@@ -652,6 +652,70 @@ async def test_two_backups_are_unique(tmp_path: Path, monkeypatch: pytest.Monkey
     assert first.exists() and second.exists()
 
 
+def test_backup_retries_once_when_metadata_changes_during_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.plugins.audiobookshelf.plugin as plugin_module
+
+    config, metadata = _source(tmp_path)
+    destination = tmp_path / "stable.audiobookshelf"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    metadata_json = metadata / "items" / "book-1" / "metadata.json"
+    original_metadata_files = plugin_module._metadata_files
+    calls = 0
+
+    def mutate_first_attempt(root: Path):  # type: ignore[no-untyped-def]
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            metadata_json.write_text(
+                json.dumps({"id": "book-1", "title": "Changed during backup"}),
+                encoding="utf-8",
+            )
+        return original_metadata_files(root)
+
+    monkeypatch.setattr(plugin_module, "_metadata_files", mutate_first_attempt)
+
+    plugin_module._build_archive(config, metadata, destination, workspace)
+
+    assert calls == 8
+    plugin_module._validate_archive(destination, tmp_path / "validation")
+
+
+def test_backup_refuses_metadata_that_never_stabilizes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import app.plugins.audiobookshelf.plugin as plugin_module
+
+    config, metadata = _source(tmp_path)
+    destination = tmp_path / "unstable.audiobookshelf"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    metadata_json = metadata / "items" / "book-1" / "metadata.json"
+    original_metadata_files = plugin_module._metadata_files
+    calls = 0
+
+    def mutate_every_attempt(root: Path):  # type: ignore[no-untyped-def]
+        nonlocal calls
+        calls += 1
+        if calls % 2 == 0:
+            metadata_json.write_text(
+                json.dumps({"id": "book-1", "generation": calls}),
+                encoding="utf-8",
+            )
+        return original_metadata_files(root)
+
+    monkeypatch.setattr(plugin_module, "_metadata_files", mutate_every_attempt)
+
+    with pytest.raises(RuntimeError, match="did not stabilize"):
+        plugin_module._build_archive(config, metadata, destination, workspace)
+    assert calls == plugin_module._MAX_STABLE_ATTEMPTS * 4
+    assert not destination.exists()
+
+
 @pytest.mark.anyio
 async def test_restore_is_create_only_and_revalidates(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -859,13 +923,14 @@ async def test_cancelled_backup_cleans_partial_artifact(
     monkeypatch.setattr("app.plugins.audiobookshelf.plugin.BACKUP_BASE_PATH", str(backup_root))
     monkeypatch.setattr("app.plugins.audiobookshelf.plugin.BACKUP_TIMEOUT_SECONDS", 30.0)
     monkeypatch.setattr("app.plugins.audiobookshelf.plugin._WORKER_TEST_DELAY_SECONDS", 30.0)
-    task = asyncio.create_task(
-        get_plugin("audiobookshelf").backup(_backup_context(config, metadata, backup_root))
-    )
-    await asyncio.sleep(0.25)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+    for _ in range(2):
+        task = asyncio.create_task(
+            get_plugin("audiobookshelf").backup(_backup_context(config, metadata, backup_root))
+        )
+        await asyncio.sleep(0.25)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
     assert not any(path.is_file() for path in backup_root.rglob("*"))
 
 
@@ -876,8 +941,9 @@ async def test_validation_timeout_stops_worker(
     config, metadata = _source(tmp_path)
     monkeypatch.setattr("app.plugins.audiobookshelf.plugin.VALIDATION_TIMEOUT_SECONDS", 0.1)
     monkeypatch.setattr("app.plugins.audiobookshelf.plugin._WORKER_TEST_DELAY_SECONDS", 30.0)
-    with pytest.raises(TimeoutError, match="validation timed out"):
-        await get_plugin("audiobookshelf").test(_config(config, metadata))
+    for _ in range(2):
+        with pytest.raises(TimeoutError, match="validation timed out"):
+            await get_plugin("audiobookshelf").test(_config(config, metadata))
 
 
 @pytest.mark.anyio
@@ -895,13 +961,39 @@ async def test_cancelled_restore_preserves_fresh_destinations(
     )
     config, metadata = _restore_destinations(tmp_path)
     monkeypatch.setattr("app.plugins.audiobookshelf.plugin._WORKER_TEST_DELAY_SECONDS", 30.0)
-    task = asyncio.create_task(plugin.restore(_restore_context(artifact, config, metadata)))
-    await asyncio.sleep(0.25)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert {entry.name for entry in config.iterdir()} == {CONFIG_SENTINEL}
-    assert {entry.name for entry in metadata.iterdir()} == {METADATA_SENTINEL}
+    for _ in range(2):
+        task = asyncio.create_task(plugin.restore(_restore_context(artifact, config, metadata)))
+        await asyncio.sleep(0.25)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert {entry.name for entry in config.iterdir()} == {CONFIG_SENTINEL}
+        assert {entry.name for entry in metadata.iterdir()} == {METADATA_SENTINEL}
+
+
+@pytest.mark.anyio
+async def test_restore_timeout_preserves_fresh_destinations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_config, source_metadata = _source(tmp_path)
+    backup_root = tmp_path / "backups"
+    monkeypatch.setattr("app.plugins.audiobookshelf.plugin.BACKUP_BASE_PATH", str(backup_root))
+    plugin = get_plugin("audiobookshelf")
+    artifact = Path(
+        (await plugin.backup(_backup_context(source_config, source_metadata, backup_root)))[
+            "artifact_path"
+        ]
+    )
+    config, metadata = _restore_destinations(tmp_path)
+    monkeypatch.setattr("app.plugins.audiobookshelf.plugin.RESTORE_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr("app.plugins.audiobookshelf.plugin._WORKER_TEST_DELAY_SECONDS", 30.0)
+
+    for _ in range(2):
+        with pytest.raises(TimeoutError, match="validation timed out"):
+            await plugin.restore(_restore_context(artifact, config, metadata))
+        assert {entry.name for entry in config.iterdir()} == {CONFIG_SENTINEL}
+        assert {entry.name for entry in metadata.iterdir()} == {METADATA_SENTINEL}
 
 
 @pytest.mark.anyio

@@ -9,6 +9,7 @@ import shutil
 import sqlite3
 import stat
 import subprocess
+import threading
 import time
 import uuid
 import zipfile
@@ -483,10 +484,36 @@ def _mutate_to_phase_b(container: str, ids: dict[str, str]) -> None:
     )
     _request(
         container,
+        "DELETE",
+        f"/api/collections/{ids['collection_id']}/book/{item_id}",
+        token=token,
+    )
+    _request_json(
+        container,
+        "POST",
+        f"/api/collections/{ids['collection_id']}/book",
+        token=token,
+        body={"id": item_id},
+    )
+    second_playlist = _request_json(
+        container,
+        "POST",
+        "/api/playlists",
+        token=token,
+        body={
+            "name": "phase-b-membership-playlist",
+            "description": "phase-b-membership-change",
+            "libraryId": ids["library_id"],
+            "items": [{"libraryItemId": item_id}],
+        },
+    )
+    ids["phase_b_playlist_id"] = second_playlist["id"]
+    _request(
+        container,
         "PATCH",
         f"/api/me/progress/{item_id}",
         token=token,
-        body={"duration": 4, "currentTime": 3, "progress": 0.75, "isFinished": False},
+        body={"duration": 4, "currentTime": 4, "progress": 1, "isFinished": True},
     )
     _request_json(
         container,
@@ -518,6 +545,7 @@ def _replace_disposable_author_image(
     authors = source_metadata / "authors"
     authors.mkdir(mode=0o700, exist_ok=True)
     destination = authors / f"{author_id}.png"
+    destination.unlink(missing_ok=True)
     shutil.copyfile(fixture, destination)
     with sqlite3.connect(source_config / "absdatabase.sqlite") as connection:
         updated = connection.execute(
@@ -527,6 +555,33 @@ def _replace_disposable_author_image(
     assert updated == 1
     _docker("start", container)
     _wait_for_status(container, initialized=True)
+
+
+def _create_completed_session(container: str, item_id: str) -> str:
+    token = _login(container, _ROOT_USERNAME, _ROOT_PASSWORD)["accessToken"]
+    session = _request_json(
+        container,
+        "POST",
+        f"/api/items/{item_id}/play",
+        token=token,
+        body={
+            "forceDirectPlay": True,
+            "mediaPlayer": "disposable-drill",
+            "deviceInfo": {
+                "deviceId": "disposable-drill-device",
+                "clientName": "disposable-drill",
+                "clientVersion": "1",
+            },
+        },
+    )
+    _request(
+        container,
+        "POST",
+        f"/api/session/{session['id']}/close",
+        token=token,
+        body={"currentTime": 3, "timeListened": 60, "duration": 4},
+    )
+    return cast(str, session["id"])
 
 
 def _json_result(completed: subprocess.CompletedProcess[str]) -> dict[str, Any]:
@@ -641,6 +696,62 @@ asyncio.run(main())
     artifact = artifact_root / container_path.relative_to("/backups")
     assert result["validated_sha256"] == _sha256(artifact)
     assert result["validated_size_bytes"] == artifact.stat().st_size
+    return artifact
+
+
+def _run_backup_with_active_progress(
+    runner_image: str,
+    source_container: str,
+    source_config: Path,
+    source_metadata: Path,
+    artifact_root: Path,
+    item_id: str,
+) -> Path:
+    token = _login(source_container, _ROOT_USERNAME, _ROOT_PASSWORD)["accessToken"]
+    stop = threading.Event()
+    started = threading.Event()
+    errors: list[BaseException] = []
+    writes = 0
+
+    def write_progress() -> None:
+        nonlocal writes
+        try:
+            while not stop.is_set():
+                _request(
+                    source_container,
+                    "PATCH",
+                    f"/api/me/progress/{item_id}",
+                    token=token,
+                    body={
+                        "duration": 4,
+                        "currentTime": 1,
+                        "progress": 0.25,
+                        "isFinished": False,
+                    },
+                )
+                writes += 1
+                started.set()
+                stop.wait(0.02)
+        except BaseException as exc:
+            errors.append(exc)
+            started.set()
+
+    writer = threading.Thread(target=write_progress, daemon=True)
+    writer.start()
+    assert started.wait(10), "progress writer did not start"
+    try:
+        artifact = _run_backup(
+            runner_image,
+            source_config,
+            source_metadata,
+            artifact_root,
+        )
+    finally:
+        stop.set()
+        writer.join(10)
+    assert not writer.is_alive()
+    assert not errors
+    assert writes >= 2
     return artifact
 
 
@@ -822,13 +933,21 @@ def _assert_application_state(
         (ids["collection_id"], f"{phase}-collection")
     ]
     playlists = _request_json(container, "GET", "/api/playlists", token=token)["playlists"]
-    assert [(playlist["id"], playlist["name"]) for playlist in playlists] == [
-        (ids["playlist_id"], f"{phase}-playlist")
-    ]
+    expected_playlists = [(ids["playlist_id"], f"{phase}-playlist")]
+    if phase == "phase-b":
+        expected_playlists.append((ids["phase_b_playlist_id"], "phase-b-membership-playlist"))
+    assert sorted((playlist["id"], playlist["name"]) for playlist in playlists) == sorted(
+        expected_playlists
+    )
     progress = _request_json(container, "GET", "/api/me/progress", token=token)["mediaProgress"]
     assert len(progress) == 1
     assert progress[0]["libraryItemId"] == ids["item_id"]
-    assert progress[0]["currentTime"] == (1 if phase == "phase-a" else 3)
+    if phase == "phase-a":
+        assert progress[0]["currentTime"] in {0, 1, 3}
+    else:
+        assert progress[0]["currentTime"] == 4
+    if phase == "phase-b":
+        assert progress[0]["isFinished"] is True
     bookmarks = _request_json(container, "GET", "/api/me/bookmarks", token=token)["bookmarks"]
     assert [(bookmark["time"], bookmark["title"]) for bookmark in bookmarks] == [
         (1, f"{phase}-bookmark")
@@ -836,6 +955,13 @@ def _assert_application_state(
     api_keys = _request_json(container, "GET", "/api/api-keys", token=token)["apiKeys"]
     drill_key = next(key for key in api_keys if key["id"] == ids["api_key_id"])
     assert drill_key["isActive"] is api_key_active
+    sessions = _request_json(
+        container,
+        "GET",
+        "/api/me/listening-sessions?itemsPerPage=20",
+        token=token,
+    )["sessions"]
+    assert ids["completed_session_id"] in {session["id"] for session in sessions}
 
 
 def test_two_live_backups_restore_to_fresh_exact_audiobookshelf_images(
@@ -899,6 +1025,10 @@ def test_two_live_backups_restore_to_fresh_exact_audiobookshelf_images(
             fixture_path / "phase-a.png",
             ids["author_id"],
         )
+        ids["completed_session_id"] = _create_completed_session(
+            source_container,
+            ids["item_id"],
+        )
 
         artifacts: list[Path] = []
         signatures: list[dict[str, str]] = []
@@ -920,12 +1050,22 @@ def test_two_live_backups_restore_to_fresh_exact_audiobookshelf_images(
                 api_key_active=phase == "phase-a",
             )
 
-            artifact = _run_backup(
-                runner_image,
-                source_config,
-                source_metadata,
-                artifact_root,
-            )
+            if phase == "phase-a":
+                artifact = _run_backup_with_active_progress(
+                    runner_image,
+                    source_container,
+                    source_config,
+                    source_metadata,
+                    artifact_root,
+                    ids["item_id"],
+                )
+            else:
+                artifact = _run_backup(
+                    runner_image,
+                    source_config,
+                    source_metadata,
+                    artifact_root,
+                )
             signature = _inspect_artifact(artifact, image_digests[phase])
             assert signature["artifact"] != media_digest
             artifacts.append(artifact)
