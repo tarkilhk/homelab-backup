@@ -6,7 +6,7 @@
 - **Effort**: L
 - **Risk**: HIGH
 - **Depends on**: Plan 001 foundation contract
-- **State**: TODO
+- **State**: DONE (local milestone)
 - **Production status**: BLOCKED pending explicit downtime and constrained
   primary-host execution approval; isolated local implementation is authorized
 - **Researched at**: `homelab-backup` v0.2.1 and `homelab-infra`
@@ -94,7 +94,7 @@ The backup transaction must:
 3. create a short-lived helper from the target's exact image with the target
    volumes mounted read-only;
 4. run as `git` in a writable helper temp directory:
-   `gitea dump -c /data/gitea/conf/app.ini --skip-log`;
+   `gitea --config /data/gitea/conf/app.ini dump --skip-log`;
 5. stream the resulting ZIP through `create_backup_artifact()` without loading
    it into memory;
 6. validate ZIP integrity and required database, repository, configuration,
@@ -164,6 +164,26 @@ blob where the local API supports it. Each drill must prove:
 - source service health after every backup attempt;
 - bounded peak memory while streaming the artifact.
 
+Implemented drill command:
+
+```bash
+RUN_GITEA_DOCKER_DRILL=1 .venv/bin/pytest -q -s \
+  tests/integration/test_gitea_docker_drill.py
+```
+
+The final 2026-08-15 run passed twice consecutively inside one test against the
+exact `gitea/gitea:1.27.1` image. It used separate `/data` and nested
+`/data/gitea/packages` volumes on two fresh labeled destinations and covered a
+repository commit, issues, release attachment, 64 MiB incompressible package
+blob, sidecar fields, independent streamed SHA-256, vendor ZIP/SQL members,
+SQLite content, exact file equality, API marker equality, repository `git fsck`,
+source/destination health, absolute transfer deadlines, and peak-memory growth
+below half the artifact size. A third fresh labeled destination then received a
+fully destructive restore followed by an injected failure; the plugin restored
+its prior repository marker, removed the restored source marker, and proved
+application health. The final drill passed in 79.35 seconds, and all disposable
+containers and volumes were removed by the test.
+
 ## Commands
 
 ```bash
@@ -176,8 +196,8 @@ cd backend
 ```
 
 Also run the frontend suite, lint, and build because the new schema appears in
-the Targets UI. Inspect the built backend image for the required Docker client
-path before the drills.
+the Targets UI. The plugin uses the Docker Engine API over its Unix socket and
+does not depend on a Docker CLI inside the backend image.
 
 ## Production gate
 
@@ -196,12 +216,12 @@ user-approved backup triggers. Production restore remains forbidden.
 
 ## Done criteria
 
-- [ ] All ten test-first slices pass.
-- [ ] Both local drills satisfy every evidence item.
-- [ ] Full backend and frontend checks pass.
-- [ ] Code review has no unresolved P0/P1 findings.
-- [ ] Compatibility documentation records the exact version and evidence.
-- [ ] The milestone is committed independently.
+- [x] All ten test-first slices pass.
+- [x] Both local drills satisfy every evidence item.
+- [x] Full backend and frontend checks pass.
+- [x] Code review has no unresolved P0/P1 findings.
+- [x] Compatibility documentation records the exact version and evidence.
+- [x] The milestone is committed independently.
 
 ## STOP conditions
 

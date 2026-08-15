@@ -1,14 +1,16 @@
 # Plugin compatibility and deployment map
 
 This matrix ties each plugin to the component declaration in `homelab-infra` and
-to the isolated verification performed for v0.2.1. It contains no service
-credentials. Re-run the drill contract after changing any component image. A
-new release must update this file from current manifests and fresh local drill
-evidence rather than carrying these versions forward by assumption.
+to the isolated verification performed for the v0.2.1 baseline and subsequent
+unreleased plugin milestones. It contains no service credentials. Re-run the
+drill contract after changing any component image. A new release must update
+this file from current manifests and fresh local drill evidence rather than
+carrying these versions forward by assumption.
 
 | Plugin | Homelab component declaration | Verification | Restore result |
 | --- | --- | --- | --- |
 | Cal.com | `calcom/cal.com:v6.2.0`, PostgreSQL `16` | PostgreSQL 16 connectivity and two validated Cal.com custom-format database archives | Isolated transactional restore passed |
+| Gitea | `gitea/gitea:1.27.1` on primary and NAS | Exact-image native dump, two fresh labeled restore destinations, nested package volumes, repository/issue/release/package markers, streamed size/hash/sidecar checks, absolute transfer deadlines, and bounded-memory evidence passed locally | Isolated SQLite import, hook regeneration, repository `git fsck`, exact file equality, health, and a third post-mutation rollback destination passed; production backup remains gated on downtime and Docker access |
 | Invoice Ninja | `invoiceninja/invoiceninja:5` | The current image resolved to 5.13.31; connectivity and two validated company exports passed | Isolated import delivered the synthetic marker; plugin remains `partial` because the API only reports queue acceptance |
 | Jellyfin | `jellyfin/jellyfin:10.11.11` | Connectivity and two validated native archives passed | Isolated official restore and restart/readiness transition passed |
 | Lidarr | `ghcr.io/linuxserver/lidarr:3.1.0.4875-ls29` | Connectivity and two validated native archives passed | Isolated upload, restart, and readiness passed |
@@ -26,12 +28,14 @@ No new deployment or coverage claim should be inferred for it.
 The authoritative declarations are currently under these `homelab-infra` paths:
 
 - `docker.compose/dmz/calcom/calcom.yaml`
+- `docker.compose/gitea/gitea/gitea.yaml`
 - `docker.compose/work/invoiceninja/invoiceninja.yaml`
 - `docker.compose/media/jelly_misc/jelly_misc.yaml`
 - `docker.compose/media/radarr_sonarr_lidarr/radarr_sonarr_lidarr.yaml`
 - `docker.compose/tarkilnas-system/pihole/pihole.yaml`
 - `docker.compose/system/postgres/postgres.yaml`
 - `docker.compose/tarkilnas-system/vaultwarden/vaultwarden.yaml`
+- `docker.compose/tarkilnas-system/gitea/gitea.yaml`
 
 ## Current deployment state and prerequisites
 
@@ -53,3 +57,8 @@ by older images are not evidence for a newly changed plugin or component image.
 No production restore is permitted. Production validation remains limited to
 non-destructive connectivity checks and native backup/export triggers. Every
 restore drill uses an isolated local destination.
+
+The Gitea plugin is locally verified but not yet enabled in production. Its
+consistent backup deliberately stops Gitea, and the primary backup backend does
+not currently have the required constrained Docker execution path. Both remain
+explicit production gates.

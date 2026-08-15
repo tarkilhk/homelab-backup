@@ -1,0 +1,23 @@
+{
+  "type": "object",
+  "required": ["container_name", "allow_service_stop"],
+  "properties": {
+    "container_name": {
+      "type": "string",
+      "title": "Gitea Container Name",
+      "default": "gitea"
+    },
+    "allow_service_stop": {
+      "type": "boolean",
+      "title": "Allow Gitea to stop briefly for a consistent backup",
+      "default": false
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "title": "Backup Timeout (seconds)",
+      "default": 600,
+      "minimum": 30,
+      "maximum": 3600
+    }
+  }
+}

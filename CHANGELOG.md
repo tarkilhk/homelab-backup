@@ -5,6 +5,11 @@ All notable changes to Homelab Backup are recorded here. This project follows
 
 ## [Unreleased]
 
+### Added
+
+- A version-pinned Gitea 1.27.1 plugin with consistent native dumps, bounded
+  Docker transfers, isolated labeled-destination restores, and verified rollback.
+
 ## [0.2.1] - 2026-08-15
 
 ### Fixed

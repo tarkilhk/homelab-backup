@@ -6,7 +6,7 @@ Each executor must read its plan fully, honor STOP conditions, and update status
 | Plan | Title | Priority | Effort | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
 | 001 | Establish the risk-ranked service backup plugin program | P0 | XL | — | IN PROGRESS |
-| 002 | Add a consistent Gitea 1.27.1 backup and isolated restore plugin | P0 | L | 001 foundation | TODO |
+| 002 | Add a consistent Gitea 1.27.1 backup and isolated restore plugin | P0 | L | 001 foundation | DONE (local) |
 
 Status: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`, or `REJECTED`.
 

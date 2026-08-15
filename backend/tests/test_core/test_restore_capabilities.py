@@ -6,6 +6,7 @@ from app.core.plugins.loader import get_plugin, list_plugins
 def test_plugins_publish_honest_restore_capabilities() -> None:
     expected = {
         "calcom": "automatic",
+        "gitea": "automatic",
         "mysql": "partial",
         "postgresql": "automatic",
         "vaultwarden": "automatic",
