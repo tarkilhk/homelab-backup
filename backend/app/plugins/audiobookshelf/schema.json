@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["config_path", "metadata_path"],
+  "properties": {
+    "config_path": {
+      "type": "string",
+      "title": "Audiobookshelf config directory",
+      "default": "/sources/audiobookshelf/config"
+    },
+    "metadata_path": {
+      "type": "string",
+      "title": "Audiobookshelf metadata directory",
+      "default": "/sources/audiobookshelf/metadata"
+    }
+  }
+}

@@ -23,6 +23,7 @@ dependencies = [
     "jsonschema>=4.23.0",
     "asyncpg>=0.29.0",
     "cryptography>=45.0.0",
+    "pysqlite3-binary==0.5.4.post2",
 ]
 
 classifiers = [

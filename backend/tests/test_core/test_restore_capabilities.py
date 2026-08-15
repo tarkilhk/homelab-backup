@@ -5,6 +5,7 @@ from app.core.plugins.loader import get_plugin, list_plugins
 
 def test_plugins_publish_honest_restore_capabilities() -> None:
     expected = {
+        "audiobookshelf": "partial",
         "calcom": "automatic",
         "gitea": "automatic",
         "homelab_backup": "partial",
