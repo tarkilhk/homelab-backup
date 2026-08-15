@@ -6,9 +6,10 @@
 - **Effort**: M
 - **Risk**: HIGH
 - **Depends on**: Plan 001 foundation
-- **State**: IN PROGRESS
-- **Production status**: research and local implementation only; production
-  restore remains forbidden
+- **State**: DONE (local)
+- **Production status**: local implementation and recovery evidence complete;
+  deployment, read-only mounts, target/schedule, and backup-run evidence remain.
+  Production restore remains forbidden.
 - **Exact local-drill image**:
   `ghcr.io/advplyr/audiobookshelf@sha256:180acad33d69c99ed208676465d8edcb268fa46967735579a7810859885b1a8e`
 
@@ -74,16 +75,30 @@ overwrites a running Audiobookshelf instance, so `restore_capability` is
 
 ## Done criteria
 
-- [ ] All eight vertical slices pass.
-- [ ] The backend runner reads both sources through genuine OS read-only binds
+- [x] All eight vertical slices pass.
+- [x] The backend runner reads both sources through genuine OS read-only binds
       and has no network, Docker socket, Audiobookshelf credential, or media
       mount.
-- [ ] Two exact-version backup-to-fresh-restore drills pass.
-- [ ] Full backend and applicable frontend checks pass.
-- [ ] Standards/spec review has no unresolved P0/P1 findings.
-- [ ] Compatibility, recovery, changelog, and future infrastructure mounts are
+- [x] Two exact-version backup-to-fresh-restore drills pass.
+- [x] Full backend and applicable frontend checks pass.
+- [x] Standards/spec review has no unresolved P0/P1 findings.
+- [x] Compatibility, recovery, changelog, and future infrastructure mounts are
       documented.
-- [ ] The milestone is committed independently with this plan marked DONE.
+- [x] The milestone is committed independently with this plan marked DONE.
+
+## Local evidence
+
+- The exact-image drill produced two distinct private artifacts, restored each
+  into fresh config and metadata roots, and passed separate boots and restarts
+  against the pinned 2.36.0 image.
+- Restored API evidence covers login, libraries, items, authors, collections,
+  collection membership, playlists, playlist membership, bookmarks, progress,
+  sessions, covers, phase-specific mutations, and excluded media payload.
+- The runner proved both source views are genuinely read-only and ran without
+  network access, media mounts, application credentials, or the Docker socket.
+- Focused lifecycle, cancellation, timeout, concurrent-write, archive-safety,
+  restore-race, discovery, and schema tests pass. Standards and specification
+  reviews found no unresolved P0/P1 issue.
 
 ## STOP conditions
 

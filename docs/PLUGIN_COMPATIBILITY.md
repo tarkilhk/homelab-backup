@@ -9,6 +9,7 @@ carrying these versions forward by assumption.
 
 | Plugin | Homelab component declaration | Verification | Restore result |
 | --- | --- | --- | --- |
+| Audiobookshelf | `ghcr.io/advplyr/audiobookshelf:2.36.0` (drill pinned OCI index `sha256:180acad33d69c99ed208676465d8edcb268fa46967735579a7810859885b1a8e`) | Two online SQLite snapshots plus bounded item/author native metadata through genuine read-only binds, exact schema/integrity/reference validation, private artifacts, valid sidecars, and independent phase hashes passed locally; audiobook and ebook media are excluded | Two fresh create-only restores and separate exact-image boots/restarts proved login, libraries, items, authors, collections, playlists, bookmarks, covers, and phase-specific state; capability remains `partial` because the plugin does not control destination lifecycle |
 | Cal.com | `calcom/cal.com:v6.2.0`, PostgreSQL `16` | PostgreSQL 16 connectivity and two validated Cal.com custom-format database archives | Isolated transactional restore passed |
 | Gitea | `gitea/gitea:1.27.1` on primary and NAS | Exact-image native dump, two fresh labeled restore destinations, nested package volumes, repository/issue/release/package markers, streamed size/hash/sidecar checks, absolute transfer deadlines, and bounded-memory evidence passed locally | Isolated SQLite import, hook regeneration, repository `git fsck`, exact file equality, health, and a third post-mutation rollback destination passed; production backup remains gated on downtime and Docker access |
 | Homelab Backup | `tarkilhk/homelab-backup:backend-v0.2.1` on primary and NAS | Two online SQLite snapshots from a running exact-image backend, private artifacts, strict manifests, independent size/hash/sidecar evidence, and two fresh restored databases passed locally | Create-only offline restore and two isolated `--network none` exact-image boots passed; capability remains `partial` because plugin code does not control or prove a destination backend lifecycle |
@@ -35,6 +36,7 @@ The authoritative declarations are currently under these `homelab-infra` paths:
 - `docker.compose/system/homelab-backup/homelab-backup.yaml`
 - `docker.compose/work/invoiceninja/invoiceninja.yaml`
 - `docker.compose/media/jelly_misc/jelly_misc.yaml`
+- `docker.compose/media/books/books.yaml`
 - `docker.compose/media/radarr_sonarr_lidarr/radarr_sonarr_lidarr.yaml`
 - `docker.compose/misc/sftpgo/sftpgo.yaml`
 - `docker.compose/misc/termix/termix.yaml`
@@ -92,5 +94,14 @@ network access, an application credential, the Docker socket, or downtime. The
 plugin captures the latest successfully persisted 2.3.2 state. Termix can keep
 some acknowledged mutations only in memory until another save-triggering change
 or graceful shutdown, so the plugin does not claim zero-second RPO. Production
+restore remains forbidden; the create-only restore contract is for isolated
+local drills.
+
+The Audiobookshelf plugin is locally verified but not yet deployed. The
+Docker-host backend needs only
+`/docker-apps/audiobookshelf/config:/sources/audiobookshelf/config:ro` and
+`/docker-apps/audiobookshelf/metadata:/sources/audiobookshelf/metadata:ro`.
+It does not need Audiobookshelf network access, an administrator credential,
+the Docker socket, downtime, or access to audiobook and ebook media. Production
 restore remains forbidden; the create-only restore contract is for isolated
 local drills.

@@ -18,6 +18,10 @@ All notable changes to Homelab Backup are recorded here. This project follows
 - A Termix 2.3.2 encrypted-state plugin with read-only stable snapshots,
   private strict artifacts, create-only local restores, and two authenticated
   exact-image recovery drills.
+- An Audiobookshelf 2.36.0 control-plane plugin with read-only online SQLite
+  snapshots, bounded native metadata capture, private strict artifacts, and two
+  create-only exact-image recovery drills; audiobook and ebook media stay out
+  of scope.
 
 ## [0.2.1] - 2026-08-15
 

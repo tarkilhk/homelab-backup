@@ -13,7 +13,8 @@ Each executor must read its plan fully, honor STOP conditions, and update status
 | 006 | Add Paperless-ngx 2.20.15 native export and isolated restore | P0 | L | 001 foundation; execution-path approval | BLOCKED |
 | 007 | Close every service inventory row in a coverage ledger | P0 | XL | 001 inventory | IN PROGRESS |
 | 008 | Add Termix 2.3.2 encrypted-state backup and isolated restore | P0 | M | 001 foundation | DONE (local) |
-| 009 | Add Audiobookshelf 2.36.0 control-plane backup and isolated restore | P1 | M | 001 foundation | IN PROGRESS |
+| 009 | Add Audiobookshelf 2.36.0 control-plane backup and isolated restore | P1 | M | 001 foundation | DONE (local) |
+| 010 | Add pfSense native encrypted configuration export and isolated restore proof | P1 | L | 001 foundation; restore-authority decision | BLOCKED |
 
 Status: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`, or `REJECTED`.
 

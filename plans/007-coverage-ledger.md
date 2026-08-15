@@ -98,7 +98,7 @@ included in a broad image job, or a plugin directory exists.
 | Readarr | `planned-plugin` | Thin exact-version Servarr subclass remains a lower-priority milestone. |
 | Prowlarr | `planned-plugin` | Thin exact-version Servarr subclass remains a lower-priority milestone. |
 | Plex | `unclassified` | Valuable configuration/history only; research native/config-safe boundary. |
-| Audiobookshelf | `planned-plugin` | Exact 2.36.0 read-only SQLite plus item/author metadata boundary is specified in Plan 009; media remains excluded. Local implementation and two exact-image drills are in progress. |
+| Audiobookshelf | `plugin-local` | Exact 2.36.0 read-only SQLite plus bounded item/author metadata backup and two fresh exact-image restore/boot drills pass locally under Plan 009; media remains excluded. Production needs only the two documented read-only control-plane mounts. |
 | Calibre | `unclassified` | Determine whether library metadata is authoritative or externally protected with books. |
 | Bazarr | `unclassified` | Configuration/history only; media/subtitle payload policy needs confirmation. |
 | Jellyseerr | `unclassified` | Configuration/request history may merit native/config backup. |
