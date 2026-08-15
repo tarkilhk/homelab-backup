@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 import os
+import random
 import sqlite3
 import stat
 import zipfile
@@ -11,6 +13,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from PIL import Image
 
 from app.core.plugins.base import BackupContext, RestoreContext
 from app.core.plugins.loader import get_plugin, get_plugin_schema_path, list_plugins
@@ -21,7 +24,338 @@ VERSION = "2.36.0"
 CONFIG_SENTINEL = ".audiobookshelf-config-restore-destination"
 METADATA_SENTINEL = ".audiobookshelf-metadata-restore-destination"
 SENTINEL_CONTENT = "audiobookshelf-v2.36.0-isolated-restore-v1\n"
-PNG = b"\x89PNG\r\n\x1a\n" + b"fixture-image"
+
+
+def _valid_png() -> bytes:
+    output = io.BytesIO()
+    Image.new("RGB", (2, 2), (23, 47, 89)).save(output, format="PNG")
+    return output.getvalue()
+
+
+PNG = _valid_png()
+
+AUDIOBOOKSHELF_2_36_SCHEMA = {
+    "migrationsMeta": ("key", "value"),
+    "users": (
+        "id",
+        "username",
+        "email",
+        "pash",
+        "type",
+        "token",
+        "isActive",
+        "isLocked",
+        "lastSeen",
+        "permissions",
+        "bookmarks",
+        "extraData",
+        "createdAt",
+        "updatedAt",
+    ),
+    "sessions": (
+        "id",
+        "ipAddress",
+        "userAgent",
+        "refreshToken",
+        "expiresAt",
+        "lastRefreshToken",
+        "lastRefreshTokenExpiresAt",
+        "createdAt",
+        "updatedAt",
+        "userId",
+    ),
+    "apiKeys": (
+        "id",
+        "name",
+        "description",
+        "expiresAt",
+        "lastUsedAt",
+        "isActive",
+        "permissions",
+        "createdAt",
+        "updatedAt",
+        "userId",
+        "createdByUserId",
+    ),
+    "libraries": (
+        "id",
+        "name",
+        "displayOrder",
+        "icon",
+        "mediaType",
+        "provider",
+        "lastScan",
+        "lastScanVersion",
+        "settings",
+        "extraData",
+        "createdAt",
+        "updatedAt",
+    ),
+    "libraryFolders": ("id", "path", "createdAt", "updatedAt", "libraryId"),
+    "books": (
+        "id",
+        "title",
+        "titleIgnorePrefix",
+        "subtitle",
+        "publishedYear",
+        "publishedDate",
+        "publisher",
+        "description",
+        "isbn",
+        "asin",
+        "language",
+        "explicit",
+        "abridged",
+        "coverPath",
+        "duration",
+        "narrators",
+        "audioFiles",
+        "ebookFile",
+        "chapters",
+        "tags",
+        "genres",
+        "createdAt",
+        "updatedAt",
+    ),
+    "podcasts": (
+        "id",
+        "title",
+        "titleIgnorePrefix",
+        "author",
+        "releaseDate",
+        "feedURL",
+        "imageURL",
+        "description",
+        "itunesPageURL",
+        "itunesId",
+        "itunesArtistId",
+        "language",
+        "podcastType",
+        "explicit",
+        "autoDownloadEpisodes",
+        "autoDownloadSchedule",
+        "lastEpisodeCheck",
+        "maxEpisodesToKeep",
+        "maxNewEpisodesToDownload",
+        "coverPath",
+        "tags",
+        "genres",
+        "numEpisodes",
+        "createdAt",
+        "updatedAt",
+    ),
+    "podcastEpisodes": (
+        "id",
+        "index",
+        "season",
+        "episode",
+        "episodeType",
+        "title",
+        "subtitle",
+        "description",
+        "pubDate",
+        "enclosureURL",
+        "enclosureSize",
+        "enclosureType",
+        "publishedAt",
+        "audioFile",
+        "chapters",
+        "extraData",
+        "createdAt",
+        "updatedAt",
+        "podcastId",
+    ),
+    "libraryItems": (
+        "id",
+        "ino",
+        "path",
+        "relPath",
+        "mediaId",
+        "mediaType",
+        "isFile",
+        "isMissing",
+        "isInvalid",
+        "mtime",
+        "ctime",
+        "birthtime",
+        "size",
+        "lastScan",
+        "lastScanVersion",
+        "libraryFiles",
+        "extraData",
+        "title",
+        "titleIgnorePrefix",
+        "authorNamesFirstLast",
+        "authorNamesLastFirst",
+        "createdAt",
+        "updatedAt",
+        "libraryId",
+        "libraryFolderId",
+    ),
+    "mediaProgresses": (
+        "id",
+        "mediaItemId",
+        "mediaItemType",
+        "duration",
+        "currentTime",
+        "isFinished",
+        "hideFromContinueListening",
+        "ebookLocation",
+        "ebookProgress",
+        "finishedAt",
+        "extraData",
+        "podcastId",
+        "createdAt",
+        "updatedAt",
+        "userId",
+    ),
+    "series": (
+        "id",
+        "name",
+        "nameIgnorePrefix",
+        "description",
+        "createdAt",
+        "updatedAt",
+        "libraryId",
+    ),
+    "bookSeries": ("id", "sequence", "createdAt", "bookId", "seriesId"),
+    "authors": (
+        "id",
+        "name",
+        "lastFirst",
+        "asin",
+        "description",
+        "imagePath",
+        "createdAt",
+        "updatedAt",
+        "libraryId",
+    ),
+    "bookAuthors": ("id", "createdAt", "bookId", "authorId"),
+    "collections": ("id", "name", "description", "createdAt", "updatedAt", "libraryId"),
+    "collectionBooks": ("id", "order", "createdAt", "bookId", "collectionId"),
+    "playlists": (
+        "id",
+        "name",
+        "description",
+        "createdAt",
+        "updatedAt",
+        "libraryId",
+        "userId",
+    ),
+    "playlistMediaItems": (
+        "id",
+        "mediaItemId",
+        "mediaItemType",
+        "order",
+        "createdAt",
+        "playlistId",
+    ),
+    "devices": (
+        "id",
+        "deviceId",
+        "clientName",
+        "clientVersion",
+        "ipAddress",
+        "deviceName",
+        "deviceVersion",
+        "extraData",
+        "createdAt",
+        "updatedAt",
+        "userId",
+    ),
+    "playbackSessions": (
+        "id",
+        "mediaItemId",
+        "mediaItemType",
+        "displayTitle",
+        "displayAuthor",
+        "duration",
+        "playMethod",
+        "mediaPlayer",
+        "startTime",
+        "currentTime",
+        "serverVersion",
+        "coverPath",
+        "timeListening",
+        "mediaMetadata",
+        "date",
+        "dayOfWeek",
+        "extraData",
+        "createdAt",
+        "updatedAt",
+        "userId",
+        "deviceId",
+        "libraryId",
+    ),
+    "feeds": (
+        "id",
+        "slug",
+        "entityType",
+        "entityId",
+        "entityUpdatedAt",
+        "serverAddress",
+        "feedURL",
+        "imageURL",
+        "siteURL",
+        "title",
+        "description",
+        "author",
+        "podcastType",
+        "language",
+        "ownerName",
+        "ownerEmail",
+        "explicit",
+        "preventIndexing",
+        "coverPath",
+        "createdAt",
+        "updatedAt",
+        "userId",
+    ),
+    "feedEpisodes": (
+        "id",
+        "title",
+        "author",
+        "description",
+        "siteURL",
+        "enclosureURL",
+        "enclosureType",
+        "enclosureSize",
+        "pubDate",
+        "season",
+        "episode",
+        "episodeType",
+        "duration",
+        "filePath",
+        "explicit",
+        "createdAt",
+        "updatedAt",
+        "feedId",
+    ),
+    "settings": ("key", "value", "createdAt", "updatedAt"),
+    "customMetadataProviders": (
+        "id",
+        "name",
+        "mediaType",
+        "url",
+        "authHeaderValue",
+        "extraData",
+        "createdAt",
+        "updatedAt",
+    ),
+    "mediaItemShares": (
+        "id",
+        "mediaItemId",
+        "mediaItemType",
+        "slug",
+        "pash",
+        "expiresAt",
+        "extraData",
+        "isDownloadable",
+        "createdAt",
+        "updatedAt",
+        "userId",
+    ),
+}
 
 
 @pytest.fixture
@@ -29,41 +363,17 @@ def anyio_backend() -> tuple[str, dict[str, bool]]:
     return ("asyncio", {"use_uvloop": True})
 
 
-def _create_database(path: Path, *, version: str = VERSION, root: bool = True) -> None:
+def _create_database(
+    path: Path,
+    *,
+    version: str = VERSION,
+    root: bool = True,
+    references: bool = True,
+) -> None:
     with sqlite3.connect(path) as connection:
-        connection.executescript(
-            """
-            PRAGMA foreign_keys=ON;
-            CREATE TABLE migrationsMeta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-            CREATE TABLE users (
-              id TEXT PRIMARY KEY, username TEXT, email TEXT, pash TEXT, type TEXT,
-              token TEXT, isActive INTEGER, isLocked INTEGER, lastSeen INTEGER,
-              permissions TEXT, bookmarks TEXT, extraData TEXT,
-              createdAt INTEGER, updatedAt INTEGER
-            );
-            CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT, createdAt INTEGER, updatedAt INTEGER);
-            CREATE TABLE libraries (id TEXT PRIMARY KEY, name TEXT, mediaType TEXT, provider TEXT,
-              icon TEXT, settings TEXT, lastScan INTEGER, lastScanVersion TEXT, displayOrder INTEGER,
-              extraData TEXT, createdAt INTEGER, updatedAt INTEGER);
-            CREATE TABLE libraryFolders (id TEXT PRIMARY KEY, libraryId TEXT REFERENCES libraries(id),
-              path TEXT, createdAt INTEGER, updatedAt INTEGER);
-            CREATE TABLE libraryItems (id TEXT PRIMARY KEY, libraryId TEXT REFERENCES libraries(id),
-              libraryFolderId TEXT REFERENCES libraryFolders(id), mediaId TEXT, mediaType TEXT,
-              path TEXT, relPath TEXT, libraryFiles TEXT, title TEXT, authorNamesFirstLast TEXT,
-              authorNamesLastFirst TEXT, titleIgnorePrefix TEXT, isFile INTEGER, mtime INTEGER,
-              ctime INTEGER, birthtime INTEGER, ino INTEGER, size INTEGER, isMissing INTEGER,
-              isInvalid INTEGER, lastScan INTEGER, lastScanVersion TEXT, extraData TEXT,
-              createdAt INTEGER, updatedAt INTEGER);
-            CREATE TABLE books (id TEXT PRIMARY KEY, coverPath TEXT, title TEXT);
-            CREATE TABLE podcasts (id TEXT PRIMARY KEY, coverPath TEXT, title TEXT);
-            CREATE TABLE authors (id TEXT PRIMARY KEY, imagePath TEXT, name TEXT);
-            CREATE TABLE feeds (id TEXT PRIMARY KEY, coverPath TEXT);
-            CREATE TABLE playbackSessions (id TEXT PRIMARY KEY, coverPath TEXT);
-            CREATE TABLE collections (id TEXT PRIMARY KEY, name TEXT);
-            CREATE TABLE playlists (id TEXT PRIMARY KEY, name TEXT);
-            CREATE TABLE mediaProgresses (id TEXT PRIMARY KEY, currentTime REAL);
-            """
-        )
+        for table, columns in AUDIOBOOKSHELF_2_36_SCHEMA.items():
+            definition = ", ".join(f'"{column}" TEXT' for column in columns)
+            connection.execute(f'CREATE TABLE "{table}" ({definition})')
         connection.executemany(
             "INSERT INTO migrationsMeta(key, value) VALUES (?, ?)",
             (("version", version), ("maxVersion", version)),
@@ -73,32 +383,48 @@ def _create_database(path: Path, *, version: str = VERSION, root: bool = True) -
                 "INSERT INTO users(id, username, pash, type, token, isActive) VALUES (?, ?, ?, ?, ?, ?)",
                 ("root-id", "fixture-root", "secret-hash", "root", "secret-token", 1),
             )
-        connection.execute(
-            "INSERT INTO books(id, coverPath, title) VALUES (?, ?, ?)",
-            ("book-1", "/metadata/items/book-1/cover.png", "Synthetic Book"),
-        )
-        connection.execute(
-            "INSERT INTO authors(id, imagePath, name) VALUES (?, ?, ?)",
-            ("author-1", "/metadata/authors/author-1.png", "Synthetic Author"),
-        )
-        connection.execute(
-            "INSERT INTO podcasts(id, coverPath, title) VALUES (?, ?, ?)",
-            ("podcast-1", "/audiobooks/podcast/cover.png", "External Cover"),
-        )
+        if references:
+            connection.execute(
+                "INSERT INTO books(id, coverPath, title) VALUES (?, ?, ?)",
+                ("book-1", "/metadata/items/book-1/cover.png", "Synthetic Book"),
+            )
+            connection.execute(
+                "INSERT INTO authors(id, imagePath, name) VALUES (?, ?, ?)",
+                ("author-1", "/metadata/authors/author-1.png", "Synthetic Author"),
+            )
+            connection.execute(
+                "INSERT INTO podcasts(id, coverPath, title) VALUES (?, ?, ?)",
+                ("podcast-1", "/audiobooks/podcast/cover.png", "External Cover"),
+            )
 
 
-def _source(tmp_path: Path, *, version: str = VERSION, root: bool = True) -> tuple[Path, Path]:
+def _source(
+    tmp_path: Path,
+    *,
+    version: str = VERSION,
+    root: bool = True,
+    references: bool = True,
+) -> tuple[Path, Path]:
     config = tmp_path / "source-config"
     metadata = tmp_path / "source-metadata"
-    (metadata / "items" / "book-1").mkdir(parents=True)
+    items = metadata / "items"
+    items.mkdir(parents=True)
     (metadata / "authors").mkdir(parents=True)
     config.mkdir()
-    _create_database(config / "absdatabase.sqlite", version=version, root=root)
-    (metadata / "items" / "book-1" / "cover.png").write_bytes(PNG)
-    (metadata / "items" / "book-1" / "metadata.json").write_text(
-        json.dumps({"id": "book-1", "title": "Synthetic Book"}), encoding="utf-8"
+    _create_database(
+        config / "absdatabase.sqlite",
+        version=version,
+        root=root,
+        references=references,
     )
-    (metadata / "authors" / "author-1.png").write_bytes(PNG)
+    if references:
+        book = items / "book-1"
+        book.mkdir()
+        (book / "cover.png").write_bytes(PNG)
+        (book / "metadata.json").write_text(
+            json.dumps({"id": "book-1", "title": "Synthetic Book"}), encoding="utf-8"
+        )
+        (metadata / "authors" / "author-1.png").write_bytes(PNG)
     return config, metadata
 
 
@@ -209,6 +535,33 @@ async def test_wrong_database_contract_is_refused(
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    "mutation",
+    ["missing_table", "missing_column", "extra_table", "extra_column"],
+)
+async def test_exact_schema_rejects_missing_or_extra_structure(
+    tmp_path: Path,
+    mutation: str,
+) -> None:
+    config, metadata = _source(tmp_path)
+    plugin = get_plugin("audiobookshelf")
+    assert await plugin.test(_config(config, metadata)) is True
+    database = config / "absdatabase.sqlite"
+    with sqlite3.connect(database) as connection:
+        if mutation == "missing_table":
+            connection.execute('DROP TABLE "sessions"')
+        elif mutation == "missing_column":
+            connection.execute('ALTER TABLE "sessions" DROP COLUMN "userId"')
+        elif mutation == "extra_table":
+            connection.execute('CREATE TABLE "unexpectedState" ("id" TEXT)')
+        else:
+            connection.execute('ALTER TABLE "sessions" ADD COLUMN "unexpectedState" TEXT')
+
+    with pytest.raises(ValueError, match="schema"):
+        await plugin.test(_config(config, metadata))
+
+
+@pytest.mark.anyio
 async def test_backup_is_private_native_shape_and_has_sidecar(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -225,8 +578,10 @@ async def test_backup_is_private_native_shape_and_has_sidecar(
         assert set(archive.namelist()) == {
             "absdatabase.sqlite",
             "details",
+            "metadata-items/",
             "metadata-items/book-1/cover.png",
             "metadata-items/book-1/metadata.json",
+            "metadata-authors/",
             "metadata-authors/author-1.png",
         }
         details = json.loads(archive.read("details"))
@@ -237,6 +592,27 @@ async def test_backup_is_private_native_shape_and_has_sidecar(
     assert sidecar["plugin_name"] == "audiobookshelf"
     assert sidecar["artifact_path"] == str(artifact)
     assert len(hashlib.sha256(artifact.read_bytes()).hexdigest()) == 64
+
+
+@pytest.mark.anyio
+async def test_backup_rejects_truncated_image_after_valid_control(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config, metadata = _source(tmp_path)
+    backup_root = tmp_path / "backups"
+    monkeypatch.setattr("app.plugins.audiobookshelf.plugin.BACKUP_BASE_PATH", str(backup_root))
+    plugin = get_plugin("audiobookshelf")
+
+    with Image.open(io.BytesIO(PNG)) as image:
+        image.verify()
+    assert Path(
+        (await plugin.backup(_backup_context(config, metadata, backup_root)))["artifact_path"]
+    ).is_file()
+
+    (metadata / "items" / "book-1" / "cover.png").write_bytes(PNG[:8])
+    with pytest.raises(ValueError, match="valid image"):
+        await plugin.backup(_backup_context(config, metadata, backup_root))
 
 
 @pytest.mark.anyio
@@ -299,6 +675,32 @@ async def test_restore_is_create_only_and_revalidates(
 
 
 @pytest.mark.anyio
+async def test_empty_native_metadata_roots_backup_and_restore(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_config, source_metadata = _source(tmp_path, references=False)
+    backup_root = tmp_path / "backups"
+    monkeypatch.setattr("app.plugins.audiobookshelf.plugin.BACKUP_BASE_PATH", str(backup_root))
+    plugin = get_plugin("audiobookshelf")
+    artifact = Path(
+        (await plugin.backup(_backup_context(source_config, source_metadata, backup_root)))[
+            "artifact_path"
+        ]
+    )
+    config, metadata = _restore_destinations(tmp_path)
+
+    result = await plugin.restore(_restore_context(artifact, config, metadata))
+
+    assert result["status"] == "partial"
+    assert (config / "absdatabase.sqlite").is_file()
+    assert (metadata / "items").is_dir()
+    assert (metadata / "authors").is_dir()
+    assert not any((metadata / "items").iterdir())
+    assert not any((metadata / "authors").iterdir())
+
+
+@pytest.mark.anyio
 async def test_restore_refuses_wrong_sentinel_collision_and_overlap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -320,7 +722,7 @@ async def test_restore_refuses_wrong_sentinel_collision_and_overlap(
     with pytest.raises(ValueError, match="empty"):
         await plugin.restore(_restore_context(artifact, config, metadata))
     assert (config / "foreign").read_text(encoding="utf-8") == "preserve"
-    with pytest.raises(ValueError, match="sentinel"):
+    with pytest.raises(ValueError, match="sentinel|empty"):
         await plugin.restore(_restore_context(artifact, source_config, source_metadata))
 
 
@@ -341,7 +743,8 @@ async def test_restore_rejects_duplicate_and_corrupt_archives(
     with zipfile.ZipFile(artifact) as source, zipfile.ZipFile(duplicate, "w") as target:
         for member in source.infolist():
             target.writestr(member.filename, source.read(member))
-        target.writestr("details", b"{}")
+        with pytest.warns(UserWarning, match="Duplicate name"):
+            target.writestr("details", b"{}")
     config, metadata = _restore_destinations(tmp_path)
     with pytest.raises(ValueError, match="duplicate"):
         await plugin.restore(_restore_context(duplicate, config, metadata))
@@ -401,6 +804,50 @@ async def test_cancelled_restore_preserves_fresh_destinations(
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+    assert {entry.name for entry in config.iterdir()} == {CONFIG_SENTINEL}
+    assert {entry.name for entry in metadata.iterdir()} == {METADATA_SENTINEL}
+
+
+@pytest.mark.anyio
+async def test_cancelled_restore_removes_secret_staging_from_destinations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_config, source_metadata = _source(tmp_path)
+    backup_root = tmp_path / "backups"
+    monkeypatch.setattr("app.plugins.audiobookshelf.plugin.BACKUP_BASE_PATH", str(backup_root))
+
+    payload = random.Random(0).randbytes(1024 * 1024)
+    with (source_metadata / "items" / "large-private-state.bin").open("wb") as output:
+        for _ in range(128):
+            output.write(payload)
+
+    plugin = get_plugin("audiobookshelf")
+    artifact = Path(
+        (await plugin.backup(_backup_context(source_config, source_metadata, backup_root)))[
+            "artifact_path"
+        ]
+    )
+    config, metadata = _restore_destinations(tmp_path)
+    task = asyncio.create_task(plugin.restore(_restore_context(artifact, config, metadata)))
+    deadline = asyncio.get_running_loop().time() + 60
+    while {entry.name for entry in config.iterdir()} == {CONFIG_SENTINEL} and {
+        entry.name for entry in metadata.iterdir()
+    } == {METADATA_SENTINEL}:
+        if task.done():
+            pytest.fail(
+                "restore completed before the secret staging cancellation seam was observed"
+            )
+        if asyncio.get_running_loop().time() >= deadline:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            pytest.fail("restore did not reach destination staging before the deadline")
+        await asyncio.sleep(0.002)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
     assert {entry.name for entry in config.iterdir()} == {CONFIG_SENTINEL}
     assert {entry.name for entry in metadata.iterdir()} == {METADATA_SENTINEL}
 

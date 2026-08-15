@@ -14,6 +14,7 @@ import stat
 import tempfile
 import time
 import uuid
+import warnings
 import zipfile
 from dataclasses import dataclass
 from multiprocessing.connection import Connection
@@ -23,6 +24,7 @@ from typing import Any, Dict, Iterable
 from urllib.parse import quote
 
 import pysqlite3 as sqlite3  # type: ignore[import-untyped]
+from PIL import Image, UnidentifiedImageError
 
 from app.core.plugins.artifacts import create_backup_artifact
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
@@ -42,6 +44,11 @@ _MAX_STABLE_ATTEMPTS = 3
 _MAX_ARCHIVE_MEMBERS = 100_000
 _MAX_ARCHIVE_BYTES = 4 * 1024 * 1024 * 1024
 _MAX_COMPRESSION_RATIO = 200
+_MAX_DETAILS_BYTES = 32 * 1024 * 1024
+_MAX_METADATA_FILE_BYTES = 256 * 1024 * 1024
+_MAX_METADATA_JSON_BYTES = 8 * 1024 * 1024
+_MAX_IMAGE_BYTES = 64 * 1024 * 1024
+_MAX_IMAGE_PIXELS = 25_000_000
 
 _FORBIDDEN_RESTORE_ROOTS = (
     Path("/backups"),
@@ -51,22 +58,349 @@ _FORBIDDEN_RESTORE_ROOTS = (
 )
 
 _REQUIRED_SCHEMA: dict[str, frozenset[str]] = {
-    "migrationsMeta": frozenset({"key", "value"}),
-    "users": frozenset({"id", "username", "pash", "type", "token", "isActive"}),
-    "settings": frozenset({"key", "value"}),
-    "libraries": frozenset({"id", "name", "mediaType", "provider"}),
-    "libraryFolders": frozenset({"id", "libraryId", "path"}),
-    "libraryItems": frozenset(
-        {"id", "libraryId", "libraryFolderId", "mediaId", "mediaType", "path", "relPath"}
+    "apiKeys": frozenset(
+        {
+            "id",
+            "userId",
+            "name",
+            "description",
+            "permissions",
+            "isActive",
+            "expiresAt",
+            "lastUsedAt",
+            "createdByUserId",
+            "createdAt",
+            "updatedAt",
+        }
     ),
-    "books": frozenset({"id", "coverPath"}),
-    "podcasts": frozenset({"id", "coverPath"}),
-    "authors": frozenset({"id", "imagePath"}),
-    "feeds": frozenset({"id", "coverPath"}),
-    "playbackSessions": frozenset({"id", "coverPath"}),
-    "collections": frozenset({"id", "name"}),
-    "playlists": frozenset({"id", "name"}),
-    "mediaProgresses": frozenset({"id"}),
+    "authors": frozenset(
+        {
+            "id",
+            "libraryId",
+            "name",
+            "lastFirst",
+            "asin",
+            "description",
+            "imagePath",
+            "createdAt",
+            "updatedAt",
+        }
+    ),
+    "bookAuthors": frozenset({"id", "bookId", "authorId", "createdAt"}),
+    "bookSeries": frozenset({"id", "bookId", "seriesId", "sequence", "createdAt"}),
+    "books": frozenset(
+        {
+            "id",
+            "title",
+            "titleIgnorePrefix",
+            "subtitle",
+            "publishedYear",
+            "publishedDate",
+            "publisher",
+            "description",
+            "isbn",
+            "asin",
+            "language",
+            "explicit",
+            "abridged",
+            "coverPath",
+            "duration",
+            "audioFiles",
+            "chapters",
+            "ebookFile",
+            "genres",
+            "tags",
+            "narrators",
+            "createdAt",
+            "updatedAt",
+        }
+    ),
+    "collectionBooks": frozenset({"id", "collectionId", "bookId", "order", "createdAt"}),
+    "collections": frozenset({"id", "libraryId", "name", "description", "createdAt", "updatedAt"}),
+    "customMetadataProviders": frozenset(
+        {
+            "id",
+            "name",
+            "mediaType",
+            "url",
+            "authHeaderValue",
+            "extraData",
+            "createdAt",
+            "updatedAt",
+        }
+    ),
+    "devices": frozenset(
+        {
+            "id",
+            "userId",
+            "deviceId",
+            "clientName",
+            "clientVersion",
+            "deviceName",
+            "deviceVersion",
+            "ipAddress",
+            "extraData",
+            "createdAt",
+            "updatedAt",
+        }
+    ),
+    "feedEpisodes": frozenset(
+        {
+            "id",
+            "feedId",
+            "title",
+            "description",
+            "author",
+            "episode",
+            "season",
+            "episodeType",
+            "pubDate",
+            "duration",
+            "explicit",
+            "enclosureURL",
+            "enclosureType",
+            "enclosureSize",
+            "siteURL",
+            "filePath",
+            "createdAt",
+            "updatedAt",
+        }
+    ),
+    "feeds": frozenset(
+        {
+            "id",
+            "userId",
+            "entityId",
+            "entityType",
+            "slug",
+            "title",
+            "author",
+            "description",
+            "coverPath",
+            "imageURL",
+            "feedURL",
+            "serverAddress",
+            "language",
+            "explicit",
+            "preventIndexing",
+            "ownerName",
+            "ownerEmail",
+            "siteURL",
+            "podcastType",
+            "entityUpdatedAt",
+            "createdAt",
+            "updatedAt",
+        }
+    ),
+    "libraries": frozenset(
+        {
+            "id",
+            "name",
+            "mediaType",
+            "provider",
+            "icon",
+            "settings",
+            "lastScan",
+            "lastScanVersion",
+            "displayOrder",
+            "extraData",
+            "createdAt",
+            "updatedAt",
+        }
+    ),
+    "libraryFolders": frozenset({"id", "libraryId", "path", "createdAt", "updatedAt"}),
+    "libraryItems": frozenset(
+        {
+            "id",
+            "libraryId",
+            "libraryFolderId",
+            "mediaId",
+            "mediaType",
+            "path",
+            "relPath",
+            "libraryFiles",
+            "title",
+            "authorNamesFirstLast",
+            "authorNamesLastFirst",
+            "titleIgnorePrefix",
+            "isFile",
+            "mtime",
+            "ctime",
+            "birthtime",
+            "ino",
+            "size",
+            "isMissing",
+            "isInvalid",
+            "lastScan",
+            "lastScanVersion",
+            "extraData",
+            "createdAt",
+            "updatedAt",
+        }
+    ),
+    "mediaItemShares": frozenset(
+        {
+            "id",
+            "userId",
+            "slug",
+            "pash",
+            "mediaItemId",
+            "mediaItemType",
+            "isDownloadable",
+            "expiresAt",
+            "extraData",
+            "createdAt",
+            "updatedAt",
+        }
+    ),
+    "mediaProgresses": frozenset(
+        {
+            "id",
+            "userId",
+            "mediaItemId",
+            "mediaItemType",
+            "podcastId",
+            "duration",
+            "currentTime",
+            "ebookLocation",
+            "ebookProgress",
+            "isFinished",
+            "finishedAt",
+            "hideFromContinueListening",
+            "extraData",
+            "createdAt",
+            "updatedAt",
+        }
+    ),
+    "migrationsMeta": frozenset({"key", "value"}),
+    "playbackSessions": frozenset(
+        {
+            "id",
+            "userId",
+            "libraryId",
+            "mediaItemId",
+            "mediaItemType",
+            "mediaMetadata",
+            "displayTitle",
+            "displayAuthor",
+            "coverPath",
+            "duration",
+            "playMethod",
+            "mediaPlayer",
+            "deviceId",
+            "serverVersion",
+            "date",
+            "dayOfWeek",
+            "timeListening",
+            "startTime",
+            "currentTime",
+            "extraData",
+            "createdAt",
+            "updatedAt",
+        }
+    ),
+    "playlistMediaItems": frozenset(
+        {"id", "playlistId", "mediaItemId", "mediaItemType", "order", "createdAt"}
+    ),
+    "playlists": frozenset(
+        {"id", "userId", "libraryId", "name", "description", "createdAt", "updatedAt"}
+    ),
+    "podcastEpisodes": frozenset(
+        {
+            "id",
+            "podcastId",
+            "index",
+            "title",
+            "subtitle",
+            "description",
+            "episode",
+            "season",
+            "episodeType",
+            "publishedAt",
+            "pubDate",
+            "enclosureURL",
+            "enclosureType",
+            "enclosureSize",
+            "audioFile",
+            "chapters",
+            "extraData",
+            "createdAt",
+            "updatedAt",
+        }
+    ),
+    "podcasts": frozenset(
+        {
+            "id",
+            "title",
+            "titleIgnorePrefix",
+            "author",
+            "description",
+            "releaseDate",
+            "genres",
+            "tags",
+            "coverPath",
+            "feedURL",
+            "imageURL",
+            "itunesPageURL",
+            "itunesId",
+            "itunesArtistId",
+            "explicit",
+            "language",
+            "podcastType",
+            "numEpisodes",
+            "lastEpisodeCheck",
+            "autoDownloadEpisodes",
+            "autoDownloadSchedule",
+            "maxEpisodesToKeep",
+            "maxNewEpisodesToDownload",
+            "createdAt",
+            "updatedAt",
+        }
+    ),
+    "series": frozenset(
+        {
+            "id",
+            "libraryId",
+            "name",
+            "nameIgnorePrefix",
+            "description",
+            "createdAt",
+            "updatedAt",
+        }
+    ),
+    "sessions": frozenset(
+        {
+            "id",
+            "userId",
+            "refreshToken",
+            "lastRefreshToken",
+            "lastRefreshTokenExpiresAt",
+            "ipAddress",
+            "userAgent",
+            "expiresAt",
+            "createdAt",
+            "updatedAt",
+        }
+    ),
+    "settings": frozenset({"key", "value", "createdAt", "updatedAt"}),
+    "users": frozenset(
+        {
+            "id",
+            "username",
+            "email",
+            "pash",
+            "type",
+            "token",
+            "isActive",
+            "isLocked",
+            "lastSeen",
+            "permissions",
+            "bookmarks",
+            "extraData",
+            "createdAt",
+            "updatedAt",
+        }
+    ),
 }
 _REFERENCE_COLUMNS = (
     ("books", "coverPath"),
@@ -173,9 +507,18 @@ def _validate_database(path: Path) -> frozenset[str]:
             raise ValueError("Audiobookshelf database integrity check failed")
         if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
             raise ValueError("Audiobookshelf database foreign-key check failed")
+        observed_tables = frozenset(
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            )
+        )
+        if observed_tables != frozenset(_REQUIRED_SCHEMA):
+            raise ValueError("Audiobookshelf database schema is not exact 2.36.0")
         for table, required_columns in _REQUIRED_SCHEMA.items():
             columns = _table_columns(connection, table)
-            if not required_columns.issubset(columns):
+            if columns != required_columns:
                 raise ValueError("Audiobookshelf database schema is not exact 2.36.0")
         versions = dict(connection.execute("SELECT key, value FROM migrationsMeta"))
         if (
@@ -215,6 +558,12 @@ def _metadata_files(root: Path) -> dict[str, FileEvidence]:
             device=status.st_dev,
             inode=status.st_ino,
         )
+        if len(evidence) > _MAX_ARCHIVE_MEMBERS:
+            raise ValueError("Audiobookshelf metadata source contains too many files")
+        if status.st_size > _MAX_METADATA_FILE_BYTES:
+            raise ValueError("Audiobookshelf metadata source contains an oversized file")
+    if sum(item.size for item in evidence.values()) > _MAX_ARCHIVE_BYTES:
+        raise ValueError("Audiobookshelf metadata source is too large")
     return evidence
 
 
@@ -237,13 +586,27 @@ def _copy_metadata_tree(source: Path, destination: Path) -> None:
             raise ValueError("Audiobookshelf metadata source contains a special file")
 
 
-def _looks_like_image(payload: bytes) -> bool:
-    return (
-        payload.startswith(b"\x89PNG\r\n\x1a\n")
-        or payload.startswith(b"\xff\xd8\xff")
-        or (len(payload) >= 12 and payload[:4] in {b"RIFF", b"FORM"} and payload[8:12] == b"WEBP")
-        or payload.startswith((b"GIF87a", b"GIF89a"))
-    )
+def _validate_image(path: Path) -> None:
+    size = path.stat().st_size
+    if size <= 0 or size > _MAX_IMAGE_BYTES:
+        raise ValueError("Audiobookshelf referenced metadata file is not a valid image")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            Image.MAX_IMAGE_PIXELS = _MAX_IMAGE_PIXELS
+            with Image.open(path) as image:
+                if image.format not in {"GIF", "JPEG", "PNG", "WEBP"}:
+                    raise ValueError("Audiobookshelf referenced metadata file is not a valid image")
+                image.verify()
+            with Image.open(path) as image:
+                image.load()
+    except (
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+        OSError,
+        UnidentifiedImageError,
+    ) as exc:
+        raise ValueError("Audiobookshelf referenced metadata file is not a valid image") from exc
 
 
 def _validate_staged_metadata(root: Path, references: Iterable[str]) -> None:
@@ -251,17 +614,18 @@ def _validate_staged_metadata(root: Path, references: Iterable[str]) -> None:
         if path.is_dir():
             continue
         if path.name == "metadata.json":
+            if path.stat().st_size > _MAX_METADATA_JSON_BYTES:
+                raise ValueError("Audiobookshelf metadata.json is too large")
             try:
-                json.loads(path.read_text(encoding="utf-8"))
+                with path.open("r", encoding="utf-8") as metadata_file:
+                    json.load(metadata_file)
             except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
                 raise ValueError("Audiobookshelf metadata.json is malformed") from exc
     for member_name in references:
         referenced = root / member_name
         if not referenced.exists() or not referenced.is_file() or referenced.is_symlink():
             raise ValueError("Audiobookshelf referenced metadata file is missing")
-        payload = referenced.read_bytes()
-        if not payload or not _looks_like_image(payload):
-            raise ValueError("Audiobookshelf referenced metadata file is not a valid image")
+        _validate_image(referenced)
 
 
 def _archive_files(root: Path) -> Iterable[tuple[Path, str]]:
@@ -309,6 +673,10 @@ def _write_private_archive(
                     separators=(",", ":"),
                 ).encode("utf-8")
                 archive.writestr("details", details)
+                for root_name in ("metadata-items", "metadata-authors"):
+                    directory = zipfile.ZipInfo(f"{root_name}/")
+                    directory.external_attr = (stat.S_IFDIR | 0o700) << 16
+                    archive.writestr(directory, b"")
                 for path, name in archived_files[1:]:
                     archive.write(path, name)
             raw_file.flush()
@@ -393,6 +761,13 @@ def _inspect_archive(artifact: Path) -> tuple[zipfile.ZipFile, list[zipfile.ZipI
             archive.close()
             raise ValueError("Audiobookshelf archive contains an unsafe member type")
         total_size += member.file_size
+        if member.filename == "details" and member.file_size > _MAX_DETAILS_BYTES:
+            archive.close()
+            raise ValueError("Audiobookshelf archive details are too large")
+        if member.filename != "absdatabase.sqlite" and member.filename != "details":
+            if member.file_size > _MAX_METADATA_FILE_BYTES:
+                archive.close()
+                raise ValueError("Audiobookshelf archive contains an oversized metadata file")
         if member.file_size and member.compress_size == 0:
             archive.close()
             raise ValueError("Audiobookshelf archive has an invalid compression ratio")
@@ -423,7 +798,7 @@ def _inspect_archive(artifact: Path) -> tuple[zipfile.ZipFile, list[zipfile.ZipI
         archive.close()
         raise ValueError("Audiobookshelf archive metadata roots are invalid")
     file_manifest = details.get("files")
-    payload_names = set(names) - {"details"}
+    payload_names = {member.filename for member in members if not member.is_dir()} - {"details"}
     if not isinstance(file_manifest, dict) or set(file_manifest) != payload_names:
         archive.close()
         raise ValueError("Audiobookshelf archive manifest is incomplete")
@@ -478,13 +853,38 @@ def _validate_source(config_path: Path, metadata_path: Path) -> None:
         _metadata_files(subtree)
 
 
-def _require_restore_destination(
-    path: Path,
-    *,
-    sentinel_name: str,
-    artifact: Path,
-    other_destination: Path,
-) -> None:
+@dataclass(frozen=True)
+class OpenRestoreDestination:
+    path: Path
+    file_descriptor: int
+    identity: tuple[int, int]
+    sentinel_name: str
+    sentinel_identity: tuple[int, int]
+
+
+@dataclass(frozen=True)
+class RestoreStaging:
+    database_name: str
+    database_fd: int
+    database_identity: tuple[int, int]
+    items_name: str
+    items_fd: int
+    items_identity: tuple[int, int]
+    authors_name: str
+    authors_fd: int
+    authors_identity: tuple[int, int]
+
+
+def _status_identity(status: os.stat_result) -> tuple[int, int]:
+    return status.st_dev, status.st_ino
+
+
+def _stable_fd_path(file_descriptor: int, child_name: str = "") -> Path:
+    base = Path(f"/proc/{os.getpid()}/fd/{file_descriptor}")
+    return base / child_name if child_name else base
+
+
+def _validate_restore_root_path(path: Path, artifact: Path) -> None:
     if _path_has_symlink(path) or not path.exists() or not path.is_dir() or path.is_symlink():
         raise ValueError("Audiobookshelf restore destination is unsafe")
     resolved = path.resolve()
@@ -495,152 +895,362 @@ def _require_restore_destination(
     artifact_resolved = artifact.resolve(strict=False)
     if resolved == artifact_resolved or _is_within(artifact_resolved, resolved):
         raise ValueError("Audiobookshelf restore artifact and destination overlap")
-    other_resolved = other_destination.resolve(strict=False)
-    if (
-        resolved == other_resolved
-        or _is_within(resolved, other_resolved)
-        or _is_within(other_resolved, resolved)
-    ):
-        raise ValueError("Audiobookshelf restore destinations overlap")
-    sentinel = path / sentinel_name
-    if sentinel.is_symlink() or not sentinel.is_file():
-        raise ValueError("Audiobookshelf restore destination sentinel is missing")
-    if sentinel.read_text(encoding="utf-8") != RESTORE_SENTINEL_CONTENT:
-        raise ValueError("Audiobookshelf restore destination sentinel is invalid")
-    if {entry.name for entry in path.iterdir()} != {sentinel_name}:
-        raise ValueError("Audiobookshelf restore destination must be empty")
 
 
-def _remove_if_owned(path: Path, identity: tuple[int, int]) -> None:
+def _open_restore_destination(
+    path: Path,
+    *,
+    sentinel_name: str,
+    artifact: Path,
+) -> OpenRestoreDestination:
+    _validate_restore_root_path(path, artifact)
+    flags = os.O_RDONLY | os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    file_descriptor = os.open(path, flags)
     try:
-        status = path.lstat()
+        identity = _status_identity(os.fstat(file_descriptor))
+        if os.listdir(file_descriptor) != [sentinel_name]:
+            raise ValueError("Audiobookshelf restore destination must be empty")
+        sentinel_status = os.stat(sentinel_name, dir_fd=file_descriptor, follow_symlinks=False)
+        if not stat.S_ISREG(sentinel_status.st_mode):
+            raise ValueError("Audiobookshelf restore destination sentinel is missing")
+        sentinel_flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            sentinel_flags |= os.O_NOFOLLOW
+        sentinel_fd = os.open(sentinel_name, sentinel_flags, dir_fd=file_descriptor)
+        try:
+            marker = os.read(sentinel_fd, len(RESTORE_SENTINEL_CONTENT.encode("utf-8")) + 1)
+        finally:
+            os.close(sentinel_fd)
+        if marker != RESTORE_SENTINEL_CONTENT.encode("utf-8"):
+            raise ValueError("Audiobookshelf restore destination sentinel is invalid")
+        stable_root = _stable_fd_path(file_descriptor).resolve(strict=True)
+        _validate_restore_root_path(stable_root, artifact)
+        return OpenRestoreDestination(
+            path=path,
+            file_descriptor=file_descriptor,
+            identity=identity,
+            sentinel_name=sentinel_name,
+            sentinel_identity=_status_identity(sentinel_status),
+        )
+    except BaseException:
+        os.close(file_descriptor)
+        raise
+
+
+def _require_distinct_restore_destinations(
+    config: OpenRestoreDestination,
+    metadata: OpenRestoreDestination,
+) -> None:
+    if config.identity == metadata.identity:
+        raise ValueError("Audiobookshelf restore destinations overlap")
+    config_path = _stable_fd_path(config.file_descriptor).resolve(strict=True)
+    metadata_path = _stable_fd_path(metadata.file_descriptor).resolve(strict=True)
+    if _is_within(config_path, metadata_path) or _is_within(metadata_path, config_path):
+        raise ValueError("Audiobookshelf restore destinations overlap")
+
+
+def _require_destination_still_named(destination: OpenRestoreDestination) -> None:
+    status = os.stat(destination.path, follow_symlinks=False)
+    if _status_identity(status) != destination.identity:
+        raise ValueError("Audiobookshelf restore destination changed during restore")
+
+
+def _create_restore_staging(
+    config: OpenRestoreDestination,
+    metadata: OpenRestoreDestination,
+) -> RestoreStaging:
+    unique = uuid.uuid4().hex
+    database_name = f".absdatabase.sqlite.{unique}.tmp"
+    items_name = f".items.{unique}.tmp"
+    authors_name = f".authors.{unique}.tmp"
+    database_fd = os.open(
+        database_name,
+        os.O_RDWR | os.O_CREAT | os.O_EXCL,
+        0o600,
+        dir_fd=config.file_descriptor,
+    )
+    items_fd: int | None = None
+    authors_fd: int | None = None
+    try:
+        os.mkdir(items_name, mode=0o700, dir_fd=metadata.file_descriptor)
+        items_fd = os.open(
+            items_name,
+            os.O_RDONLY | os.O_DIRECTORY,
+            dir_fd=metadata.file_descriptor,
+        )
+        os.mkdir(authors_name, mode=0o700, dir_fd=metadata.file_descriptor)
+        authors_fd = os.open(
+            authors_name,
+            os.O_RDONLY | os.O_DIRECTORY,
+            dir_fd=metadata.file_descriptor,
+        )
+        return RestoreStaging(
+            database_name=database_name,
+            database_fd=database_fd,
+            database_identity=_status_identity(os.fstat(database_fd)),
+            items_name=items_name,
+            items_fd=items_fd,
+            items_identity=_status_identity(os.fstat(items_fd)),
+            authors_name=authors_name,
+            authors_fd=authors_fd,
+            authors_identity=_status_identity(os.fstat(authors_fd)),
+        )
+    except BaseException:
+        if authors_fd is not None:
+            os.close(authors_fd)
+        if items_fd is not None:
+            os.close(items_fd)
+        os.close(database_fd)
+        try:
+            os.rmdir(authors_name, dir_fd=metadata.file_descriptor)
+        except FileNotFoundError:
+            pass
+        try:
+            os.rmdir(items_name, dir_fd=metadata.file_descriptor)
+        except FileNotFoundError:
+            pass
+        try:
+            os.unlink(database_name, dir_fd=config.file_descriptor)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _rename_directory_no_replace(
+    parent_fd: int,
+    source_name: str,
+    destination_name: str,
+) -> None:
+    library = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(library, "renameat2", None)
+    if renameat2 is None:
+        raise RuntimeError("Audiobookshelf restore requires Linux renameat2")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        parent_fd,
+        os.fsencode(source_name),
+        parent_fd,
+        os.fsencode(destination_name),
+        1,
+    )
+    if result == 0:
+        return
+    error_number = ctypes.get_errno()
+    if error_number == errno.EEXIST:
+        raise ValueError("Audiobookshelf restore destination already contains state")
+    raise OSError(error_number, os.strerror(error_number))
+
+
+def _clear_directory_fd(directory_fd: int) -> None:
+    for name in os.listdir(directory_fd):
+        entry_status = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if stat.S_ISDIR(entry_status.st_mode):
+            flags = os.O_RDONLY | os.O_DIRECTORY
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            child_fd = os.open(name, flags, dir_fd=directory_fd)
+            try:
+                _clear_directory_fd(child_fd)
+            finally:
+                os.close(child_fd)
+            os.rmdir(name, dir_fd=directory_fd)
+        else:
+            os.unlink(name, dir_fd=directory_fd)
+
+
+def _remove_owned_name(
+    parent_fd: int,
+    name: str,
+    identity: tuple[int, int],
+    *,
+    directory: bool,
+) -> None:
+    try:
+        status = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
     except FileNotFoundError:
         return
-    if (status.st_dev, status.st_ino) != identity:
+    if _status_identity(status) != identity:
         return
-    if path.is_dir() and not path.is_symlink():
-        shutil.rmtree(path)
+    if directory:
+        os.rmdir(name, dir_fd=parent_fd)
     else:
-        path.unlink()
+        os.unlink(name, dir_fd=parent_fd)
 
 
-def _rename_directory_no_replace(path: Path, destination_name: str) -> None:
-    parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+def _cleanup_restore_staging(
+    config: OpenRestoreDestination,
+    metadata: OpenRestoreDestination,
+    staging: RestoreStaging,
+    *,
+    succeeded: bool,
+) -> None:
     try:
-        library = ctypes.CDLL(None, use_errno=True)
-        renameat2 = getattr(library, "renameat2", None)
-        if renameat2 is None:
-            raise RuntimeError("Audiobookshelf restore requires Linux renameat2")
-        renameat2.argtypes = [
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_int,
-            ctypes.c_char_p,
-            ctypes.c_uint,
-        ]
-        renameat2.restype = ctypes.c_int
-        result = renameat2(
-            parent_fd,
-            os.fsencode(path.name),
-            parent_fd,
-            os.fsencode(destination_name),
-            1,
-        )
-        if result == 0:
-            return
-        error_number = ctypes.get_errno()
-        if error_number == errno.EEXIST:
-            raise ValueError("Audiobookshelf restore destination already contains state")
-        raise OSError(error_number, os.strerror(error_number))
+        if not succeeded:
+            os.ftruncate(staging.database_fd, 0)
+            os.fsync(staging.database_fd)
+            _clear_directory_fd(staging.items_fd)
+            _clear_directory_fd(staging.authors_fd)
+            for name in (staging.database_name, "absdatabase.sqlite"):
+                _remove_owned_name(
+                    config.file_descriptor,
+                    name,
+                    staging.database_identity,
+                    directory=False,
+                )
+            for name in (staging.items_name, "items"):
+                _remove_owned_name(
+                    metadata.file_descriptor,
+                    name,
+                    staging.items_identity,
+                    directory=True,
+                )
+            for name in (staging.authors_name, "authors"):
+                _remove_owned_name(
+                    metadata.file_descriptor,
+                    name,
+                    staging.authors_identity,
+                    directory=True,
+                )
     finally:
-        os.close(parent_fd)
+        os.close(staging.authors_fd)
+        os.close(staging.items_fd)
+        os.close(staging.database_fd)
 
 
-def _consume_restore_sentinels(config_path: Path, metadata_path: Path) -> None:
-    sentinels = (
-        config_path / CONFIG_RESTORE_SENTINEL,
-        metadata_path / METADATA_RESTORE_SENTINEL,
-    )
-    preserved: list[tuple[Path, Path]] = []
+def _consume_restore_sentinels(
+    config: OpenRestoreDestination,
+    metadata: OpenRestoreDestination,
+) -> None:
+    destinations = (config, metadata)
+    preserved: list[tuple[OpenRestoreDestination, str]] = []
     try:
-        for sentinel in sentinels:
-            preserved_path = sentinel.parent / f".{sentinel.name}.{uuid.uuid4().hex}.consumed"
-            os.link(sentinel, preserved_path)
-            preserved.append((sentinel, preserved_path))
-            if not os.path.samefile(sentinel, preserved_path):
-                raise RuntimeError("Audiobookshelf restore sentinel ownership changed")
-            sentinel.unlink()
+        for destination in destinations:
+            current = os.stat(
+                destination.sentinel_name,
+                dir_fd=destination.file_descriptor,
+                follow_symlinks=False,
+            )
+            if _status_identity(current) != destination.sentinel_identity:
+                raise ValueError("Audiobookshelf restore sentinel changed during restore")
+            preserved_name = f".{destination.sentinel_name}.{uuid.uuid4().hex}.consumed"
+            os.link(
+                destination.sentinel_name,
+                preserved_name,
+                src_dir_fd=destination.file_descriptor,
+                dst_dir_fd=destination.file_descriptor,
+                follow_symlinks=False,
+            )
+            preserved.append((destination, preserved_name))
+            os.unlink(destination.sentinel_name, dir_fd=destination.file_descriptor)
     except BaseException:
-        for sentinel, preserved_path in reversed(preserved):
+        for destination, preserved_name in reversed(preserved):
             try:
-                os.link(preserved_path, sentinel)
+                os.link(
+                    preserved_name,
+                    destination.sentinel_name,
+                    src_dir_fd=destination.file_descriptor,
+                    dst_dir_fd=destination.file_descriptor,
+                    follow_symlinks=False,
+                )
             except FileExistsError:
                 pass
         raise
     finally:
-        for _, preserved_path in preserved:
-            preserved_path.unlink(missing_ok=True)
+        for destination, preserved_name in preserved:
+            os.unlink(preserved_name, dir_fd=destination.file_descriptor)
 
 
-def _restore_archive(
+def _stage_restore_archive(
     artifact: Path,
-    config_path: Path,
-    metadata_path: Path,
+    staged_database: Path,
+    staged_items: Path,
+    staged_authors: Path,
     workspace: Path,
 ) -> None:
-    _require_restore_destination(
-        config_path,
-        sentinel_name=CONFIG_RESTORE_SENTINEL,
-        artifact=artifact,
-        other_destination=metadata_path,
-    )
-    _require_restore_destination(
-        metadata_path,
-        sentinel_name=METADATA_RESTORE_SENTINEL,
-        artifact=artifact,
-        other_destination=config_path,
-    )
     extracted = workspace / "extracted"
     extracted.mkdir(mode=0o700)
     _extract_archive(artifact, extracted)
     references = _validate_database(extracted / "absdatabase.sqlite")
     _validate_staged_metadata(extracted, references)
+    shutil.copyfile(extracted / "absdatabase.sqlite", staged_database)
+    with staged_database.open("rb") as database_file:
+        os.fsync(database_file.fileno())
+    shutil.copytree(extracted / "metadata-items", staged_items, dirs_exist_ok=True)
+    shutil.copytree(extracted / "metadata-authors", staged_authors, dirs_exist_ok=True)
+    staged_view = workspace / "staged-view"
+    staged_view.mkdir(mode=0o700)
+    os.symlink(staged_items, staged_view / "metadata-items")
+    os.symlink(staged_authors, staged_view / "metadata-authors")
+    staged_references = _validate_database(staged_database)
+    _validate_staged_metadata(staged_view, staged_references)
 
-    staged_database = config_path / f".absdatabase.sqlite.{uuid.uuid4().hex}.tmp"
-    staged_items = metadata_path / f".items.{uuid.uuid4().hex}.tmp"
-    staged_authors = metadata_path / f".authors.{uuid.uuid4().hex}.tmp"
-    published: list[tuple[Path, tuple[int, int]]] = []
-    try:
-        shutil.copy2(extracted / "absdatabase.sqlite", staged_database)
-        os.chmod(staged_database, 0o600)
-        shutil.copytree(extracted / "metadata-items", staged_items)
-        shutil.copytree(extracted / "metadata-authors", staged_authors)
-        database_identity = (staged_database.stat().st_dev, staged_database.stat().st_ino)
-        items_identity = (staged_items.stat().st_dev, staged_items.stat().st_ino)
-        authors_identity = (staged_authors.stat().st_dev, staged_authors.stat().st_ino)
-        os.link(staged_database, config_path / "absdatabase.sqlite")
-        published.append((config_path / "absdatabase.sqlite", database_identity))
-        _rename_directory_no_replace(staged_items, "items")
-        published.append((metadata_path / "items", items_identity))
-        _rename_directory_no_replace(staged_authors, "authors")
-        published.append((metadata_path / "authors", authors_identity))
-        final_references = _validate_database(config_path / "absdatabase.sqlite")
-        final_root = workspace / "final-view"
-        final_root.mkdir(mode=0o700)
-        os.symlink(metadata_path / "items", final_root / "metadata-items")
-        os.symlink(metadata_path / "authors", final_root / "metadata-authors")
-        _validate_staged_metadata(final_root, final_references)
-        _consume_restore_sentinels(config_path, metadata_path)
-    except BaseException:
-        for path, identity in reversed(published):
-            _remove_if_owned(path, identity)
-        raise
-    finally:
-        staged_database.unlink(missing_ok=True)
-        if staged_items.exists():
-            shutil.rmtree(staged_items, ignore_errors=True)
-        if staged_authors.exists():
-            shutil.rmtree(staged_authors, ignore_errors=True)
+
+def _publish_restore(
+    config: OpenRestoreDestination,
+    metadata: OpenRestoreDestination,
+    staging: RestoreStaging,
+    validation_root: Path,
+) -> None:
+    _require_destination_still_named(config)
+    _require_destination_still_named(metadata)
+    os.link(
+        staging.database_name,
+        "absdatabase.sqlite",
+        src_dir_fd=config.file_descriptor,
+        dst_dir_fd=config.file_descriptor,
+        follow_symlinks=False,
+    )
+    _rename_directory_no_replace(metadata.file_descriptor, staging.items_name, "items")
+    _rename_directory_no_replace(metadata.file_descriptor, staging.authors_name, "authors")
+    database_status = os.stat(
+        "absdatabase.sqlite", dir_fd=config.file_descriptor, follow_symlinks=False
+    )
+    items_status = os.stat("items", dir_fd=metadata.file_descriptor, follow_symlinks=False)
+    authors_status = os.stat("authors", dir_fd=metadata.file_descriptor, follow_symlinks=False)
+    if (
+        _status_identity(database_status) != staging.database_identity
+        or _status_identity(items_status) != staging.items_identity
+        or _status_identity(authors_status) != staging.authors_identity
+    ):
+        raise ValueError("Audiobookshelf restore publication changed unexpectedly")
+    final_references = _validate_database(
+        _stable_fd_path(config.file_descriptor, "absdatabase.sqlite")
+    )
+    final_view = validation_root / "final-view"
+    final_view.mkdir(mode=0o700)
+    os.symlink(
+        _stable_fd_path(metadata.file_descriptor, "items"),
+        final_view / "metadata-items",
+    )
+    os.symlink(
+        _stable_fd_path(metadata.file_descriptor, "authors"),
+        final_view / "metadata-authors",
+    )
+    _validate_staged_metadata(final_view, final_references)
+    _require_destination_still_named(config)
+    _require_destination_still_named(metadata)
+    _remove_owned_name(
+        config.file_descriptor,
+        staging.database_name,
+        staging.database_identity,
+        directory=False,
+    )
+
+
+def _remove_private_workspace(workspace: Path) -> None:
+    if workspace.exists():
+        shutil.rmtree(workspace)
+    if workspace.exists():
+        raise RuntimeError("Audiobookshelf private workspace cleanup failed")
 
 
 def _worker_entry(
@@ -658,12 +1268,20 @@ def _worker_entry(
         elif operation == "backup":
             _build_archive(paths[0], paths[1], paths[2], paths[3])
         elif operation == "restore":
-            _restore_archive(paths[0], paths[1], paths[2], paths[3])
+            _stage_restore_archive(paths[0], paths[1], paths[2], paths[3], paths[4])
         else:
             raise RuntimeError("Unsupported Audiobookshelf worker operation")
-        connection.send(("ok", ""))
+        connection.send(("ok", "", ""))
     except BaseException as exc:
-        connection.send(("error", f"{type(exc).__name__}: {exc}"))
+        if isinstance(exc, PermissionError):
+            message = "Audiobookshelf operation lacks required filesystem permissions"
+        elif isinstance(exc, sqlite3.Error):
+            message = "Audiobookshelf SQLite operation failed"
+        elif isinstance(exc, OSError):
+            message = "Audiobookshelf filesystem operation failed"
+        else:
+            message = str(exc)
+        connection.send(("error", type(exc).__name__, message))
     finally:
         connection.close()
 
@@ -717,11 +1335,17 @@ async def _await_worker(
         process.join(PROCESS_STOP_TIMEOUT_SECONDS)
         if not connection.poll():
             raise RuntimeError(f"Audiobookshelf {operation_label} worker returned no result")
-        status, message = connection.recv()
+        status, exception_name, message = connection.recv()
         if status != "ok":
-            if message.startswith("FileNotFoundError:"):
-                raise FileNotFoundError(message.split(":", 1)[1].strip())
-            raise ValueError(message.split(":", 1)[-1].strip())
+            exception_types: dict[str, type[Exception]] = {
+                "FileNotFoundError": FileNotFoundError,
+                "PermissionError": PermissionError,
+                "RuntimeError": RuntimeError,
+                "TimeoutError": TimeoutError,
+                "ValueError": ValueError,
+            }
+            exception_type = exception_types.get(exception_name, RuntimeError)
+            raise exception_type(message)
         if process.exitcode != 0:
             raise RuntimeError(f"Audiobookshelf {operation_label} worker failed")
     except asyncio.CancelledError:
@@ -810,7 +1434,7 @@ class AudiobookshelfPlugin(BackupPlugin):
                     timeout_seconds=BACKUP_TIMEOUT_SECONDS,
                 )
             finally:
-                shutil.rmtree(workspace, ignore_errors=True)
+                _remove_private_workspace(workspace)
             if stat.S_IMODE(artifact.temporary_path.stat().st_mode) != 0o600:
                 raise PermissionError("Audiobookshelf backup artifact is not private")
         return {"artifact_path": str(artifact.final_path)}
@@ -823,31 +1447,97 @@ class AudiobookshelfPlugin(BackupPlugin):
         metadata_path = _require_absolute_path(
             context.config["metadata_path"], label="metadata_path"
         )
-        _require_restore_destination(
-            config_path,
-            sentinel_name=CONFIG_RESTORE_SENTINEL,
-            artifact=artifact,
-            other_destination=metadata_path,
-        )
-        _require_restore_destination(
-            metadata_path,
-            sentinel_name=METADATA_RESTORE_SENTINEL,
-            artifact=artifact,
-            other_destination=config_path,
-        )
-        workspace = Path(tempfile.mkdtemp(prefix="audiobookshelf-restore-"))
-        os.chmod(workspace, 0o700)
+        config_destination: OpenRestoreDestination | None = None
+        metadata_destination: OpenRestoreDestination | None = None
+        staging: RestoreStaging | None = None
+        workspace: Path | None = None
+        validation_root: Path | None = None
+        succeeded = False
         try:
+            config_destination = _open_restore_destination(
+                config_path,
+                sentinel_name=CONFIG_RESTORE_SENTINEL,
+                artifact=artifact,
+            )
+            metadata_destination = _open_restore_destination(
+                metadata_path,
+                sentinel_name=METADATA_RESTORE_SENTINEL,
+                artifact=artifact,
+            )
+            _require_distinct_restore_destinations(config_destination, metadata_destination)
+            staging = _create_restore_staging(config_destination, metadata_destination)
+            workspace = Path(tempfile.mkdtemp(prefix="audiobookshelf-restore-"))
+            os.chmod(workspace, 0o700)
             await _run_worker(
                 "restore",
                 artifact,
-                config_path,
-                metadata_path,
+                _stable_fd_path(
+                    config_destination.file_descriptor,
+                    staging.database_name,
+                ),
+                _stable_fd_path(
+                    metadata_destination.file_descriptor,
+                    staging.items_name,
+                ),
+                _stable_fd_path(
+                    metadata_destination.file_descriptor,
+                    staging.authors_name,
+                ),
                 workspace,
                 timeout_seconds=RESTORE_TIMEOUT_SECONDS,
             )
+            _remove_private_workspace(workspace)
+            workspace = None
+            validation_root = Path(tempfile.mkdtemp(prefix="audiobookshelf-final-validation-"))
+            os.chmod(validation_root, 0o700)
+            _publish_restore(
+                config_destination,
+                metadata_destination,
+                staging,
+                validation_root,
+            )
+            _remove_private_workspace(validation_root)
+            validation_root = None
+            os.fsync(config_destination.file_descriptor)
+            os.fsync(metadata_destination.file_descriptor)
+            _consume_restore_sentinels(config_destination, metadata_destination)
+            succeeded = True
         finally:
-            shutil.rmtree(workspace, ignore_errors=True)
+            cleanup_error: BaseException | None = None
+            try:
+                if workspace is not None:
+                    try:
+                        _remove_private_workspace(workspace)
+                    except BaseException as exc:
+                        cleanup_error = exc
+                if validation_root is not None:
+                    try:
+                        _remove_private_workspace(validation_root)
+                    except BaseException as exc:
+                        if cleanup_error is None:
+                            cleanup_error = exc
+                if (
+                    staging is not None
+                    and config_destination is not None
+                    and metadata_destination is not None
+                ):
+                    try:
+                        _cleanup_restore_staging(
+                            config_destination,
+                            metadata_destination,
+                            staging,
+                            succeeded=succeeded,
+                        )
+                    except BaseException as exc:
+                        if cleanup_error is None:
+                            cleanup_error = exc
+            finally:
+                if metadata_destination is not None:
+                    os.close(metadata_destination.file_descriptor)
+                if config_destination is not None:
+                    os.close(config_destination.file_descriptor)
+            if cleanup_error is not None:
+                raise cleanup_error
         return {
             "status": "partial",
             "message": (
