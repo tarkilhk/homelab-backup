@@ -12,6 +12,7 @@ carrying these versions forward by assumption.
 | Audiobookshelf | `ghcr.io/advplyr/audiobookshelf:2.36.0` (drill pinned OCI index `sha256:180acad33d69c99ed208676465d8edcb268fa46967735579a7810859885b1a8e`) | Two online SQLite snapshots plus bounded item/author native metadata through genuine read-only binds, exact schema/integrity/reference validation, private artifacts, valid sidecars, and independent phase hashes passed locally; audiobook and ebook media are excluded | Two fresh create-only restores and separate exact-image boots/restarts proved login, libraries, items, authors, collections, playlists, bookmarks, covers, and phase-specific state; capability remains `partial` because the plugin does not control destination lifecycle |
 | Cal.com | `calcom/cal.com:v6.2.0`, PostgreSQL `16` | PostgreSQL 16 connectivity and two validated Cal.com custom-format database archives | Isolated transactional restore passed |
 | Gitea | `gitea/gitea:1.27.1` on primary and NAS | Exact-image native dump, two fresh labeled restore destinations, nested package volumes, repository/issue/release/package markers, streamed size/hash/sidecar checks, absolute transfer deadlines, and bounded-memory evidence passed locally | Isolated SQLite import, hook regeneration, repository `git fsck`, exact file equality, health, and a third post-mutation rollback destination passed; production backup remains gated on downtime and Docker access |
+| Hindsight | `ghcr.io/vectorize-io/hindsight:0.8.6` with `pgvector/pgvector:pg18-trixie` (drill pinned OCI manifests `sha256:47eba343fe1cc0feb30839fa9bae4d1bb592676a2e7a7c3b8c80689ac93fbf8c` and `sha256:ff8da7b0714e5efa413d77f43e24d93064dd66469d418d12608c1bbc91fcf045`) | Two online PostgreSQL 18 custom dumps under a denied-write role, supported concurrent API writes, complete normalized 0.8.6 TOC/schema validation, private artifacts, valid sidecars, and independent phase hashes passed locally | Two fresh sentinel-only transactional restores and separate exact-image boots/restarts proved retained/curated/deleted API state, native upload bytes, webhook-secret recovery with API redaction, phase separation, and real rollback; capability remains `partial` because OAuth/configuration is external and exact 0.8.6 has no supported HTTP file-download route |
 | Homelab Backup | `tarkilhk/homelab-backup:backend-v0.2.1` on primary and NAS | Two online SQLite snapshots from a running exact-image backend, private artifacts, strict manifests, independent size/hash/sidecar evidence, and two fresh restored databases passed locally | Create-only offline restore and two isolated `--network none` exact-image boots passed; capability remains `partial` because plugin code does not control or prove a destination backend lifecycle |
 | Invoice Ninja | `invoiceninja/invoiceninja:5` | The current image resolved to 5.13.31; connectivity and two validated company exports passed | Isolated import delivered the synthetic marker; plugin remains `partial` because the API only reports queue acceptance |
 | Jellyfin | `jellyfin/jellyfin:10.11.11` | Connectivity and two validated native archives passed | Isolated official restore and restart/readiness transition passed |
@@ -33,6 +34,7 @@ The authoritative declarations are currently under these `homelab-infra` paths:
 
 - `docker.compose/dmz/calcom/calcom.yaml`
 - `docker.compose/gitea/gitea/gitea.yaml`
+- `docker.compose/misc/hindsight-db/hindsight-db.yaml`
 - `docker.compose/system/homelab-backup/homelab-backup.yaml`
 - `docker.compose/work/invoiceninja/invoiceninja.yaml`
 - `docker.compose/media/jelly_misc/jelly_misc.yaml`
@@ -105,3 +107,13 @@ It does not need Audiobookshelf network access, an administrator credential,
 the Docker socket, downtime, or access to audiobook and ebook media. Production
 restore remains forbidden; the create-only restore contract is for isolated
 local drills.
+
+The Hindsight plugin is locally verified but not yet deployed. Production
+activation needs only a user-approved attachment to the private Hindsight
+database network and a dedicated database-scoped read-only dump identity. It
+does not need Hindsight API/OAuth credentials, a host mount, a Docker socket,
+or downtime. Artifacts contain application data and secrets in plaintext and
+therefore require the repository's protected backup destination. Production
+restore remains forbidden. The restore code is disabled by default and runs
+only when `HOMELAB_BACKUP_ALLOW_ISOLATED_RESTORE=1` is deliberately set for a
+disposable local drill; destination-owner credentials exist only there.

@@ -31,13 +31,12 @@ needed to implement and prove the plugin locally. No Docker socket, host mount,
 Hindsight administrator/API credential, service downtime, or production restore
 is justified.
 
-One prerequisite in the reviewed baseline (`homelab-backup` commit
-`0fa49f691c94533458f1e4238b895ee6c442dd88`) must be fixed during
-implementation: the Homelab Backup image ships PostgreSQL 16 client tools,
-while Hindsight runs PostgreSQL 18.
+The reviewed baseline (`homelab-backup` commit
+`0fa49f691c94533458f1e4238b895ee6c442dd88`) shipped PostgreSQL 16 client
+tools while Hindsight runs PostgreSQL 18.
 PostgreSQL explicitly refuses to let an older-major `pg_dump` dump a newer
-server. The backend client stage must move to PostgreSQL 18 before the plugin can
-truthfully support this deployment
+server. Implementation therefore moved the backend client stage to PostgreSQL
+18 and added a repository guard before the plugin was enabled
 ([PostgreSQL `pg_dump` notes](https://www.postgresql.org/docs/current/app-pgdump.html#APP-PGDUMP-NOTES)).
 
 ## Exact declared deployment
@@ -73,6 +72,36 @@ infrastructure change should pin the appropriate multi-architecture digest.
 The existing `homelab-infra` Hindsight prose still mentions 0.7.2 in one
 place, but the executable compose declaration is 0.8.6. Treat the compose file
 as authoritative and correct the stale prose in a later infrastructure PR.
+
+## Local exact-image evidence
+
+Two final clean development-VM drills against the pinned images passed in
+114.02 and 101.12 seconds. They observed PostgreSQL server/client 18.6, pgvector 0.8.6,
+`pg_trgm` 1.6, and Alembic head `c7d1e9a4b3f2`. The exact source archive
+contains 21 application tables with data, four functions, two sequences, one
+materialized view, 20 primary/unique constraints, 62 fixed indexes, 17 foreign
+keys, and both required extensions. Hindsight also creates one complete trio
+of per-bank vector indexes whose 16-hex suffix is intentionally generated; the
+validator permits any number of complete `expr`/`obsv`/`worl` trios while
+fingerprinting every other object exactly.
+
+A fresh sentinel destination with only preinstalled pgvector produced exactly
+the vector extension and its comment in its schema TOC. Both drills produced
+different private artifacts with valid sidecars, restored them transactionally
+into two fresh databases, and proved phase-specific retained/curated/deleted
+memories, documents, native uploads/bytes, directives, webhook-secret recovery
+with API redaction, and a supported write overlapping backup A. Exact-image
+boots and restarts proved persistence. Real underprivileged/RLS sources,
+corrupt provenance, a nonempty destination, and an injected tail SQL failure
+all failed closed; the latter rolled the entire restore transaction back. No
+production system was contacted, and every disposable Docker resource was
+removed after each run.
+
+Exact Hindsight 0.8.6 exposes native file upload but no HTTP file-download route
+in its OpenAPI contract; the exact image returns 404 for the candidate route.
+The drill therefore proves recovered file-backed documents through supported
+APIs and validates native bytes at the authoritative PostgreSQL boundary. It
+explicitly refuses to describe the direct database check as an API download.
 
 ## Authoritative state and exclusions
 
@@ -329,9 +358,10 @@ credential, OAuth file or data export.
    directly in each database.
 8. Boot two fresh exact Hindsight manifests against the restored databases with
    provider `none`. Require readiness, exact version, list/recall of expected
-   banks/content, directives/webhooks through redacted API responses, and
-   download/hash verification of retained native file bytes. Prove A lacks
-   B-only state and B contains it.
+   banks/content and directives/webhooks through redacted API responses. Prove
+   recovered native bytes at the PostgreSQL storage boundary, assert the exact
+   version's absence of an HTTP download route, and prove A lacks B-only state
+   while B contains it.
 9. Restart each restored Hindsight and PostgreSQL container and repeat the
    readiness, recall and file-hash checks to prove persistence rather than
    process cache behavior.

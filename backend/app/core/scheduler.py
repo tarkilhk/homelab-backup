@@ -310,6 +310,16 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
         target_run.artifact_path = artifact_path
         target_run.artifact_bytes = validated_artifact.size_bytes
         target_run.sha256 = validated_artifact.sha256
+        source_identity = {
+            key: config_dict[key]
+            for key in ("host", "port", "database", "user")
+            if key in config_dict
+        }
+        target_run.source_identity_json = (
+            json.dumps(source_identity, sort_keys=True, separators=(",", ":"))
+            if source_identity
+            else None
+        )
         target_run.logs_text = (
             target_run.logs_text or ""
         ) + f"\nCompleted at {finished_at.isoformat()}"

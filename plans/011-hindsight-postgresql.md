@@ -14,7 +14,7 @@ slices below. Do not touch production during this local milestone.
 - **Effort**: M
 - **Risk**: HIGH
 - **Depends on**: Plan 001 foundation
-- **State**: IN PROGRESS
+- **State**: DONE (local)
 - **Production status**: implementation and proof are local-only. Network,
   credential, target, schedule, and backup-run activation require a later
   user-approved production change. Production restore is always forbidden.
@@ -90,25 +90,32 @@ absolute `artifact_path`; the helper writes the sidecar.
 ### Create-only restore
 
 Accept only the sidecar/hash-verified staged artifact from `RestoreService`.
-Revalidate its bounded TOC before connecting, require distinct source and
-destination targets, and require a disposable destination owner distinct from
-the source read-only identity. Refuse a database name outside the dedicated
-restore prefix, wrong/missing sentinel, any prior application object, non-empty
-destination, or incompatible server/vector identity.
+The service must create a private independent copy, revalidate its recorded
+hash, and supply the non-secret source database identity snapshotted on the
+backup run. Revalidate the bounded TOC before connecting, require distinct
+source and destination targets, and require a disposable destination owner
+distinct from the source read-only identity. Restore remains disabled unless
+the runtime explicitly enables isolated-drill mode. Refuse a database name
+outside the dedicated restore prefix, wrong/missing sentinel, any prior
+application object, non-empty destination, or incompatible server/vector
+identity.
 
 Generate an exact TOC allowlist that omits only vector extension creation and
 its extension comment, because the disposable administrator preinstalls the
-exact extension. Restore with `pg_restore --use-list`, `--single-transaction`,
-`--exit-on-error`, `--no-owner`, and `--no-privileges`. Never use `--clean`,
-`--create`, trigger disabling, error continuation, or shell execution.
+exact extension. Use `pg_restore --use-list`, `--exit-on-error`, `--no-owner`,
+and `--no-privileges` to render a private SQL stream. Append the exact
+post-restore validation and execute the whole stream with
+`psql --single-transaction` and `ON_ERROR_STOP`, so validation succeeds before
+the transaction commits. Never use `--clean`, `--create`, trigger disabling,
+error continuation, or shell execution.
 
 On failure, transaction rollback leaves the sentinel database for inspection;
-the plugin never drops or cleans it. On success, `ANALYZE`, then verify the
-exact schema, constraints, valid indexes, Alembic/vector identity, and required
-tables. The drill—not production plugin code—verifies synthetic fixture IDs,
-counts, and native-file hashes. Return `status: success` with a message naming
-the remaining exact-image boot/configuration proof; the declared restore
-capability remains `partial`.
+the plugin never drops or cleans it. Before commit, verify and analyze only the
+exact Hindsight schema, constraints, indexes, Alembic/vector identity, and
+required objects. The drill—not production plugin code—verifies synthetic
+fixture IDs, counts, and native-file hashes. Return `status: success` with a
+message naming the remaining exact-image boot/configuration proof; the declared
+restore capability remains `partial`.
 
 ## Least privilege
 
@@ -139,7 +146,8 @@ then refactor with all earlier tests green.
    status, private password-file lifecycle, timeout, and cancellation.
 3. **Transactional backup.** Test fixed argv/env, streaming and bounded memory,
    warning/failure handling, strict TOC parsing, unique private artifacts,
-   valid sidecars, and zero publication after invalid output or cancellation.
+   valid sidecars, non-secret source-identity snapshotting, and zero publication
+   after invalid output or cancellation.
 4. **Restore preflight.** Test staged-artifact identity, immutable revalidation,
    sentinel/name/source-destination/pristine checks, the vector-only TOC
    omission, and fail-closed corrupt, incompatible, or ambiguous inputs.
@@ -171,7 +179,9 @@ drill sequence:
    roles, then prove the backup role's required denials.
 2. Through first-party APIs create synthetic banks, memories/documents, a
    directive, a webhook with synthetic secret, and a native uploaded file.
-   Keep supported writes active while the real plugin creates artifact A.
+   Keep supported writes active while the real plugin creates artifact A. Exact
+   0.8.6 exposes upload and recovered document reads but no HTTP file-download
+   route; assert that absence instead of inventing an unsupported proof.
 3. Mutate all representative state through supported APIs and create artifact
    B. Require distinct paths and SHA-256 values; independently verify both
    sidecars, modes, TOCs, object coverage, and nonzero data.
@@ -180,8 +190,9 @@ drill sequence:
    schema, fixture counts/IDs/hashes, vector and file bytes, plus the expected
    A-versus-B differences.
 5. Boot a fresh exact Hindsight instance against each restore. Prove readiness,
-   API-visible recovered state, file download hashes, and A/B differences.
-   Restart both database and app destinations and repeat the proof.
+   API-visible recovered state, recovered native bytes at the PostgreSQL storage
+   boundary, and A/B differences. Restart both database and app destinations
+   and repeat the proof.
 6. Prove fail-closed behavior for old client, bad/unreachable/underprivileged/
    RLS source, dump warning/failure/cancellation, corrupt or wrong artifact,
    unsafe/non-empty destination, wrong sentinel/vector, and injected restore
@@ -195,22 +206,29 @@ A-versus-B, and restart evidence.
 
 ## Done criteria
 
-- [ ] All seven slices and all Hindsight contract tests pass without skips.
-- [ ] Exact 0.8.6 server/vector/Alembic/schema compatibility is pinned locally.
-- [ ] Backup is online, least-privileged, bounded, cancellable, secret-safe,
+- [x] All seven slices and all Hindsight contract tests pass; the exact Docker
+      drill is an intentional opt-in test.
+- [x] Exact 0.8.6 server/vector/Alembic/schema compatibility is pinned locally.
+- [x] Backup is online, least-privileged, bounded, cancellable, secret-safe,
       transactionally published, TOC-validated, private, and sidecar-backed.
-- [ ] Restore is local/fresh/sentinel-only, vector-allowlisted, transactional,
+- [x] Restore is local/fresh/sentinel-only, vector-allowlisted, transactional,
       independently verified, and honestly `partial`.
-- [ ] Both consecutive recovery drills pass with independent evidence for the
+- [x] Both consecutive recovery drills pass with independent evidence for the
       two artifacts, fresh restores, exact-image boots, and restarts.
-- [ ] Focused and full backend pytest/mypy/Black/isort plus applicable frontend
+- [x] Focused and full backend pytest/mypy/Black/isort plus applicable frontend
       test/lint/build gates pass.
-- [ ] Compatibility/recovery documentation and `CHANGELOG.md` are updated; no
+- [x] Compatibility/recovery documentation and `CHANGELOG.md` are updated; no
       secret or production identity/data appears in code, fixtures, or evidence.
-- [ ] Standards/Spec review has no unresolved P0/P1 finding; this milestone is
+- [x] Standards/Spec review has no unresolved P0/P1 finding; this milestone is
       independently committed and marked `DONE (local)`.
-- [ ] Production remains untouched; handoff lists only later approved read-only
+- [x] Production remains untouched; handoff lists only later approved read-only
       role, network attachment, target/schedule, and backup-only proof work.
+
+Final local evidence: 706 backend tests passed with six opt-in integration
+tests skipped by default; frontend 48 tests, lint, and build passed; scoped
+mypy/Black/isort/diff checks passed. The enhanced exact-image drill passed from
+clean state in 114.02 and 101.12 seconds, and left no disposable container,
+network, or volume behind.
 
 ## STOP conditions
 

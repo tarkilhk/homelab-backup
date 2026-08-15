@@ -22,6 +22,11 @@ All notable changes to Homelab Backup are recorded here. This project follows
   snapshots, bounded native metadata capture, private strict artifacts, and two
   create-only exact-image recovery drills; audiobook and ebook media stay out
   of scope.
+- A Hindsight 0.8.6 plugin with least-privileged PostgreSQL 18 logical dumps,
+  exact full-TOC validation, and transactional create-only restores verified by
+  two fresh exact-image boots and restarts. Backup attempts snapshot only their
+  non-secret database identity, and restore execution is disabled outside an
+  explicitly authorized isolated drill.
 
 ## [0.2.1] - 2026-08-15
 

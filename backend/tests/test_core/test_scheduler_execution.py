@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -70,7 +71,15 @@ def test_scheduled_multi_target_run_persists_every_result(
                 name=f"Target {index}",
                 slug=f"target-{index}",
                 plugin_name="artifact-test",
-                plugin_config_json="{}",
+                plugin_config_json=json.dumps(
+                    {
+                        "host": "database.internal",
+                        "port": 5432,
+                        "database": f"service_{index}",
+                        "user": "backup_reader",
+                        "password": "must-not-be-snapshotted",
+                    }
+                ),
             )
             setup.add(target)
             setup.flush()
@@ -97,6 +106,14 @@ def test_scheduled_multi_target_run_persists_every_result(
         assert len(target_runs) == 5
         assert len({target_run.id for target_run in target_runs}) == 5
         assert all(target_run.status == TargetRunStatus.SUCCESS.value for target_run in target_runs)
+        identities = [
+            json.loads(target_run.source_identity_json or "{}") for target_run in target_runs
+        ]
+        assert {identity["database"] for identity in identities} == {
+            f"service_{index}" for index in range(5)
+        }
+        assert all(identity["user"] == "backup_reader" for identity in identities)
+        assert all("password" not in identity for identity in identities)
 
 
 def test_overlapping_schedule_persists_a_skipped_run(tmp_path: Path) -> None:

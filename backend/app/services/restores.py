@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import shutil
+import stat
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +29,58 @@ from app.models import Run as RunModel
 from app.models import Target as TargetModel
 from app.models import TargetRun as TargetRunModel
 from app.services.runs import _assign_display_fields
+
+_LOG = logging.getLogger(__name__)
+
+
+def _copy_validated_restore_artifact(
+    source_path: str,
+    destination_path: Path,
+    *,
+    expected_size: int,
+    expected_sha256: str,
+) -> None:
+    source_descriptor = -1
+    destination_descriptor = -1
+    try:
+        source_descriptor = os.open(
+            source_path,
+            os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0),
+        )
+        source_stat = os.fstat(source_descriptor)
+        if not stat.S_ISREG(source_stat.st_mode) or source_stat.st_size != expected_size:
+            raise ValueError("Restore artifact changed while preparing restore")
+        destination_descriptor = os.open(
+            destination_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        digest = hashlib.sha256()
+        with (
+            os.fdopen(source_descriptor, "rb") as source_file,
+            os.fdopen(destination_descriptor, "wb") as destination_file,
+        ):
+            source_descriptor = -1
+            destination_descriptor = -1
+            remaining = expected_size
+            while remaining:
+                chunk = source_file.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    raise ValueError("Restore artifact changed while preparing restore")
+                destination_file.write(chunk)
+                digest.update(chunk)
+                remaining -= len(chunk)
+            if source_file.read(1):
+                raise ValueError("Restore artifact changed while preparing restore")
+            destination_file.flush()
+            os.fsync(destination_file.fileno())
+        if digest.hexdigest() != expected_sha256:
+            raise ValueError("Restore artifact changed while preparing restore")
+    finally:
+        if source_descriptor >= 0:
+            os.close(source_descriptor)
+        if destination_descriptor >= 0:
+            os.close(destination_descriptor)
 
 
 class RestoreService:
@@ -192,9 +246,15 @@ class RestoreService:
             metadata["source_target_run_id"] = source_target_run_id
         if source_run:
             metadata["source_run_id"] = source_run.id
-        if source_target:
+        if source_target and source_tr:
             metadata["source_target_id"] = source_target.id
             metadata["source_target_slug"] = source_target.slug
+            try:
+                source_identity = json.loads(source_tr.source_identity_json or "{}")
+            except (TypeError, ValueError, json.JSONDecodeError):
+                source_identity = {}
+            if isinstance(source_identity, dict) and source_identity:
+                metadata["source_database_identity"] = source_identity
         if artifact_bytes:
             metadata["artifact_bytes"] = artifact_bytes
         if artifact_sha256:
@@ -252,29 +312,40 @@ class RestoreService:
         try:
             try:
                 artifact_parent = str(Path(artifact_path).parent)
-                with tempfile.TemporaryDirectory(
-                    prefix=".homelab-backup-restore-",
-                    dir=artifact_parent,
-                ) as staging_dir:
-                    staged_artifact = Path(staging_dir) / Path(artifact_path).name
-                    try:
-                        os.link(artifact_path, staged_artifact)
-                    except OSError:
-                        shutil.copyfile(artifact_path, staged_artifact)
-
-                    staged_size = staged_artifact.stat().st_size
-                    staged_digest = hashlib.sha256()
-                    with staged_artifact.open("rb") as staged_file:
-                        for chunk in iter(lambda: staged_file.read(1024 * 1024), b""):
-                            staged_digest.update(chunk)
-                    if (
-                        staged_size != validated_artifact.size_bytes
-                        or staged_digest.hexdigest() != validated_artifact.sha256
-                    ):
-                        raise ValueError("Restore artifact changed while preparing restore")
+                staging_dir = Path(
+                    tempfile.mkdtemp(
+                        prefix=".homelab-backup-restore-",
+                        dir=artifact_parent,
+                    )
+                )
+                plugin_returned = False
+                try:
+                    staged_artifact = staging_dir / Path(artifact_path).name
+                    _copy_validated_restore_artifact(
+                        artifact_path,
+                        staged_artifact,
+                        expected_size=validated_artifact.size_bytes,
+                        expected_sha256=validated_artifact.sha256,
+                    )
 
                     context.artifact_path = str(staged_artifact)
                     result_container["result"] = asyncio.run(plugin.restore(context))
+                    plugin_returned = True
+                finally:
+                    try:
+                        shutil.rmtree(staging_dir)
+                    except OSError as cleanup_exc:
+                        _LOG.critical(
+                            "restore_staging_cleanup_failed | path=%s plugin_returned=%s",
+                            staging_dir,
+                            plugin_returned,
+                        )
+                        if plugin_returned:
+                            result_container["cleanup_warning"] = str(cleanup_exc)
+                        else:
+                            raise RuntimeError(
+                                "Restore failed and private staging cleanup was not confirmed"
+                            ) from cleanup_exc
             except Exception as exc:  # noqa: BLE001
                 result_container["error"] = exc
         finally:
@@ -316,6 +387,8 @@ class RestoreService:
             target_run.logs_text = (
                 target_run.logs_text or ""
             ) + f"\nCompleted at {finished_at.isoformat()}"
+            if "cleanup_warning" in result_container:
+                target_run.logs_text += "\nCRITICAL: private staging cleanup was not confirmed"
             self.db.add(target_run)
 
             run.finished_at = finished_at
@@ -332,6 +405,8 @@ class RestoreService:
             run.logs_text = (
                 run.logs_text or ""
             ) + f"\nCompleted at {finished_at.isoformat()} with status={run.status}"
+            if "cleanup_warning" in result_container:
+                run.logs_text += "\nCRITICAL: private staging cleanup was not confirmed"
             self.db.add(run)
             self.db.commit()
         except Exception as exc:  # noqa: BLE001

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -8,18 +9,22 @@ import re
 import shutil
 import stat
 import subprocess
+import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from sqlalchemy.orm import Session
 
 from app.core.plugins.artifacts import validate_backup_artifact
-from app.core.plugins.base import BackupContext, RestoreContext
+from app.core.plugins.base import BackupContext
 from app.core.plugins.sidecar import read_backup_sidecar
+from app.models import Run, Target, TargetRun
 from app.plugins.hindsight import plugin as hindsight_module
 from app.plugins.hindsight.plugin import HindsightPlugin
+from app.services.restores import RestoreService
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_HINDSIGHT_DOCKER_DRILL") != "1",
@@ -90,12 +95,12 @@ def _psql(container: str, database: str, sql: str, *, check: bool = True) -> str
     return completed.stdout.strip()
 
 
-def _request_json(
+def _request_result(
     container: str,
     method: str,
     path: str,
     body: dict[str, Any] | None = None,
-) -> Any:
+) -> tuple[int, bytes]:
     # Request bodies travel over stdin, keeping webhook secrets out of argv and
     # Docker error messages.
     script = r"""
@@ -124,12 +129,113 @@ print(json.dumps({"status": status, "body": base64.b64encode(payload).decode()})
     completed = _docker("exec", "-i", container, "python", "-c", script, input_text=request)
     response = json.loads(completed.stdout)
     payload = base64.b64decode(response["body"])
-    if not 200 <= int(response["status"]) < 300:
+    return int(response["status"]), payload
+
+
+def _request_json(
+    container: str,
+    method: str,
+    path: str,
+    body: dict[str, Any] | None = None,
+) -> Any:
+    status, payload = _request_result(container, method, path, body)
+    if not 200 <= status < 300:
         raise AssertionError(
-            f"Hindsight {method} {path} returned {response['status']}: "
+            f"Hindsight {method} {path} returned {status}: "
             f"{payload.decode(errors='replace')[:500]}"
         )
     return json.loads(payload)
+
+
+def _request_file_retain(
+    container: str,
+    bank_id: str,
+    filename: str,
+    data: bytes,
+    request_body: dict[str, Any],
+) -> Any:
+    script = r"""
+import base64, json, sys, urllib.error, urllib.request
+request = json.load(sys.stdin)
+boundary = "hindsight-backup-drill-boundary"
+parts = []
+def field(name, value, filename=None, content_type=None):
+    disposition = f'form-data; name="{name}"'
+    if filename is not None:
+        disposition += f'; filename="{filename}"'
+    headers = [f"Content-Disposition: {disposition}"]
+    if content_type is not None:
+        headers.append(f"Content-Type: {content_type}")
+    parts.append(("\r\n".join(headers) + "\r\n\r\n").encode() + value)
+field("request", json.dumps(request["request"]).encode())
+field("files", base64.b64decode(request["data"]), request["filename"], "text/plain")
+body = b""
+for part in parts:
+    body += b"--" + boundary.encode() + b"\r\n" + part + b"\r\n"
+body += b"--" + boundary.encode() + b"--\r\n"
+try:
+    response = urllib.request.urlopen(
+        urllib.request.Request(
+            "http://127.0.0.1:8888" + request["path"],
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            method="POST",
+        ),
+        timeout=30,
+    )
+    payload = response.read(); status = response.status
+except urllib.error.HTTPError as error:
+    payload = error.read(); status = error.code
+print(json.dumps({"status": status, "body": base64.b64encode(payload).decode()}))
+"""
+    request = json.dumps(
+        {
+            "path": f"/v1/default/banks/{bank_id}/files/retain",
+            "filename": filename,
+            "data": base64.b64encode(data).decode("ascii"),
+            "request": request_body,
+        },
+        separators=(",", ":"),
+    )
+    completed = _docker("exec", "-i", container, "python", "-c", script, input_text=request)
+    response = json.loads(completed.stdout)
+    payload = base64.b64decode(response["body"])
+    assert 200 <= int(response["status"]) < 300, payload.decode(errors="replace")[:500]
+    return json.loads(payload)
+
+
+def _wait_for_operation(container: str, bank_id: str, operation_id: str) -> dict[str, Any]:
+    deadline = time.monotonic() + 180
+    while time.monotonic() < deadline:
+        operation = _request_json(
+            container,
+            "GET",
+            f"/v1/default/banks/{bank_id}/operations/{operation_id}",
+        )
+        if operation["status"] == "completed":
+            return cast(dict[str, Any], operation)
+        if operation["status"] in {"failed", "cancelled", "not_found"}:
+            raise AssertionError(
+                f"Native file retain operation ended as {operation['status']}: "
+                f"{operation.get('error_message', '')[:300]}"
+            )
+        time.sleep(0.25)
+    raise AssertionError("Native file retain operation did not complete within 180 seconds")
+
+
+def _wait_for_document(container: str, bank_id: str, document_id: str) -> dict[str, Any]:
+    # In 0.8.6 the file-conversion operation is marked completed immediately
+    # before it queues a distinct retain operation. The supported document GET,
+    # rather than that parent status alone, is therefore the durable boundary.
+    deadline = time.monotonic() + 180
+    path = f"/v1/default/banks/{bank_id}/documents/{document_id}"
+    while time.monotonic() < deadline:
+        status, payload = _request_result(container, "GET", path)
+        if status == 200:
+            return cast(dict[str, Any], json.loads(payload))
+        assert status == 404, payload.decode(errors="replace")[:500]
+        time.sleep(0.25)
+    raise AssertionError("Native file retain document did not become visible within 180 seconds")
 
 
 def _wait_for_postgres(container: str) -> None:
@@ -186,7 +292,7 @@ def _hindsight_environment(
         "-e",
         "HINDSIGHT_API_FILE_DELETE_AFTER_RETAIN=false",
         "-e",
-        "HINDSIGHT_API_WORKER_ENABLED=false",
+        "HINDSIGHT_API_WORKER_ENABLED=true",
         "-e",
         "HINDSIGHT_API_OTEL_TRACES_ENABLED=false",
     ]
@@ -194,8 +300,8 @@ def _hindsight_environment(
 
 def _start_fake_tei(container: str, network: str) -> None:
     # The exact image does not contain its default HuggingFace models. A tiny
-    # network-local TEI protocol double keeps this recovery drill offline; the
-    # exercised bank/directive/webhook reads do not invoke inference.
+    # network-local TEI protocol double keeps this recovery drill offline while
+    # real retain and file-retain calls still exercise the vendor's persistence.
     script = r"""
 import json
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -316,14 +422,111 @@ def _start_hindsight(
     _wait_for_hindsight(container)
 
 
-def _create_api_phase(container: str, phase: str, webhook_secret: str) -> dict[str, str]:
+def _create_api_phase(container: str, phase: str, webhook_secret: str) -> dict[str, Any]:
     bank_id = f"hindsight-drill-{phase}"
+    document_id = f"phase-{phase}-document"
+    deleted_document_id = f"phase-{phase}-deleted-document"
+    original_memory_text = f"Synthetic memory content for phase {phase.upper()}"
+    updated_memory_text = f"Curated durable memory content for phase {phase.upper()}"
+    document_tags = ["backup-drill", phase, "mutated"]
     bank = _request_json(
         container,
         "PUT",
         f"/v1/default/banks/{bank_id}",
         {"name": f"Hindsight drill phase {phase.upper()}"},
     )
+    retained = _request_json(
+        container,
+        "POST",
+        f"/v1/default/banks/{bank_id}/memories",
+        {
+            "items": [
+                {
+                    "content": original_memory_text,
+                    "context": f"phase-{phase}-context",
+                    "document_id": document_id,
+                    "tags": ["backup-drill", phase],
+                    "timestamp": "unset",
+                }
+            ],
+            "async": False,
+        },
+    )
+    assert retained["success"] is True and retained["items_count"] >= 1
+    recalled = _request_json(
+        container,
+        "GET",
+        f"/v1/default/banks/{bank_id}/memories/list?document_id={document_id}",
+    )
+    assert recalled["total"] >= 1
+    memory = next(item for item in recalled["items"] if item["text"] == original_memory_text)
+    updated_memory = _request_json(
+        container,
+        "PATCH",
+        f"/v1/default/banks/{bank_id}/memories/{memory['id']}",
+        {"text": updated_memory_text, "context": f"phase-{phase}-curated-context"},
+    )
+    assert updated_memory["text"] == updated_memory_text
+    document_update = _request_json(
+        container,
+        "PATCH",
+        f"/v1/default/banks/{bank_id}/documents/{document_id}",
+        {"tags": document_tags},
+    )
+    assert document_update["success"] is True
+    document = _request_json(
+        container,
+        "GET",
+        f"/v1/default/banks/{bank_id}/documents/{document_id}",
+    )
+    assert document["original_text"] == original_memory_text
+    assert document["tags"] == document_tags
+
+    deleted_retain = _request_json(
+        container,
+        "POST",
+        f"/v1/default/banks/{bank_id}/memories",
+        {
+            "items": [
+                {
+                    "content": f"Disposable memory for phase {phase.upper()}",
+                    "document_id": deleted_document_id,
+                    "tags": ["backup-drill", phase, "delete-me"],
+                }
+            ],
+            "async": False,
+        },
+    )
+    assert deleted_retain["success"] is True
+    deleted = _request_json(
+        container,
+        "DELETE",
+        f"/v1/default/banks/{bank_id}/documents/{deleted_document_id}",
+    )
+    assert deleted["success"] is True and deleted["memory_units_deleted"] >= 1
+    deleted_status, _ = _request_result(
+        container,
+        "GET",
+        f"/v1/default/banks/{bank_id}/documents/{deleted_document_id}",
+    )
+    assert deleted_status == 404
+    active_document_id = f"phase-{phase}-active-backup-write"
+    active_retain = _request_json(
+        container,
+        "POST",
+        f"/v1/default/banks/{bank_id}/memories",
+        {
+            "items": [
+                {
+                    "content": f"Concurrent backup marker for phase {phase.upper()}",
+                    "document_id": active_document_id,
+                    "tags": ["backup-drill", "active-0"],
+                }
+            ],
+            "async": False,
+        },
+    )
+    assert active_retain["success"] is True
     directive = _request_json(
         container,
         "POST",
@@ -349,15 +552,58 @@ def _create_api_phase(container: str, phase: str, webhook_secret: str) -> dict[s
     assert bank["bank_id"] == bank_id
     assert directive["content"].endswith(phase.upper())
     assert webhook["secret"] is None
-    return {"bank_id": bank_id, "directive_id": directive["id"], "webhook_id": webhook["id"]}
+    return {
+        "bank_id": bank_id,
+        "document_id": document_id,
+        "memory_id": memory["id"],
+        "memory_text": updated_memory_text,
+        "document_tags": document_tags,
+        "deleted_document_id": deleted_document_id,
+        "active_document_id": active_document_id,
+        "directive_id": directive["id"],
+        "webhook_id": webhook["id"],
+    }
 
 
-def _assert_api_phase(container: str, phase: dict[str, str], *, present: bool) -> None:
+def _assert_api_phase(container: str, phase: dict[str, Any], *, present: bool) -> None:
     banks = _request_json(container, "GET", "/v1/default/banks")["banks"]
     bank_ids = {bank["bank_id"] for bank in banks}
     assert (phase["bank_id"] in bank_ids) is present
     if not present:
         return
+    recalled = _request_json(
+        container,
+        "GET",
+        f"/v1/default/banks/{phase['bank_id']}/memories/list?document_id={phase['document_id']}",
+    )
+    assert {item["id"] for item in recalled["items"]} == {phase["memory_id"]}
+    assert recalled["items"][0]["text"] == phase["memory_text"]
+    memory = _request_json(
+        container,
+        "GET",
+        f"/v1/default/banks/{phase['bank_id']}/memories/{phase['memory_id']}",
+    )
+    assert memory["text"] == phase["memory_text"]
+    document = _request_json(
+        container,
+        "GET",
+        f"/v1/default/banks/{phase['bank_id']}/documents/{phase['document_id']}",
+    )
+    assert document["tags"] == phase["document_tags"]
+    deleted_status, _ = _request_result(
+        container,
+        "GET",
+        f"/v1/default/banks/{phase['bank_id']}/documents/{phase['deleted_document_id']}",
+    )
+    assert deleted_status == 404
+    active_document = _request_json(
+        container,
+        "GET",
+        f"/v1/default/banks/{phase['bank_id']}/documents/{phase['active_document_id']}",
+    )
+    assert len(active_document["tags"]) == 2
+    assert "backup-drill" in active_document["tags"]
+    assert set(active_document["tags"]) & {"active-0", "active-1"}
     directives = _request_json(
         container, "GET", f"/v1/default/banks/{phase['bank_id']}/directives"
     )["items"]
@@ -369,13 +615,127 @@ def _assert_api_phase(container: str, phase: dict[str, str], *, present: bool) -
     assert all(item["secret"] is None for item in webhooks)
 
 
-def _insert_native_file(container: str, key: str, data: bytes) -> None:
-    encoded = base64.b64encode(data).decode("ascii")
-    _psql(
+def _upload_native_file(
+    app_container: str,
+    postgres_container: str,
+    phase: dict[str, Any],
+    filename: str,
+    data: bytes,
+) -> str:
+    before = _file_rows(postgres_container, _SOURCE_DATABASE)
+    document_id = f"{phase['bank_id']}-native-file"
+    response = _request_file_retain(
+        app_container,
+        phase["bank_id"],
+        filename,
+        data,
+        {
+            "parser": "markitdown",
+            "files_metadata": [
+                {
+                    "document_id": document_id,
+                    "context": f"Native upload for {phase['bank_id']}",
+                    "tags": ["backup-drill", "native-file"],
+                }
+            ],
+        },
+    )
+    assert len(response["operation_ids"]) == 1
+    _wait_for_operation(app_container, phase["bank_id"], response["operation_ids"][0])
+    document = _wait_for_document(app_container, phase["bank_id"], document_id)
+    assert document["original_text"].strip() == data.decode().strip()
+    after = _file_rows(postgres_container, _SOURCE_DATABASE)
+    new_keys = set(after) - set(before)
+    assert len(new_keys) == 1
+    storage_key = new_keys.pop()
+    assert after[storage_key] == data
+    phase["file_document_id"] = document_id
+    phase["file_storage_key"] = storage_key
+    phase["file_text"] = data.decode()
+    return storage_key
+
+
+def _assert_native_file_api(container: str, phase: dict[str, Any]) -> None:
+    document = _request_json(
         container,
-        _SOURCE_DATABASE,
-        "INSERT INTO file_storage(storage_key, data) "
-        f"VALUES ('{key}', decode('{encoded}', 'base64'));\n",
+        "GET",
+        f"/v1/default/banks/{phase['bank_id']}/documents/{phase['file_document_id']}",
+    )
+    assert document["original_text"].strip() == phase["file_text"].strip()
+    openapi = _request_json(container, "GET", "/openapi.json")
+    assert not any("files/download" in path for path in openapi["paths"])
+    # Hindsight 0.8.6 creates native download URLs in its storage backend but
+    # exposes no HTTP route for them. This 404 is a documented drill STOP: do
+    # not mistake a direct PostgreSQL byte read for a supported file download.
+    status, _ = _request_result(
+        container,
+        "GET",
+        f"/v1/default/files/download/{phase['file_storage_key']}",
+    )
+    assert status == 404
+
+
+async def _backup_during_supported_writes(
+    plugin: HindsightPlugin,
+    context: BackupContext,
+    app_container: str,
+    phase: dict[str, Any],
+) -> Path:
+    stop = threading.Event()
+    started = threading.Event()
+    errors: list[BaseException] = []
+    writes = 0
+
+    def write_loop() -> None:
+        nonlocal writes
+        try:
+            while not stop.is_set():
+                response = _request_json(
+                    app_container,
+                    "PATCH",
+                    f"/v1/default/banks/{phase['bank_id']}/documents/"
+                    f"{phase['active_document_id']}",
+                    {"tags": ["backup-drill", f"active-{writes % 2}"]},
+                )
+                assert response["success"] is True
+                writes += 1
+                started.set()
+        except BaseException as exc:  # pragma: no cover - surfaced in the main thread
+            errors.append(exc)
+            started.set()
+
+    writer = threading.Thread(target=write_loop, name="hindsight-supported-writer")
+    writer.start()
+    try:
+        assert started.wait(timeout=30), "supported API write did not start"
+        assert not errors
+        result = await plugin.backup(context)
+    finally:
+        stop.set()
+        writer.join(timeout=30)
+    assert not writer.is_alive()
+    assert not errors
+    assert writes >= 1
+    return Path(result["artifact_path"])
+
+
+def _published_backup_files(backup_root: Path) -> set[Path]:
+    return {path for path in backup_root.rglob("*") if path.is_file()}
+
+
+def _destination_inventory(postgres_container: str, database: str) -> str:
+    return _psql(
+        postgres_container,
+        database,
+        "SELECT json_build_object("
+        "'comment', shobj_description(d.oid, 'pg_database'), "
+        "'extensions', (SELECT COALESCE(json_agg(extname ORDER BY extname), '[]'::json) "
+        "FROM pg_extension WHERE extname <> 'plpgsql'), "
+        "'relations', (SELECT COALESCE(json_agg(n.nspname || '.' || c.relname || ':' || "
+        "c.relkind::text ORDER BY n.nspname, c.relname), '[]'::json) FROM pg_class c "
+        "JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT IN "
+        "('pg_catalog','information_schema') AND n.nspname !~ '^pg_toast')) "
+        "FROM pg_database d WHERE d.datname=current_database();\n",
     )
 
 
@@ -519,7 +879,9 @@ def _postgres_address(container: str, network: str) -> str:
 
 @pytest.mark.asyncio
 async def test_exact_hindsight_two_backup_two_fresh_restore_drill(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: Session,
 ) -> None:
     assert shutil.which("docker") is not None
     for binary in ("psql", "pg_dump", "pg_restore"):
@@ -619,8 +981,15 @@ async def test_exact_hindsight_two_backup_two_fresh_restore_drill(
             _SOURCE_OWNER_PASSWORD,
         )
         phase_a = _create_api_phase(source_app, "a", _WEBHOOK_SECRET_A)
-        file_a = b"Hindsight native file bytes from phase A\x00\xff"
-        _insert_native_file(postgres_container, "drill/phase-a.bin", file_a)
+        file_a = b"Hindsight native file content from phase A\n"
+        file_key_a = _upload_native_file(
+            source_app,
+            postgres_container,
+            phase_a,
+            "phase-a.txt",
+            file_a,
+        )
+        _assert_native_file_api(source_app, phase_a)
 
         _psql(
             postgres_container,
@@ -640,6 +1009,8 @@ async def test_exact_hindsight_two_backup_two_fresh_restore_drill(
 
         backup_root = tmp_path / "backups"
         monkeypatch.setattr(hindsight_module, "BACKUP_BASE_PATH", str(backup_root))
+        monkeypatch.setenv("BACKUP_BASE_PATH", str(backup_root))
+        monkeypatch.setenv("HOMELAB_BACKUP_ALLOW_ISOLATED_RESTORE", "1")
         plugin = HindsightPlugin(name="hindsight")
         source_config = {
             "mode": "source",
@@ -650,18 +1021,87 @@ async def test_exact_hindsight_two_backup_two_fresh_restore_drill(
             "password": _BACKUP_PASSWORD,
         }
         assert await plugin.test(source_config) is True
+
+        # The source contract must fail closed before creating any public
+        # artifact when SELECT is missing or an expected table enables RLS.
+        unpublished_before = _published_backup_files(backup_root)
+        underprivileged_user = f"hindsight_underpriv_{suffix}"
+        underprivileged_password = "synthetic-local-underprivileged-password"
+        _psql(
+            postgres_container,
+            "postgres",
+            f"CREATE ROLE {underprivileged_user} LOGIN PASSWORD "
+            f"'{underprivileged_password}';\n"
+            f"GRANT CONNECT ON DATABASE {_SOURCE_DATABASE} TO {underprivileged_user};\n",
+        )
+        _psql(
+            postgres_container,
+            _SOURCE_DATABASE,
+            f"GRANT USAGE ON SCHEMA public TO {underprivileged_user};\n",
+        )
+        underprivileged_config = {
+            **source_config,
+            "user": underprivileged_user,
+            "password": underprivileged_password,
+        }
+        with pytest.raises((ConnectionError, RuntimeError)):
+            await plugin.backup(
+                BackupContext(
+                    job_id="hindsight-underprivileged-source",
+                    target_id="hindsight-underprivileged-source",
+                    config=underprivileged_config,
+                    metadata={"target_slug": "hindsight-underprivileged-source"},
+                )
+            )
+        assert _published_backup_files(backup_root) == unpublished_before
+
+        _psql(
+            postgres_container,
+            _SOURCE_DATABASE,
+            "ALTER TABLE public.banks ENABLE ROW LEVEL SECURITY;\n",
+        )
+        try:
+            with pytest.raises(RuntimeError, match="RLS"):
+                await plugin.backup(
+                    BackupContext(
+                        job_id="hindsight-rls-source",
+                        target_id="hindsight-rls-source",
+                        config=source_config,
+                        metadata={"target_slug": "hindsight-rls-source"},
+                    )
+                )
+        finally:
+            _psql(
+                postgres_container,
+                _SOURCE_DATABASE,
+                "ALTER TABLE public.banks DISABLE ROW LEVEL SECURITY;\n",
+            )
+        assert _published_backup_files(backup_root) == unpublished_before
+
         backup_context_a = BackupContext(
             job_id="hindsight-drill-a",
             target_id="hindsight-source",
             config=source_config,
             metadata={"target_slug": "hindsight-drill"},
         )
-        artifact_a = Path((await plugin.backup(backup_context_a))["artifact_path"])
+        artifact_a = await _backup_during_supported_writes(
+            plugin,
+            backup_context_a,
+            source_app,
+            phase_a,
+        )
         digest_a = _inspect_artifact(plugin, backup_context_a, artifact_a)
 
         phase_b = _create_api_phase(source_app, "b", _WEBHOOK_SECRET_B)
-        file_b = b"Hindsight native file bytes from phase B\x10\x00"
-        _insert_native_file(postgres_container, "drill/phase-b.bin", file_b)
+        file_b = b"Hindsight native file content from phase B\n"
+        file_key_b = _upload_native_file(
+            source_app,
+            postgres_container,
+            phase_b,
+            "phase-b.txt",
+            file_b,
+        )
+        _assert_native_file_api(source_app, phase_b)
         backup_context_b = BackupContext(
             job_id="hindsight-drill-b",
             target_id="hindsight-source",
@@ -674,8 +1114,175 @@ async def test_exact_hindsight_two_backup_two_fresh_restore_drill(
         assert digest_a != digest_b
 
         artifacts = [artifact_a, artifact_b]
-        for database, owner, artifact in zip(
-            restore_databases, restore_owners, artifacts, strict=True
+        source_target = Target(
+            name="Hindsight drill source",
+            slug="hindsight-drill",
+            plugin_name="hindsight",
+            plugin_config_json=json.dumps(source_config),
+        )
+        db_session.add(source_target)
+        db_session.commit()
+        db_session.refresh(source_target)
+        source_runs: list[TargetRun] = []
+        for artifact, digest in zip(artifacts, (digest_a, digest_b), strict=True):
+            source_run = Run(status="success", operation="backup")
+            db_session.add(source_run)
+            db_session.commit()
+            db_session.refresh(source_run)
+            source_target_run = TargetRun(
+                run_id=source_run.id,
+                target_id=source_target.id,
+                status="success",
+                operation="backup",
+                artifact_path=str(artifact),
+                artifact_bytes=artifact.stat().st_size,
+                sha256=digest,
+                source_identity_json=json.dumps(
+                    {
+                        "host": source_config["host"],
+                        "port": source_config["port"],
+                        "database": source_config["database"],
+                        "user": source_config["user"],
+                    },
+                    sort_keys=True,
+                ),
+            )
+            db_session.add(source_target_run)
+            db_session.commit()
+            db_session.refresh(source_target_run)
+            source_runs.append(source_target_run)
+
+        def add_destination_target(database: str, owner: str) -> tuple[Target, dict[str, Any]]:
+            destination_config = {
+                "mode": "restore_destination",
+                "host": postgres_address,
+                "port": 5432,
+                "database": database,
+                "user": owner,
+                "password": _RESTORE_PASSWORD,
+            }
+            destination_target = Target(
+                name=f"Hindsight drill destination {database}",
+                slug=f"hindsight-drill-destination-{database}",
+                plugin_name="hindsight",
+                plugin_config_json=json.dumps(destination_config),
+            )
+            db_session.add(destination_target)
+            db_session.commit()
+            db_session.refresh(destination_target)
+            return destination_target, destination_config
+
+        # Corrupt provenance must be rejected before touching an otherwise valid
+        # disposable destination.
+        corrupt_database = f"hlb_hindsight_restore_corrupt_{suffix}"
+        corrupt_owner = f"hindsight_corrupt_{suffix}"
+        _create_restore_database(postgres_container, corrupt_database, corrupt_owner)
+        corrupt_target, corrupt_config = add_destination_target(corrupt_database, corrupt_owner)
+        assert await plugin.test(corrupt_config) is True
+        corrupt_run = Run(status="success", operation="backup")
+        db_session.add(corrupt_run)
+        db_session.commit()
+        db_session.refresh(corrupt_run)
+        corrupt_source_run = TargetRun(
+            run_id=corrupt_run.id,
+            target_id=source_target.id,
+            status="success",
+            operation="backup",
+            artifact_path=str(artifact_a),
+            artifact_bytes=artifact_a.stat().st_size,
+            sha256=digest_a,
+            source_identity_json='{"database":',
+        )
+        db_session.add(corrupt_source_run)
+        db_session.commit()
+        db_session.refresh(corrupt_source_run)
+        corrupt_before = _destination_inventory(postgres_container, corrupt_database)
+        with pytest.raises(ValueError, match="verified source target metadata"):
+            await asyncio.to_thread(
+                RestoreService(db_session).restore,
+                source_target_run_id=corrupt_source_run.id,
+                destination_target_id=corrupt_target.id,
+                triggered_by="isolated_hindsight_corrupt_provenance_drill",
+            )
+        assert _destination_inventory(postgres_container, corrupt_database) == corrupt_before
+        assert await plugin.test(corrupt_config) is True
+
+        # A destination containing even one user object is rejected and remains
+        # byte-for-byte semantically unchanged (including its sentinel row).
+        nonempty_database = f"hlb_hindsight_restore_nonempty_{suffix}"
+        nonempty_owner = f"hindsight_nonempty_{suffix}"
+        _create_restore_database(postgres_container, nonempty_database, nonempty_owner)
+        nonempty_target, _ = add_destination_target(nonempty_database, nonempty_owner)
+        _psql(
+            postgres_container,
+            nonempty_database,
+            "CREATE TABLE public.preexisting_marker(payload text NOT NULL);\n"
+            "INSERT INTO public.preexisting_marker VALUES ('must-survive');\n",
+        )
+        nonempty_before = _destination_inventory(postgres_container, nonempty_database)
+        marker_before = _psql(
+            postgres_container,
+            nonempty_database,
+            "SELECT payload FROM public.preexisting_marker;\n",
+        )
+        with pytest.raises(RuntimeError, match="destination must"):
+            await asyncio.to_thread(
+                RestoreService(db_session).restore,
+                source_target_run_id=source_runs[0].id,
+                destination_target_id=nonempty_target.id,
+                triggered_by="isolated_hindsight_nonempty_destination_drill",
+            )
+        assert _destination_inventory(postgres_container, nonempty_database) == nonempty_before
+        assert (
+            _psql(
+                postgres_container,
+                nonempty_database,
+                "SELECT payload FROM public.preexisting_marker;\n",
+            )
+            == marker_before
+            == "must-survive"
+        )
+
+        # Force a real error at the tail of the rendered vendor SQL. psql still
+        # executes the complete restore, but --single-transaction must roll all
+        # of it back and leave the fresh sentinel database unchanged.
+        rollback_database = f"hlb_hindsight_restore_rollback_{suffix}"
+        rollback_owner = f"hindsight_rollback_{suffix}"
+        _create_restore_database(postgres_container, rollback_database, rollback_owner)
+        rollback_target, rollback_config = add_destination_target(rollback_database, rollback_owner)
+        assert await plugin.test(rollback_config) is True
+        rollback_before = _destination_inventory(postgres_container, rollback_database)
+        original_render_restore_sql = HindsightPlugin._render_restore_sql
+
+        async def render_sql_with_tail_failure(
+            self: HindsightPlugin, artifact: Path, allowlist: Path
+        ) -> Path:
+            restore_sql = await original_render_restore_sql(self, artifact, allowlist)
+            with restore_sql.open("ab") as sql_file:
+                sql_file.write(
+                    b"\nDO $$ BEGIN RAISE EXCEPTION "
+                    b"'synthetic isolated rollback proof'; END $$;\n"
+                )
+            return restore_sql
+
+        with monkeypatch.context() as rollback_patch:
+            rollback_patch.setattr(
+                HindsightPlugin,
+                "_render_restore_sql",
+                render_sql_with_tail_failure,
+            )
+            with pytest.raises(RuntimeError, match="transactional restore failed"):
+                await asyncio.to_thread(
+                    RestoreService(db_session).restore,
+                    source_target_run_id=source_runs[0].id,
+                    destination_target_id=rollback_target.id,
+                    triggered_by="isolated_hindsight_transaction_rollback_drill",
+                )
+        assert _destination_inventory(postgres_container, rollback_database) == rollback_before
+        assert await plugin.test(rollback_config) is True
+
+        for database, owner, artifact, source_target_run in zip(
+            restore_databases, restore_owners, artifacts, source_runs, strict=True
         ):
             _create_restore_database(postgres_container, database, owner)
             destination_config = {
@@ -687,23 +1294,29 @@ async def test_exact_hindsight_two_backup_two_fresh_restore_drill(
                 "password": _RESTORE_PASSWORD,
             }
             assert await plugin.test(destination_config) is True
-            result = await plugin.restore(
-                RestoreContext(
-                    job_id=f"restore-{database}",
-                    source_target_id="hindsight-source",
-                    destination_target_id=database,
-                    config=destination_config,
-                    artifact_path=str(artifact),
-                    metadata={"source_target_slug": "hindsight-drill"},
-                )
+            destination_target = Target(
+                name=f"Hindsight drill destination {database}",
+                slug=f"hindsight-drill-destination-{database}",
+                plugin_name="hindsight",
+                plugin_config_json=json.dumps(destination_config),
             )
-            assert result["status"] == "success"
-            assert "exact-image boot" in result["message"]
+            db_session.add(destination_target)
+            db_session.commit()
+            db_session.refresh(destination_target)
+            result = await asyncio.to_thread(
+                RestoreService(db_session).restore,
+                source_target_run_id=source_target_run.id,
+                destination_target_id=destination_target.id,
+                triggered_by="isolated_hindsight_drill",
+            )
+            assert result.status == "success"
+            assert result.target_runs[0].artifact_path == str(artifact)
+            assert "exact-image boot" in str(result.message)
 
-        assert _file_rows(postgres_container, restore_databases[0]) == {"drill/phase-a.bin": file_a}
+        assert _file_rows(postgres_container, restore_databases[0]) == {file_key_a: file_a}
         assert _file_rows(postgres_container, restore_databases[1]) == {
-            "drill/phase-a.bin": file_a,
-            "drill/phase-b.bin": file_b,
+            file_key_a: file_a,
+            file_key_b: file_b,
         }
         assert _webhook_secrets(postgres_container, restore_databases[0]) == {
             "https://example.invalid/hindsight/a": _WEBHOOK_SECRET_A
@@ -721,6 +1334,9 @@ async def test_exact_hindsight_two_backup_two_fresh_restore_drill(
         _assert_api_phase(restore_apps[0], phase_b, present=False)
         _assert_api_phase(restore_apps[1], phase_a, present=True)
         _assert_api_phase(restore_apps[1], phase_b, present=True)
+        _assert_native_file_api(restore_apps[0], phase_a)
+        _assert_native_file_api(restore_apps[1], phase_a)
+        _assert_native_file_api(restore_apps[1], phase_b)
 
         _docker("restart", postgres_container, timeout=180)
         _wait_for_postgres(postgres_container)
@@ -731,8 +1347,8 @@ async def test_exact_hindsight_two_backup_two_fresh_restore_drill(
         _assert_api_phase(restore_apps[0], phase_b, present=False)
         _assert_api_phase(restore_apps[1], phase_a, present=True)
         _assert_api_phase(restore_apps[1], phase_b, present=True)
-        assert _file_rows(postgres_container, restore_databases[0])["drill/phase-a.bin"] == file_a
-        assert _file_rows(postgres_container, restore_databases[1])["drill/phase-b.bin"] == file_b
+        assert _file_rows(postgres_container, restore_databases[0])[file_key_a] == file_a
+        assert _file_rows(postgres_container, restore_databases[1])[file_key_b] == file_b
 
         cleanup()
         for container in cleanup_containers:

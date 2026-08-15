@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
 import tempfile
@@ -23,9 +24,14 @@ CONNECT_TIMEOUT_SECONDS = 30.0
 BACKUP_TIMEOUT_SECONDS = 3600.0
 BACKUP_BASE_PATH = "/backups"
 STREAM_CHUNK_BYTES = 1024 * 1024
+SUBPROCESS_OUTPUT_CHUNK_BYTES = 64 * 1024
 FILE_CACHE_FLUSH_BYTES = 8 * 1024 * 1024
 MAX_TOC_BYTES = 1024 * 1024
 MAX_FINGERPRINT_BYTES = 256 * 1024
+MAX_DIAGNOSTIC_BYTES = 1024 * 1024
+MAX_DESTINATION_SCHEMA_BYTES = 4 * 1024 * 1024
+MAX_RESTORE_SQL_BASE_BYTES = 16 * 1024 * 1024
+MAX_RESTORE_SQL_EXPANSION_RATIO = 32
 MAX_TOC_ENTRIES = 1000
 EXPECTED_TOC_FINGERPRINT = "598c1d07af2dbd181c1727deaaf9058f4a96c0ff9e741404dbfb91d05726d5f9"
 EXPECTED_EMPTY_DESTINATION_TOC_FINGERPRINT = (
@@ -34,8 +40,10 @@ EXPECTED_EMPTY_DESTINATION_TOC_FINGERPRINT = (
 RESTORE_DATABASE_PREFIX = "hlb_hindsight_restore_"
 RESTORE_SENTINEL = "homelab-backup:hindsight-restore:v1"
 RESTORE_TIMEOUT_SECONDS = 3600.0
+ISOLATED_RESTORE_ENV = "HOMELAB_BACKUP_ALLOW_ISOLATED_RESTORE"
 _SAFE_HOST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_$-]*$")
+_LOG = logging.getLogger(__name__)
 
 REQUIRED_TABLES = frozenset(
     {
@@ -292,6 +300,123 @@ def _archive_toc_fingerprint(toc: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _cleanup_private_paths(paths: list[Path | None], *, committed: bool) -> None:
+    failures: list[OSError] = []
+    for path in paths:
+        if path is None:
+            continue
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            failures.append(exc)
+            _LOG.critical(
+                "hindsight_private_temp_cleanup_failed | path=%s committed=%s",
+                path,
+                committed,
+            )
+    if failures and not committed:
+        raise RuntimeError("Hindsight could not remove private temporary state") from failures[0]
+
+
+async def _drain_stream_with_limit(
+    process: asyncio.subprocess.Process,
+    stream: asyncio.StreamReader,
+    *,
+    limit_bytes: int,
+) -> tuple[bytes, bool]:
+    captured = bytearray()
+    exceeded = False
+    while chunk := await stream.read(SUBPROCESS_OUTPUT_CHUNK_BYTES):
+        remaining = max(0, limit_bytes - len(captured))
+        if remaining:
+            captured.extend(chunk[:remaining])
+        if len(chunk) > remaining:
+            exceeded = True
+            if process.returncode is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+    return bytes(captured), exceeded
+
+
+async def _communicate_with_limits(
+    process: asyncio.subprocess.Process,
+    *,
+    operation: str,
+    timeout_seconds: float,
+    stdout_limit_bytes: int,
+    stderr_limit_bytes: int,
+) -> tuple[bytes, bytes]:
+    if process.stdout is None or process.stderr is None:
+        raise RuntimeError(f"{operation} did not provide bounded output streams")
+    stdout_stream = process.stdout
+    stderr_stream = process.stderr
+
+    async def communicate() -> tuple[int, bytes, bytes, bool, bool]:
+        stdout_task = asyncio.create_task(
+            _drain_stream_with_limit(
+                process,
+                stdout_stream,
+                limit_bytes=stdout_limit_bytes,
+            )
+        )
+        stderr_task = asyncio.create_task(
+            _drain_stream_with_limit(
+                process,
+                stderr_stream,
+                limit_bytes=stderr_limit_bytes,
+            )
+        )
+        try:
+            returncode, stdout_result, stderr_result = await asyncio.gather(
+                process.wait(),
+                stdout_task,
+                stderr_task,
+            )
+        finally:
+            for task in (stdout_task, stderr_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
+        stdout, stdout_exceeded = stdout_result
+        stderr, stderr_exceeded = stderr_result
+        return returncode, stdout, stderr, stdout_exceeded, stderr_exceeded
+
+    _, stdout, stderr, stdout_exceeded, stderr_exceeded = await run_process_with_timeout(
+        process,
+        communicate(),
+        operation=operation,
+        timeout_seconds=timeout_seconds,
+    )
+    if stdout_exceeded or stderr_exceeded:
+        raise RuntimeError(f"{operation} exceeded its output safety limit")
+    return stdout, stderr
+
+
+async def _copy_stream_with_limit(
+    process: asyncio.subprocess.Process,
+    stream: asyncio.StreamReader,
+    destination: Any,
+    *,
+    limit_bytes: int,
+) -> bool:
+    written = 0
+    exceeded = False
+    while chunk := await stream.read(STREAM_CHUNK_BYTES):
+        if written + len(chunk) > limit_bytes:
+            exceeded = True
+            if process.returncode is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+            continue
+        destination.write(chunk)
+        written += len(chunk)
+    return exceeded
+
+
 class HindsightPlugin(BackupPlugin):
     """Back up exact Hindsight state through its single PostgreSQL boundary."""
 
@@ -388,56 +513,57 @@ class HindsightPlugin(BackupPlugin):
                 if config["mode"] == "source"
                 else _DESTINATION_FINGERPRINT_SQL
             )
-            with (
-                tempfile.TemporaryFile(mode="w+b") as stdout_file,
-                tempfile.TemporaryFile(mode="w+b") as stderr_file,
-            ):
-                try:
-                    process = await asyncio.create_subprocess_exec(
-                        "psql",
-                        "-X",
-                        "-h",
-                        str(config["host"]),
-                        "-p",
-                        str(config.get("port", 5432)),
-                        "-U",
-                        str(config["user"]),
-                        "--dbname",
-                        str(config["database"]),
-                        "--set",
-                        "ON_ERROR_STOP=on",
-                        "-tA",
-                        "-c",
-                        sql,
-                        stdout=stdout_file,
-                        stderr=stderr_file,
-                        env=self._environment(
-                            password_file,
-                            statement_timeout_seconds=CONNECT_TIMEOUT_SECONDS,
-                        ),
-                    )
-                except FileNotFoundError as exc:
-                    raise FileNotFoundError("PostgreSQL 18 psql client is unavailable") from exc
-                except OSError as exc:
-                    raise ConnectionError("Unable to connect to the Hindsight database") from exc
-                await run_process_with_timeout(
-                    process,
-                    process.wait(),
-                    operation="Hindsight compatibility check",
-                    timeout_seconds=CONNECT_TIMEOUT_SECONDS,
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    "psql",
+                    "-X",
+                    "-h",
+                    str(config["host"]),
+                    "-p",
+                    str(config.get("port", 5432)),
+                    "-U",
+                    str(config["user"]),
+                    "--dbname",
+                    str(config["database"]),
+                    "--set",
+                    "ON_ERROR_STOP=on",
+                    "-tA",
+                    "-c",
+                    sql,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=self._environment(
+                        password_file,
+                        statement_timeout_seconds=CONNECT_TIMEOUT_SECONDS,
+                    ),
                 )
-                stdout_file.seek(0)
-                stdout = stdout_file.read(MAX_FINGERPRINT_BYTES + 1)
-                stderr_file.seek(0)
-                stderr = stderr_file.read(MAX_FINGERPRINT_BYTES + 1)
+            except FileNotFoundError as exc:
+                raise FileNotFoundError("PostgreSQL 18 psql client is unavailable") from exc
+            except OSError as exc:
+                raise ConnectionError("Unable to connect to the Hindsight database") from exc
+            stdout, stderr = await _communicate_with_limits(
+                process,
+                operation="Hindsight compatibility check",
+                timeout_seconds=CONNECT_TIMEOUT_SECONDS,
+                stdout_limit_bytes=MAX_FINGERPRINT_BYTES,
+                stderr_limit_bytes=MAX_DIAGNOSTIC_BYTES,
+            )
             if process.returncode == 2:
+                lowered_stderr = stderr.lower()
+                if any(
+                    marker in lowered_stderr
+                    for marker in (
+                        b"authentication failed",
+                        b"no password supplied",
+                        b"role " + str(config["user"]).encode("utf-8").lower() + b" does not exist",
+                    )
+                ):
+                    raise RuntimeError("Hindsight database authentication failed")
                 raise ConnectionError("Unable to connect to the Hindsight database")
             if process.returncode != 0:
                 raise RuntimeError("Hindsight database compatibility check failed")
             if stderr:
                 raise RuntimeError("Hindsight database compatibility check emitted diagnostics")
-            if len(stdout) > MAX_FINGERPRINT_BYTES:
-                raise RuntimeError("Hindsight database fingerprint exceeds the safety limit")
             try:
                 result = json.loads(stdout.decode("utf-8").strip())
             except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -446,7 +572,7 @@ class HindsightPlugin(BackupPlugin):
                 raise RuntimeError("Hindsight database returned an invalid fingerprint")
             return result
         finally:
-            password_file.unlink(missing_ok=True)
+            _cleanup_private_paths([password_file], committed=False)
 
     def _validate_fingerprint(self, config: Dict[str, Any], value: dict[str, Any]) -> None:
         server_version = value.get("server_version_num")
@@ -491,12 +617,14 @@ class HindsightPlugin(BackupPlugin):
 
     async def _validate_empty_destination_schema(self, config: Dict[str, Any]) -> None:
         password_file = self._password_file(config)
-        descriptor, raw_path = tempfile.mkstemp(prefix="hindsight-destination-schema-")
-        schema_dump = Path(raw_path)
-        os.fchmod(descriptor, 0o600)
-        os.close(descriptor)
+        descriptor = -1
+        schema_dump: Path | None = None
         try:
-            with tempfile.TemporaryFile(mode="w+b") as error_file:
+            descriptor, raw_path = tempfile.mkstemp(prefix="hindsight-destination-schema-")
+            schema_dump = Path(raw_path)
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "wb") as schema_file:
+                descriptor = -1
                 try:
                     process = await asyncio.create_subprocess_exec(
                         "pg_dump",
@@ -510,11 +638,9 @@ class HindsightPlugin(BackupPlugin):
                         "--schema-only",
                         "--no-owner",
                         "--no-privileges",
-                        "--file",
-                        str(schema_dump),
                         str(config["database"]),
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=error_file,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
                         env=self._environment(
                             password_file,
                             statement_timeout_seconds=CONNECT_TIMEOUT_SECONDS,
@@ -522,15 +648,62 @@ class HindsightPlugin(BackupPlugin):
                     )
                 except FileNotFoundError as exc:
                     raise FileNotFoundError("PostgreSQL 18 pg_dump client is unavailable") from exc
-                await run_process_with_timeout(
-                    process,
-                    process.wait(),
-                    operation="Hindsight destination schema inspection",
-                    timeout_seconds=CONNECT_TIMEOUT_SECONDS,
+                if process.stdout is None or process.stderr is None:
+                    raise RuntimeError(
+                        "Hindsight destination schema inspection did not provide bounded streams"
+                    )
+                stdout_stream = process.stdout
+                stderr_stream = process.stderr
+
+                async def capture_schema() -> tuple[int, bool, bytes, bool]:
+                    schema_task = asyncio.create_task(
+                        _copy_stream_with_limit(
+                            process,
+                            stdout_stream,
+                            schema_file,
+                            limit_bytes=MAX_DESTINATION_SCHEMA_BYTES,
+                        )
+                    )
+                    stderr_task = asyncio.create_task(
+                        _drain_stream_with_limit(
+                            process,
+                            stderr_stream,
+                            limit_bytes=MAX_DIAGNOSTIC_BYTES,
+                        )
+                    )
+                    try:
+                        returncode, schema_exceeded, stderr_result = await asyncio.gather(
+                            process.wait(),
+                            schema_task,
+                            stderr_task,
+                        )
+                    finally:
+                        for task in (schema_task, stderr_task):
+                            if not task.done():
+                                task.cancel()
+                        await asyncio.gather(
+                            schema_task,
+                            stderr_task,
+                            return_exceptions=True,
+                        )
+                    stderr, stderr_exceeded = stderr_result
+                    return returncode, schema_exceeded, stderr, stderr_exceeded
+
+                returncode, schema_exceeded, stderr, stderr_exceeded = (
+                    await run_process_with_timeout(
+                        process,
+                        capture_schema(),
+                        operation="Hindsight destination schema inspection",
+                        timeout_seconds=CONNECT_TIMEOUT_SECONDS,
+                    )
                 )
-                error_file.seek(0)
-                stderr = error_file.read(MAX_TOC_BYTES + 1)
-            if process.returncode != 0:
+                schema_file.flush()
+                os.fsync(schema_file.fileno())
+            if schema_exceeded or stderr_exceeded:
+                raise RuntimeError(
+                    "Hindsight destination schema inspection exceeded its output safety limit"
+                )
+            if returncode != 0:
                 raise RuntimeError("Hindsight destination schema inspection failed")
             if stderr:
                 raise RuntimeError("Hindsight destination schema inspection emitted diagnostics")
@@ -543,8 +716,9 @@ class HindsightPlugin(BackupPlugin):
             ):
                 raise RuntimeError("Hindsight restore destination must contain only pgvector")
         finally:
-            password_file.unlink(missing_ok=True)
-            schema_dump.unlink(missing_ok=True)
+            if descriptor >= 0:
+                os.close(descriptor)
+            _cleanup_private_paths([password_file, schema_dump], committed=False)
 
     async def backup(self, context: BackupContext) -> Dict[str, Any]:
         config = context.config or {}
@@ -553,6 +727,7 @@ class HindsightPlugin(BackupPlugin):
         await self.test(config)
 
         password_file = self._password_file(config)
+        published = False
         try:
             with create_backup_artifact(
                 self,
@@ -566,10 +741,7 @@ class HindsightPlugin(BackupPlugin):
                     os.O_WRONLY | os.O_CREAT | os.O_EXCL,
                     0o600,
                 )
-                with (
-                    os.fdopen(descriptor, "wb") as artifact_file,
-                    tempfile.TemporaryFile(mode="w+b") as error_file,
-                ):
+                with os.fdopen(descriptor, "wb") as artifact_file:
                     try:
                         process = await asyncio.create_subprocess_exec(
                             "pg_dump",
@@ -584,46 +756,65 @@ class HindsightPlugin(BackupPlugin):
                             "--no-privileges",
                             str(config["database"]),
                             stdout=asyncio.subprocess.PIPE,
-                            stderr=error_file,
+                            stderr=asyncio.subprocess.PIPE,
                             env=self._environment(password_file),
                         )
                     except FileNotFoundError as exc:
                         raise FileNotFoundError(
                             "PostgreSQL 18 pg_dump client is unavailable"
                         ) from exc
-                    if process.stdout is None:
-                        raise RuntimeError("pg_dump did not provide an output stream")
+                    if process.stdout is None or process.stderr is None:
+                        raise RuntimeError("pg_dump did not provide bounded output streams")
                     dump_stdout = process.stdout
+                    dump_stderr = process.stderr
 
-                    async def stream_dump() -> int:
+                    async def stream_dump() -> tuple[int, bytes, bool]:
+                        stderr_task = asyncio.create_task(
+                            _drain_stream_with_limit(
+                                process,
+                                dump_stderr,
+                                limit_bytes=MAX_DIAGNOSTIC_BYTES,
+                            )
+                        )
                         eviction_offset = 0
                         pending_eviction = 0
-                        while chunk := await dump_stdout.read(STREAM_CHUNK_BYTES):
-                            artifact_file.write(chunk)
-                            pending_eviction += len(chunk)
-                            if pending_eviction >= FILE_CACHE_FLUSH_BYTES:
-                                artifact_file.flush()
-                                os.fsync(artifact_file.fileno())
-                                evict_file_cache(
-                                    artifact_file.fileno(),
-                                    eviction_offset,
-                                    pending_eviction,
-                                )
-                                eviction_offset += pending_eviction
-                                pending_eviction = 0
-                        artifact_file.flush()
-                        os.fsync(artifact_file.fileno())
-                        evict_file_cache(artifact_file.fileno(), eviction_offset, pending_eviction)
-                        return await process.wait()
+                        try:
+                            while chunk := await dump_stdout.read(STREAM_CHUNK_BYTES):
+                                artifact_file.write(chunk)
+                                pending_eviction += len(chunk)
+                                if pending_eviction >= FILE_CACHE_FLUSH_BYTES:
+                                    artifact_file.flush()
+                                    os.fsync(artifact_file.fileno())
+                                    evict_file_cache(
+                                        artifact_file.fileno(),
+                                        eviction_offset,
+                                        pending_eviction,
+                                    )
+                                    eviction_offset += pending_eviction
+                                    pending_eviction = 0
+                            artifact_file.flush()
+                            os.fsync(artifact_file.fileno())
+                            evict_file_cache(
+                                artifact_file.fileno(),
+                                eviction_offset,
+                                pending_eviction,
+                            )
+                            returncode = await process.wait()
+                            stderr, stderr_exceeded = await stderr_task
+                            return returncode, stderr, stderr_exceeded
+                        finally:
+                            if not stderr_task.done():
+                                stderr_task.cancel()
+                            await asyncio.gather(stderr_task, return_exceptions=True)
 
-                    returncode = await run_process_with_timeout(
+                    returncode, stderr, stderr_exceeded = await run_process_with_timeout(
                         process,
                         stream_dump(),
                         operation="Hindsight pg_dump backup",
                         timeout_seconds=BACKUP_TIMEOUT_SECONDS,
                     )
-                    error_file.seek(0)
-                    stderr = error_file.read(MAX_TOC_BYTES + 1)
+                if stderr_exceeded:
+                    raise RuntimeError("Hindsight pg_dump exceeded its output safety limit")
                 if returncode != 0:
                     raise RuntimeError("Hindsight pg_dump failed")
                 if stderr:
@@ -634,41 +825,33 @@ class HindsightPlugin(BackupPlugin):
                     raise RuntimeError("Hindsight pg_dump produced a malformed archive")
                 toc = await self._inspect_archive(artifact.temporary_path)
                 self._validate_archive_toc(toc)
+            published = True
             return {"artifact_path": str(artifact.final_path)}
         finally:
-            password_file.unlink(missing_ok=True)
+            _cleanup_private_paths([password_file], committed=published)
 
     async def _inspect_archive(self, artifact_path: Path) -> bytes:
-        with (
-            tempfile.TemporaryFile(mode="w+b") as stdout_file,
-            tempfile.TemporaryFile(mode="w+b") as stderr_file,
-        ):
-            try:
-                process = await asyncio.create_subprocess_exec(
-                    "pg_restore",
-                    "--list",
-                    str(artifact_path),
-                    stdout=stdout_file,
-                    stderr=stderr_file,
-                )
-            except FileNotFoundError as exc:
-                raise FileNotFoundError("PostgreSQL 18 pg_restore client is unavailable") from exc
-            await run_process_with_timeout(
-                process,
-                process.wait(),
-                operation="Hindsight archive inspection",
-                timeout_seconds=CONNECT_TIMEOUT_SECONDS,
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "pg_restore",
+                "--list",
+                str(artifact_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
             )
-            stdout_file.seek(0)
-            stdout = stdout_file.read(MAX_TOC_BYTES + 1)
-            stderr_file.seek(0)
-            stderr = stderr_file.read(MAX_TOC_BYTES + 1)
+        except FileNotFoundError as exc:
+            raise FileNotFoundError("PostgreSQL 18 pg_restore client is unavailable") from exc
+        stdout, stderr = await _communicate_with_limits(
+            process,
+            operation="Hindsight archive inspection",
+            timeout_seconds=CONNECT_TIMEOUT_SECONDS,
+            stdout_limit_bytes=MAX_TOC_BYTES,
+            stderr_limit_bytes=MAX_DIAGNOSTIC_BYTES,
+        )
         if process.returncode != 0:
             raise RuntimeError("Hindsight archive inspection failed")
         if stderr:
             raise RuntimeError("Hindsight archive inspection emitted diagnostics")
-        if len(stdout) > MAX_TOC_BYTES:
-            raise RuntimeError("Hindsight archive TOC exceeds the safety limit")
         return stdout
 
     def _validate_archive_toc(self, toc: bytes) -> None:
@@ -691,17 +874,48 @@ class HindsightPlugin(BackupPlugin):
             raise RuntimeError("Hindsight archive schema did not match exact version 0.8.6")
 
     async def restore(self, context: RestoreContext) -> Dict[str, Any]:
+        if os.getenv(ISOLATED_RESTORE_ENV) != "1":
+            raise RuntimeError(
+                "Hindsight restore is disabled outside an explicitly authorized isolated drill"
+            )
         config = context.config or {}
         if not await self.validate_config(config) or config.get("mode") != "restore_destination":
             raise ValueError("Hindsight restore requires a valid restore_destination mode")
         if context.source_target_id == context.destination_target_id:
             raise ValueError("Hindsight restore requires distinct source and destination targets")
+        source_identity = (context.metadata or {}).get("source_database_identity")
+        if not isinstance(source_identity, dict):
+            raise ValueError("Hindsight restore requires verified source target metadata")
+        source_host = source_identity.get("host")
+        source_port = source_identity.get("port", 5432)
+        source_database = source_identity.get("database")
+        source_user = source_identity.get("user")
+        if not (
+            isinstance(source_host, str)
+            and source_host
+            and isinstance(source_port, int)
+            and isinstance(source_database, str)
+            and source_database
+            and isinstance(source_user, str)
+            and source_user
+        ):
+            raise ValueError("Hindsight restore requires complete source database identity")
+        destination_identity = (
+            str(config["host"]),
+            int(config.get("port", 5432)),
+            str(config["database"]),
+        )
+        if destination_identity == (source_host, source_port, source_database):
+            raise ValueError("Hindsight restore destination must differ from the source database")
+        if str(config["user"]) == source_user:
+            raise ValueError("Hindsight restore requires a distinct disposable destination owner")
 
         artifact = Path(context.artifact_path)
         if not artifact.exists():
             raise FileNotFoundError(f"Hindsight restore artifact not found: {artifact}")
         if not artifact.is_file() or artifact.is_symlink():
             raise ValueError("Hindsight restore artifact must be a regular file")
+        artifact_bytes = artifact.stat().st_size
         with artifact.open("rb") as artifact_file:
             if artifact_file.read(5) != b"PGDMP":
                 raise RuntimeError("Hindsight restore artifact has a malformed archive header")
@@ -713,57 +927,55 @@ class HindsightPlugin(BackupPlugin):
         allowlist = self._write_restore_allowlist(toc)
         password_file = self._password_file(config)
         restore_sql: Path | None = None
+        committed = False
         try:
             restore_sql = await self._render_restore_sql(artifact, allowlist)
-            with tempfile.TemporaryFile(mode="w+b") as error_file:
-                try:
-                    process = await asyncio.create_subprocess_exec(
-                        "psql",
-                        "-X",
-                        "-h",
-                        str(config["host"]),
-                        "-p",
-                        str(config.get("port", 5432)),
-                        "-U",
-                        str(config["user"]),
-                        "--dbname",
-                        str(config["database"]),
-                        "--single-transaction",
-                        "--set",
-                        "ON_ERROR_STOP=on",
-                        "--file",
-                        str(restore_sql),
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=error_file,
-                        env=self._environment(
-                            password_file,
-                            statement_timeout_seconds=RESTORE_TIMEOUT_SECONDS,
-                        ),
-                    )
-                except FileNotFoundError as exc:
-                    raise FileNotFoundError("PostgreSQL 18 psql client is unavailable") from exc
-                await run_process_with_timeout(
-                    process,
-                    process.wait(),
-                    operation="Hindsight transactional restore",
-                    timeout_seconds=RESTORE_TIMEOUT_SECONDS,
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    "psql",
+                    "-X",
+                    "-h",
+                    str(config["host"]),
+                    "-p",
+                    str(config.get("port", 5432)),
+                    "-U",
+                    str(config["user"]),
+                    "--dbname",
+                    str(config["database"]),
+                    "--single-transaction",
+                    "--set",
+                    "ON_ERROR_STOP=on",
+                    "--quiet",
+                    "--file",
+                    str(restore_sql),
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    env=self._environment(
+                        password_file,
+                        statement_timeout_seconds=RESTORE_TIMEOUT_SECONDS,
+                    ),
                 )
-                error_file.seek(0)
-                stderr = error_file.read(MAX_TOC_BYTES + 1)
+            except FileNotFoundError as exc:
+                raise FileNotFoundError("PostgreSQL 18 psql client is unavailable") from exc
+            await run_process_with_timeout(
+                process,
+                process.wait(),
+                operation="Hindsight transactional restore",
+                timeout_seconds=RESTORE_TIMEOUT_SECONDS,
+            )
             if process.returncode != 0:
                 raise RuntimeError("Hindsight transactional restore failed")
-            if stderr:
-                raise RuntimeError("Hindsight transactional restore emitted warning output")
+            committed = True
         finally:
-            password_file.unlink(missing_ok=True)
-            allowlist.unlink(missing_ok=True)
-            if restore_sql is not None:
-                restore_sql.unlink(missing_ok=True)
+            _cleanup_private_paths(
+                [password_file, allowlist, restore_sql],
+                committed=committed,
+            )
 
         return {
             "status": "success",
             "artifact_path": str(artifact),
-            "artifact_bytes": artifact.stat().st_size,
+            "artifact_bytes": artifact_bytes,
             "message": (
                 "Hindsight database restore completed; exact-image boot and "
                 "external OAuth/configuration proof remain required"
@@ -774,9 +986,8 @@ class HindsightPlugin(BackupPlugin):
         descriptor, raw_path = tempfile.mkstemp(prefix="hindsight-restore-sql-")
         restore_sql = Path(raw_path)
         os.fchmod(descriptor, 0o600)
-        os.close(descriptor)
         try:
-            with tempfile.TemporaryFile(mode="w+b") as error_file:
+            with os.fdopen(descriptor, "wb") as restore_sql_file:
                 try:
                     process = await asyncio.create_subprocess_exec(
                         "pg_restore",
@@ -785,25 +996,73 @@ class HindsightPlugin(BackupPlugin):
                         "--exit-on-error",
                         "--no-owner",
                         "--no-privileges",
-                        "--file",
-                        str(restore_sql),
+                        "--file=-",
                         str(artifact),
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=error_file,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
                     )
                 except FileNotFoundError as exc:
                     raise FileNotFoundError(
                         "PostgreSQL 18 pg_restore client is unavailable"
                     ) from exc
-                await run_process_with_timeout(
+                if process.stdout is None or process.stderr is None:
+                    raise RuntimeError(
+                        "Hindsight restore SQL rendering did not provide bounded streams"
+                    )
+                stdout_stream = process.stdout
+                stderr_stream = process.stderr
+                maximum_sql_bytes = max(
+                    MAX_RESTORE_SQL_BASE_BYTES,
+                    artifact.stat().st_size * MAX_RESTORE_SQL_EXPANSION_RATIO,
+                )
+
+                async def render_sql() -> tuple[int, bool, bytes, bool]:
+                    sql_task = asyncio.create_task(
+                        _copy_stream_with_limit(
+                            process,
+                            stdout_stream,
+                            restore_sql_file,
+                            limit_bytes=maximum_sql_bytes,
+                        )
+                    )
+                    stderr_task = asyncio.create_task(
+                        _drain_stream_with_limit(
+                            process,
+                            stderr_stream,
+                            limit_bytes=MAX_DIAGNOSTIC_BYTES,
+                        )
+                    )
+                    try:
+                        returncode, sql_exceeded, stderr_result = await asyncio.gather(
+                            process.wait(),
+                            sql_task,
+                            stderr_task,
+                        )
+                    finally:
+                        for task in (sql_task, stderr_task):
+                            if not task.done():
+                                task.cancel()
+                        await asyncio.gather(
+                            sql_task,
+                            stderr_task,
+                            return_exceptions=True,
+                        )
+                    stderr, stderr_exceeded = stderr_result
+                    return returncode, sql_exceeded, stderr, stderr_exceeded
+
+                returncode, sql_exceeded, stderr, stderr_exceeded = await run_process_with_timeout(
                     process,
-                    process.wait(),
+                    render_sql(),
                     operation="Hindsight restore SQL rendering",
                     timeout_seconds=RESTORE_TIMEOUT_SECONDS,
                 )
-                error_file.seek(0)
-                stderr = error_file.read(MAX_TOC_BYTES + 1)
-            if process.returncode != 0:
+                restore_sql_file.flush()
+                os.fsync(restore_sql_file.fileno())
+            if sql_exceeded or stderr_exceeded:
+                raise RuntimeError(
+                    "Hindsight restore SQL rendering exceeded its output safety limit"
+                )
+            if returncode != 0:
                 raise RuntimeError("Hindsight restore SQL rendering failed")
             if stderr:
                 raise RuntimeError("Hindsight restore SQL rendering emitted diagnostics")

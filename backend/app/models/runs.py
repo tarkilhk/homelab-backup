@@ -65,6 +65,7 @@ class TargetRun(Base):
     artifact_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
     artifact_bytes: Mapped[int | None] = mapped_column(nullable=True)
     sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_identity_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     logs_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     run: Mapped[Run] = relationship(back_populates="target_runs")

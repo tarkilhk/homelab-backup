@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -232,3 +236,167 @@ def test_restore_rejects_tampered_recorded_artifact_before_plugin_runs(
         )
 
     assert db_session.query(Run).count() == 1
+
+
+def test_restore_stages_verified_artifact_and_supplies_source_database_identity(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, Any] = {}
+
+    class ProvenancePlugin(_RestorePlugin):
+        async def restore(self, context: RestoreContext) -> dict[str, Any]:
+            observed["artifact_path"] = context.artifact_path
+            observed["metadata"] = context.metadata
+            observed["artifact_inode"] = Path(context.artifact_path).stat().st_ino
+            assert Path(context.artifact_path).read_bytes() == b"trusted backup"
+            return {"status": "success", "message": "Destination restored"}
+
+    plugin = ProvenancePlugin("test-plugin")
+    source_config = {
+        "host": "source-db.internal",
+        "port": 5432,
+        "database": "source_database",
+        "user": "source_backup",
+        "password": "not-forwarded",
+    }
+    source = _target(db_session)
+    source.name = "Restore Source"
+    source.slug = "source"
+    source.plugin_config_json = json.dumps(source_config)
+    destination = Target(
+        name="Other Destination",
+        slug="other-destination",
+        plugin_name="test-plugin",
+        plugin_config_json="{}",
+    )
+    db_session.add(destination)
+    db_session.commit()
+    artifact = _artifact(tmp_path, plugin, source.slug)
+    source_run = Run(
+        status="success",
+        operation="backup",
+        started_at=datetime.now(timezone.utc),
+    )
+    db_session.add(source_run)
+    db_session.commit()
+    source_target_run = TargetRun(
+        run_id=source_run.id,
+        target_id=source.id,
+        status="success",
+        operation="backup",
+        artifact_path=str(artifact),
+        artifact_bytes=artifact.stat().st_size,
+        sha256=hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        source_identity_json=json.dumps(
+            {
+                "host": "source-db.internal",
+                "port": 5432,
+                "database": "source_database",
+                "user": "source_backup",
+            }
+        ),
+        started_at=datetime.now(timezone.utc),
+    )
+    db_session.add(source_target_run)
+    db_session.commit()
+    monkeypatch.setenv("BACKUP_BASE_PATH", str(tmp_path))
+    monkeypatch.setattr("app.services.restores.get_plugin", lambda _: plugin)
+
+    result = RestoreService(db_session).restore(
+        source_target_run_id=source_target_run.id,
+        destination_target_id=destination.id,
+    )
+
+    assert result.status == "success"
+    staged_path = Path(str(observed["artifact_path"]))
+    assert staged_path != artifact
+    assert observed["artifact_inode"] != artifact.stat().st_ino
+    assert not staged_path.exists()
+    metadata = observed["metadata"]
+    assert metadata["source_database_identity"] == {
+        "host": "source-db.internal",
+        "port": 5432,
+        "database": "source_database",
+        "user": "source_backup",
+    }
+    assert "password" not in metadata["source_database_identity"]
+
+
+@pytest.mark.parametrize("replacement", ("fifo", "growing-file"))
+def test_restore_refuses_artifact_replaced_after_validation(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    replacement: str,
+) -> None:
+    plugin_called = False
+
+    class GuardedPlugin(_RestorePlugin):
+        async def restore(self, context: RestoreContext) -> dict[str, Any]:
+            nonlocal plugin_called
+            plugin_called = True
+            return {"status": "success", "message": "must not run"}
+
+    plugin = GuardedPlugin("test-plugin")
+    target = _target(db_session)
+    artifact = _artifact(tmp_path, plugin)
+    monkeypatch.setenv("BACKUP_BASE_PATH", str(tmp_path))
+    monkeypatch.setattr("app.services.restores.get_plugin", lambda _: plugin)
+    from app.services import restores as restores_module
+
+    real_validate = restores_module.validate_restore_artifact
+
+    def replace_after_validation(*args: Any, **kwargs: Any) -> Any:
+        validated = real_validate(*args, **kwargs)
+        if replacement == "fifo":
+            artifact.unlink()
+            os.mkfifo(artifact)
+        else:
+            with artifact.open("ab") as artifact_file:
+                artifact_file.write(b"unexpected growth")
+        return validated
+
+    monkeypatch.setattr(restores_module, "validate_restore_artifact", replace_after_validation)
+
+    with pytest.raises(ValueError, match="changed while preparing"):
+        RestoreService(db_session).restore_from_path(
+            artifact_path=str(artifact),
+            destination_target_id=target.id,
+        )
+
+    assert plugin_called is False
+
+
+def test_restore_records_critical_cleanup_warning_without_reclassifying_commit(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    plugin = _RestorePlugin("test-plugin")
+    target = _target(db_session)
+    artifact = _artifact(tmp_path, plugin)
+    monkeypatch.setenv("BACKUP_BASE_PATH", str(tmp_path))
+    monkeypatch.setattr("app.services.restores.get_plugin", lambda _: plugin)
+    staging_directories: list[Path] = []
+    real_rmtree = shutil.rmtree
+
+    def fail_cleanup(path: str | Path) -> None:
+        staging_directories.append(Path(path))
+        raise PermissionError("synthetic staging cleanup refusal")
+
+    monkeypatch.setattr("app.services.restores.shutil.rmtree", fail_cleanup)
+    try:
+        result = RestoreService(db_session).restore_from_path(
+            artifact_path=str(artifact),
+            destination_target_id=target.id,
+        )
+    finally:
+        for directory in staging_directories:
+            real_rmtree(directory)
+
+    assert result.status == "success"
+    assert "CRITICAL: private staging cleanup was not confirmed" in result.logs_text
+    assert "restore_staging_cleanup_failed" in caplog.text
