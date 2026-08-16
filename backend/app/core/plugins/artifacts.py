@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator, Mapping, cast
 
 from .base import BackupContext, BackupPlugin
 from .sidecar import read_backup_sidecar, write_backup_sidecar
@@ -33,6 +33,35 @@ class PendingBackupArtifact:
     sidecar_metadata: dict[str, object] = field(default_factory=dict)
     publication_fd: int | None = None
     publication_sha256: str | None = None
+    publication_complete: bool = False
+    publication_identity: tuple[int, int] | None = None
+    sidecar_identity: tuple[int, int] | None = None
+    sidecar_temporary_path: Path | None = None
+
+
+@dataclass(frozen=True)
+class PrevalidatedArtifactPublication:
+    """Serializable, parent-owned inputs for bounded artifact publication."""
+
+    temporary_path: Path
+    final_path: Path
+    artifact_identity: tuple[int, int]
+    artifact_bytes: int
+    artifact_sha256: str
+    sidecar_temporary_path: Path
+    sidecar_identity: tuple[int, int]
+    plugin_name: str
+    plugin_version: str
+    target_slug: str
+    sidecar_metadata: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class ArtifactPublicationResult:
+    """Owned inode evidence returned after durable artifact publication."""
+
+    artifact_identity: tuple[int, int]
+    sidecar_identity: tuple[int, int]
 
 
 @dataclass(frozen=True)
@@ -42,6 +71,7 @@ class ValidatedBackupArtifact:
     path: Path
     size_bytes: int
     sha256: str
+    sidecar_metadata: Mapping[str, object]
 
 
 def validate_zip_bytes(data: bytes, *, artifact_label: str) -> None:
@@ -163,6 +193,143 @@ def evict_file_cache(file_descriptor: int, offset: int, length: int) -> None:
         pass
 
 
+class _PublicationPluginIdentity:
+    def __init__(self, name: str, version: str) -> None:
+        self.name = name
+        self.version = version
+
+
+def prepare_prevalidated_artifact_publication(
+    pending: PendingBackupArtifact,
+    plugin: BackupPlugin,
+    context: BackupContext,
+) -> PrevalidatedArtifactPublication:
+    """Bind parent-owned artifact and sidecar staging identities before a worker starts."""
+    opened = _require_bound_temporary_path(pending)
+    if opened.st_size <= 0:
+        raise ValueError("Backup plugin created an empty artifact")
+    if (
+        pending.publication_sha256 is None
+        or re.fullmatch(r"[0-9a-f]{64}", pending.publication_sha256) is None
+    ):
+        raise ValueError("Backup plugin supplied an invalid artifact hash")
+    sidecar_path = Path(f"{pending.final_path}.meta.json")
+    sidecar_temporary_path = sidecar_path.with_name(f".{sidecar_path.name}.{uuid.uuid4().hex}.tmp")
+    descriptor = os.open(
+        sidecar_temporary_path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o600,
+    )
+    try:
+        sidecar_status = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    artifact_identity = _file_identity(opened)
+    sidecar_identity = _file_identity(sidecar_status)
+    pending.publication_identity = artifact_identity
+    pending.sidecar_identity = sidecar_identity
+    pending.sidecar_temporary_path = sidecar_temporary_path
+    target_slug = str((context.metadata or {}).get("target_slug") or context.target_id)
+    return PrevalidatedArtifactPublication(
+        temporary_path=pending.temporary_path,
+        final_path=pending.final_path,
+        artifact_identity=artifact_identity,
+        artifact_bytes=opened.st_size,
+        artifact_sha256=pending.publication_sha256,
+        sidecar_temporary_path=sidecar_temporary_path,
+        sidecar_identity=sidecar_identity,
+        plugin_name=plugin.name,
+        plugin_version=plugin.version,
+        target_slug=target_slug,
+        sidecar_metadata=dict(pending.sidecar_metadata),
+    )
+
+
+def publish_prevalidated_backup_artifact(
+    request: PrevalidatedArtifactPublication,
+) -> ArtifactPublicationResult:
+    """Durably publish one pre-bound artifact from a killable worker process."""
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(request.temporary_path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or _file_identity(opened) != request.artifact_identity
+            or opened.st_size != request.artifact_bytes
+            or _hash_open_file(descriptor) != request.artifact_sha256
+        ):
+            raise RuntimeError("Backup artifact changed before bounded publication")
+        os.fsync(descriptor)
+        _link_open_file(descriptor, request.final_path)
+        if not _path_has_identity(request.final_path, request.artifact_identity):
+            raise RuntimeError("Backup artifact publication identity changed")
+        if not _path_has_identity(request.temporary_path, request.artifact_identity):
+            raise RuntimeError("Backup artifact changed during bounded publication")
+        request.temporary_path.unlink()
+        _fsync_directory(request.final_path.parent)
+        plugin = cast(
+            BackupPlugin,
+            _PublicationPluginIdentity(request.plugin_name, request.plugin_version),
+        )
+        context = BackupContext(
+            job_id="bounded-artifact-publication",
+            target_id=request.target_slug,
+            config={},
+            metadata={"target_slug": request.target_slug},
+        )
+        sidecar_identity = write_backup_sidecar(
+            str(request.final_path),
+            plugin,
+            context,
+            extra_metadata=request.sidecar_metadata,
+            artifact_bytes=request.artifact_bytes,
+            artifact_sha256=request.artifact_sha256,
+            owned_temporary_path=str(request.sidecar_temporary_path),
+            owned_temporary_identity=request.sidecar_identity,
+        )
+        if sidecar_identity != request.sidecar_identity:
+            raise RuntimeError("Backup sidecar publication identity changed")
+        if not _path_has_identity(request.final_path, request.artifact_identity):
+            raise RuntimeError("Backup artifact changed while its sidecar was committed")
+        return ArtifactPublicationResult(
+            artifact_identity=request.artifact_identity,
+            sidecar_identity=request.sidecar_identity,
+        )
+    except BaseException:
+        _unlink_owned_file(request.final_path, request.artifact_identity)
+        _unlink_owned_file(
+            Path(f"{request.final_path}.meta.json"),
+            request.sidecar_identity,
+        )
+        _unlink_owned_file(request.temporary_path, request.artifact_identity)
+        _unlink_owned_file(request.sidecar_temporary_path, request.sidecar_identity)
+        _fsync_directory(request.final_path.parent)
+        raise
+    finally:
+        os.close(descriptor)
+
+
+def complete_prevalidated_artifact_publication(
+    pending: PendingBackupArtifact,
+    result: ArtifactPublicationResult,
+) -> None:
+    """Record a worker's durable publication result in the parent context."""
+    if (
+        result.artifact_identity != pending.publication_identity
+        or result.sidecar_identity != pending.sidecar_identity
+        or not _path_has_identity(pending.final_path, result.artifact_identity)
+        or not _path_has_identity(
+            Path(f"{pending.final_path}.meta.json"),
+            result.sidecar_identity,
+        )
+    ):
+        raise RuntimeError("Bounded artifact publication result did not match")
+    pending.publication_complete = True
+
+
 @contextmanager
 def create_backup_artifact(
     plugin: BackupPlugin,
@@ -204,6 +371,17 @@ def create_backup_artifact(
 
     try:
         yield pending
+        if pending.publication_complete:
+            artifact_identity = pending.publication_identity
+            sidecar_identity = pending.sidecar_identity
+            if (
+                artifact_identity is None
+                or sidecar_identity is None
+                or not _path_has_identity(final_path, artifact_identity)
+                or not _path_has_identity(Path(f"{final_path}.meta.json"), sidecar_identity)
+            ):
+                raise RuntimeError("Bounded backup artifact publication changed")
+            return
         if pending.publication_fd is None:
             publication_flags = os.O_RDONLY
             if hasattr(os, "O_NOFOLLOW"):
@@ -243,6 +421,8 @@ def create_backup_artifact(
         if not _path_has_identity(sidecar_path, sidecar_identity):
             raise RuntimeError("Backup sidecar changed while it was committed")
     except BaseException:
+        artifact_identity = artifact_identity or pending.publication_identity
+        sidecar_identity = sidecar_identity or pending.sidecar_identity
         if pending.publication_fd is None:
             temporary_path.unlink(missing_ok=True)
         else:
@@ -254,6 +434,8 @@ def create_backup_artifact(
                 temporary_path.unlink(missing_ok=True)
         _unlink_owned_file(Path(f"{final_path}.meta.json"), sidecar_identity)
         _unlink_owned_file(final_path, artifact_identity)
+        if pending.sidecar_temporary_path is not None:
+            _unlink_owned_file(pending.sidecar_temporary_path, sidecar_identity)
         _fsync_directory(artifact_dir)
         raise
     finally:
@@ -292,6 +474,13 @@ def _sidecar_artifact_identity(sidecar: dict[str, object]) -> tuple[int, str]:
     if not isinstance(digest_value, str) or re.fullmatch(r"[0-9a-f]{64}", digest_value) is None:
         raise ValueError("Backup sidecar artifact hash is invalid")
     return size_value, digest_value
+
+
+def _validated_sidecar_metadata(sidecar: Mapping[str, object]) -> Mapping[str, object]:
+    """Return evidence without path/time fields already modeled elsewhere."""
+    return {
+        key: value for key, value in sidecar.items() if key not in {"artifact_path", "created_at"}
+    }
 
 
 def validate_backup_artifact(
@@ -342,6 +531,7 @@ def validate_backup_artifact(
         path=path,
         size_bytes=size_bytes,
         sha256=sha256,
+        sidecar_metadata=_validated_sidecar_metadata(sidecar),
     )
 
 
@@ -406,4 +596,5 @@ def validate_restore_artifact(
         path=path,
         size_bytes=size_bytes,
         sha256=sha256,
+        sidecar_metadata=_validated_sidecar_metadata(sidecar),
     )

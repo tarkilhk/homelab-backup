@@ -34,7 +34,7 @@ files, partial files, and artifacts with missing or inconsistent sidecars.
 | Gitea | Automatic | Restores a validated native dump into an explicitly labeled isolated Gitea 1.27.1 container, verifies application state, and rolls back on failure. |
 | Homelab Backup | Partial | Creates a validated database only in a fresh sentinel-marked offline directory. Booting and verifying the exact recorded backend image remains a separate operator step. |
 | MySQL | Partial | Imports only into an empty database and validates tables; MySQL DDL is non-transactional, so a failed import requires the destination to be reset before retry. |
-| PostgreSQL | Automatic | Restores a validated custom archive transactionally with cleanup and stop-on-error semantics. |
+| PostgreSQL | Automatic | Restores one strictly validated PostgreSQL 16 named-database archive into an explicitly authorized fresh `template0` database with the exact sentinel, in one transaction. Cluster roles, tablespaces, server configuration, and application lifecycle remain external prerequisites. |
 | Profilarr | Automatic | Creates and independently validates a complete Profilarr 1.1.5 SQLite control plane and reconstructed all-ref Git repository in a fresh sentinel-marked local directory. Radarr, Sonarr, Git hosting, credentials, and exact-image boot remain separate recovery-stack prerequisites. |
 | Prowlarr | Automatic | Uploads an exact validated Prowlarr 2.4.0.5397 control-plane archive, restarts the isolated destination, and proves a different ready process. External indexers and download clients remain recovery prerequisites. |
 | WordPress | Automatic | Replaces site files, imports the database, validates both, and rolls back on failure. The destination must be an isolated mounted WordPress root. |
@@ -283,8 +283,16 @@ Backup.
 - MySQL restore is intentionally partial: use a new, empty, isolated database.
   A failed non-transactional import may leave objects behind and must not be
   retried until that destination is reset.
-- PostgreSQL and Cal.com restores use validated custom archives and stop on the
-  first error inside a transaction.
+- PostgreSQL restore accepts only a private RestoreService-staged artifact whose
+  size, SHA-256, source identity, catalog, TOC, and sidecar provenance all match.
+  The destination must be a separately authorized PostgreSQL 16 database created
+  from `template0`, contain the exact restore sentinel, have no user objects or
+  other connections, and use an owner without cluster-wide authority. Restore
+  stops on the first error inside one transaction and never creates or drops a
+  database.
+- Cal.com currently uses its legacy PostgreSQL archive path. Its exact
+  application-level current-contract proof is tracked separately from the generic
+  PostgreSQL 16 foundation.
 - WordPress restore rejects roots, symlinks, paths overlapping `/backups`, and
   artifacts stored below the destination. Files and database are rolled back when
   any restore or validation step fails.
@@ -296,7 +304,9 @@ Backup.
 
 The following isolated drills were run with synthetic data and no published ports:
 
-- MySQL 8.4.0 and PostgreSQL 16
+- MySQL 8.4.0
+- PostgreSQL 16.14 using pinned linux/amd64 manifest
+  `sha256:670391653713782e51974845b217c56fed4dd8729142299c43c919a8d3e15e00`
 - Pi-hole 2026.07.2
 - Jellyfin 10.11.11
 - Lidarr 3.1.0.4875, Radarr 6.3.0.10514, and Sonarr 4.0.19.2979
@@ -316,6 +326,16 @@ exports and four independent fresh RestoreService destinations, with exact
 company/client/invoice marker checks after every import. It remains partial
 because its API does not provide terminal job status and exact 5.13.31 does not
 reliably recover embedded document bytes into a fresh private destination.
+
+The current PostgreSQL milestone also uses the stricter two-round contract. Each
+clean round produced immutable phase-A and phase-B archives through a real
+Target/Job/Run/TargetRun, restored each archive through RestoreService into a
+separate fresh database, and repeated exact relational, FK, index, sequence,
+extension, large-object, and readiness checks after PostgreSQL restart. This is
+local capability evidence only: production remains gated on the actual runtime
+digest, database inventory, dedicated denied-write role/default grants, network,
+targets/jobs, and a separately approved backup-only run. Production restore is
+forbidden.
 Re-run drills after any component-version upgrade.
 
 Use `backend/scripts/plugin_drill.py` to repeat that contract. Provide source and

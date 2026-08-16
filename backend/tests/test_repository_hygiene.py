@@ -59,12 +59,29 @@ def test_backend_pins_database_clients_to_deployed_server_majors() -> None:
     contents = dockerfile.read_text(encoding="utf-8")
 
     assert "FROM mysql:8.4.0 AS mysql-client" in contents
-    assert "FROM postgres:18-bookworm AS postgres-client" in contents
+    assert "AS postgres16-client" in contents
+    assert (
+        "FROM postgres@sha256:b939b3851e2cccb017dc4497af63b15e34efa57fba036548773c53b2f16a8871 "
+        "AS postgres-client" in contents
+    )
     assert "FROM wordpress:cli-2.12.0-php8.2 AS wordpress-cli" in contents
     assert "mariadb-client-core" in contents
     assert "ln -s /usr/bin/mariadb-check /usr/local/bin/mysqlcheck" in contents
     assert "default-mysql-client" not in contents
     assert "apt-get install -y postgresql-client" not in contents
+
+
+def test_backend_uses_the_pinned_postgresql_libpq_for_both_client_majors() -> None:
+    """The copied PG16/PG18 binaries must not bind to Debian's older libpq."""
+
+    dockerfile = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text(encoding="utf-8")
+
+    assert (
+        "COPY --from=postgres-client /usr/lib/x86_64-linux-gnu/libpq.so.5.18 "
+        "/usr/local/lib/libpq.so.5.18" in dockerfile
+    )
+    assert "ln -s /usr/local/lib/libpq.so.5.18 /usr/local/lib/libpq.so.5" in dockerfile
+    assert "ldconfig" in dockerfile
 
 
 def test_backend_image_installs_git_for_profilarr_bundles() -> None:

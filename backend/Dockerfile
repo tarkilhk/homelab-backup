@@ -1,5 +1,6 @@
 FROM mysql:8.4.0 AS mysql-client
-FROM postgres:18-bookworm AS postgres-client
+FROM postgres@sha256:714b08dd70c05160db032e4321033ac4e5b6328935b2d03ed419c3a898aa8219 AS postgres16-client
+FROM postgres@sha256:b939b3851e2cccb017dc4497af63b15e34efa57fba036548773c53b2f16a8871 AS postgres-client
 FROM wordpress:cli-2.12.0-php8.2 AS wordpress-cli
 
 FROM python:3.11-slim-bookworm
@@ -24,14 +25,19 @@ RUN apt-get update && apt-get install -y \
     mariadb-client-core \
     php-cli \
     php-mysql \
+    util-linux \
     zlib1g \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=mysql-client /usr/bin/mysql /usr/local/bin/mysql
 COPY --from=mysql-client /usr/bin/mysqldump /usr/local/bin/mysqldump
+COPY --from=postgres16-client /usr/lib/postgresql/16/bin/ /usr/local/lib/postgresql/16/bin/
 COPY --from=postgres-client /usr/lib/postgresql/18/bin/ /usr/local/lib/postgresql/18/bin/
+COPY --from=postgres-client /usr/lib/x86_64-linux-gnu/libpq.so.5.18 /usr/local/lib/libpq.so.5.18
 COPY --from=wordpress-cli /usr/local/bin/wp /usr/local/bin/wp
-RUN ln -s /usr/bin/mariadb-check /usr/local/bin/mysqlcheck
+RUN ln -s /usr/bin/mariadb-check /usr/local/bin/mysqlcheck \
+    && ln -s /usr/local/lib/libpq.so.5.18 /usr/local/lib/libpq.so.5 \
+    && ldconfig
 
 # Copy dependency files
 COPY pyproject.toml ./

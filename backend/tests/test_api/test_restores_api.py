@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.core.plugins.base import BackupContext
+from app.core.plugins.base import BackupContext, RestoreContext
 from app.core.plugins.loader import get_plugin
 from app.core.plugins.sidecar import write_backup_sidecar
 from app.models import Job as JobModel
@@ -113,23 +113,15 @@ def test_restore_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Happy path: restore from artifact path with source_target_run_id for metadata."""
-    import asyncio
 
-    class DummyProcess:
-        def __init__(self):
-            self.returncode = 0
+    async def fake_restore(_plugin: object, context: RestoreContext) -> dict[str, str]:
+        assert context.artifact_path is not None
+        return {"status": "success"}
 
-        async def communicate(self):
-            return b"", b""
-
-        async def wait(self):
-            return self.returncode
-
-    async def fake_exec(*args, **kwargs):
-        assert args[0] == "pg_restore", f"Expected pg_restore, got {args[0]}"
-        return DummyProcess()
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(
+        "app.plugins.postgresql.plugin.PostgreSQLPlugin.restore",
+        fake_restore,
+    )
     monkeypatch.setattr(
         "app.plugins.postgresql.plugin.BACKUP_BASE_PATH",
         str(tmp_path / "backups"),
@@ -139,7 +131,14 @@ def test_restore_success(
         client,
         "Source Postgres",
         "postgresql",
-        {"host": "db.local", "user": "postgres", "password": "secret", "database": "source"},
+        {
+            "mode": "source",
+            "host": "db.local",
+            "port": 5432,
+            "user": "postgres",
+            "password": "secret",
+            "database": "source",
+        },
     )
     source_tag_id = _get_tag_id_for_target(client, "Source Postgres")
     job = _create_job(db_session_override, source_tag_id, "Backup Source Postgres")
@@ -149,7 +148,9 @@ def test_restore_success(
         "Destination Postgres",
         "postgresql",
         {
+            "mode": "restore_destination",
             "host": "db.other",
+            "port": 5432,
             "user": "postgres",
             "password": "secret",
             "database": "destination",
@@ -290,23 +291,15 @@ def test_restore_from_file_path_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Test restore from file path without source_target_run_id (disaster recovery scenario)."""
-    import asyncio
 
-    class DummyProcess:
-        def __init__(self):
-            self.returncode = 0
+    async def fake_restore(_plugin: object, context: RestoreContext) -> dict[str, str]:
+        assert context.artifact_path is not None
+        return {"status": "success"}
 
-        async def communicate(self):
-            return b"", b""
-
-        async def wait(self):
-            return self.returncode
-
-    async def fake_exec(*args, **kwargs):
-        assert args[0] == "pg_restore", f"Expected pg_restore, got {args[0]}"
-        return DummyProcess()
-
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(
+        "app.plugins.postgresql.plugin.PostgreSQLPlugin.restore",
+        fake_restore,
+    )
     monkeypatch.setattr(
         "app.plugins.postgresql.plugin.BACKUP_BASE_PATH",
         str(tmp_path / "backups"),
@@ -318,7 +311,9 @@ def test_restore_from_file_path_only(
         "Destination Postgres",
         "postgresql",
         {
+            "mode": "restore_destination",
             "host": "db.other",
+            "port": 5432,
             "user": "postgres",
             "password": "secret",
             "database": "destination",

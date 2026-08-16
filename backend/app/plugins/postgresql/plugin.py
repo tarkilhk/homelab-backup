@@ -2,330 +2,233 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-import tempfile
-from datetime import datetime, timezone
-from typing import Any, Dict
+import re
+import time
+import unicodedata
+from pathlib import Path
+from typing import Any, Dict, cast
 
-from app.core.plugins.artifacts import create_backup_artifact, evict_file_cache
+from app.core.plugins.artifacts import create_backup_artifact
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
-from app.core.subprocesses import run_process_with_timeout
+from app.core.plugins.postgresql import (
+    PostgreSQLTarget,
+    authorize_postgresql_restore,
+    probe_postgresql,
+    publish_postgresql_artifact,
+    restore_postgresql_archive,
+    write_postgresql_archive,
+)
 
 BACKUP_BASE_PATH = "/backups"
-MAX_ERROR_BYTES = 64 * 1024
-STREAM_CHUNK_BYTES = 1024 * 1024
-FILE_CACHE_FLUSH_BYTES = 8 * 1024 * 1024
-CONNECT_TIMEOUT_SECONDS = 30.0
 BACKUP_TIMEOUT_SECONDS = 3600.0
 RESTORE_TIMEOUT_SECONDS = 3600.0
+_CONFIG_KEYS = frozenset({"mode", "host", "port", "database", "user", "password"})
+_DATABASE_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_$-]{0,62}$")
+_LOG = logging.getLogger(__name__)
+
+
+def _has_control_characters(value: str) -> bool:
+    return any(unicodedata.category(character) == "Cc" for character in value)
 
 
 class PostgreSQLPlugin(BackupPlugin):
+    """Strict PostgreSQL 16 named-database backup and restore adapter."""
+
     restore_capability = "automatic"
-    """PostgreSQL backup plugin executed via a temporary Docker container.
-    Research notes:
-    - `pg_dump` is the standard utility to export a PostgreSQL database into a
-      script file or archive format.
-    - Because the host environment may not ship PostgreSQL client binaries,
-      this plugin runs `pg_dump` inside the official `postgres` container and
-      uses `pg_dump --schema-only` to verify connectivity.
-    Each target represents one named database and produces a custom-format
-    archive that can be validated and restored transactionally.
-    """
 
-    def __init__(self, name: str, version: str = "0.1.0") -> None:
+    def __init__(self, name: str, version: str = "0.2.1") -> None:
         super().__init__(name=name, version=version)
-        self._logger = logging.getLogger(__name__)
 
-    async def validate_config(self, config: Dict[str, Any]) -> bool:  # pragma: no cover - trivial
-        if not isinstance(config, dict):
+    async def validate_config(self, config: Dict[str, Any]) -> bool:
+        """Validate one exact source or restore-destination configuration."""
+        if not isinstance(config, dict) or set(config) != _CONFIG_KEYS:
             return False
+        if config.get("mode") not in {"source", "restore_destination"}:
+            return False
+
         host = config.get("host")
-        user = config.get("user")
-        password = config.get("password")
+        if (
+            not isinstance(host, str)
+            or host != host.strip()
+            or not host
+            or _has_control_characters(host)
+        ):
+            return False
+        if "://" in host or "/" in host or any(character.isspace() for character in host):
+            return False
+
+        port = config.get("port")
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            return False
+
         database = config.get("database")
-        # Port is optional; default 5432
-        if not host or not isinstance(host, str):
+        if not isinstance(database, str) or _DATABASE_NAME_PATTERN.fullmatch(database) is None:
             return False
-        if not user or not isinstance(user, str):
+
+        user = config.get("user")
+        if (
+            not isinstance(user, str)
+            or user != user.strip()
+            or not user
+            or _has_control_characters(user)
+        ):
             return False
-        if not password or not isinstance(password, str):
+        if any(character.isspace() for character in user):
             return False
-        if not database or not isinstance(database, str):
+
+        password = config.get("password")
+        if (
+            not isinstance(password, str)
+            or not password
+            or password.isspace()
+            or _has_control_characters(password)
+        ):
             return False
         return True
 
     async def test(self, config: Dict[str, Any]) -> bool:
         """Check connectivity through the same pinned PostgreSQL client toolchain."""
         if not await self.validate_config(config):
-            raise ValueError(
-                "Invalid configuration: host, user, password, and database are required"
-            )
-        host = str(config["host"])
-        port = int(config.get("port", 5432))
-        user = str(config["user"])
-        password = str(config["password"])
-        database = str(config["database"])
-
-        env = os.environ.copy()
-        env["PGPASSWORD"] = password
-        try:
-            process = await asyncio.create_subprocess_exec(
-                "psql",
-                "-X",
-                "-h",
-                host,
-                "-p",
-                str(port),
-                "-U",
-                user,
-                "--dbname",
-                database,
-                "--set",
-                "ON_ERROR_STOP=on",
-                "-tA",
-                "-c",
-                "SELECT 1",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
-            stdout, stderr = await run_process_with_timeout(
-                process,
-                process.communicate(),
-                operation="postgresql connection test",
-                timeout_seconds=CONNECT_TIMEOUT_SECONDS,
-            )
-        except FileNotFoundError as exc:
-            raise FileNotFoundError("psql client command not found") from exc
-        except OSError as exc:
-            self._logger.warning("postgresql_test_failed | host=%s error=%s", host, exc)
-            raise ConnectionError(f"Failed to connect to PostgreSQL database: {exc}") from exc
-        if process.returncode != 0:
-            detail = stderr[:MAX_ERROR_BYTES].decode(errors="ignore").strip()
-            raise ConnectionError(f"Failed to connect to PostgreSQL database: {detail}")
-        if stdout.decode(errors="ignore").strip() != "1":
-            raise ConnectionError("Failed to validate PostgreSQL connection")
+            raise ValueError("Invalid PostgreSQL source or restore-destination configuration")
+        await probe_postgresql(PostgreSQLTarget.from_config(config))
         return True
 
     async def backup(self, context: BackupContext) -> Dict[str, Any]:
-        cfg = getattr(context, "config", {}) or {}
-        if not await self.validate_config(cfg):
-            raise ValueError("postgresql config requires host, user, password, database")
-        host = str(cfg["host"])
-        port = int(cfg.get("port", 5432))
-        user = str(cfg["user"])
-        password = str(cfg["password"])
-        database = str(cfg["database"]).strip()
-
-        meta = context.metadata or {}
-        target_slug = meta.get("target_slug") or str(context.target_id)
-        env = os.environ.copy()
-        env["PGPASSWORD"] = password
-        cmd = [
-            "pg_dump",
-            "-h",
-            host,
-            "-p",
-            str(port),
-            "-U",
-            user,
-            "--format=custom",
-            "--compress=6",
-            "--no-owner",
-            "--no-privileges",
-            database,
-        ]
-        self._logger.info(
-            "postgresql_backup_start | job_id=%s target_id=%s target_slug=%s "
-            "host=%s database=%s artifact=%s",
+        """Publish one validated PostgreSQL 16 custom archive."""
+        started = time.monotonic()
+        _LOG.info(
+            "postgresql_backup_start | job_id=%s target_id=%s",
             context.job_id,
             context.target_id,
-            target_slug,
-            host,
-            database,
-            "<pending>",
         )
+        try:
+            async with asyncio.timeout(BACKUP_TIMEOUT_SECONDS):
+                cfg = getattr(context, "config", {}) or {}
+                if not await self.validate_config(cfg) or cfg.get("mode") != "source":
+                    raise ValueError("PostgreSQL backup requires an exact source configuration")
+                target = PostgreSQLTarget.from_config(cfg)
+                identity = await probe_postgresql(target)
 
-        with create_backup_artifact(
-            self,
-            context,
-            prefix="postgresql-dump",
-            suffix=".dump",
-            backup_root=BACKUP_BASE_PATH,
-        ) as artifact:
-            try:
-                with (
-                    artifact.temporary_path.open("wb") as artifact_file,
-                    tempfile.TemporaryFile(mode="w+b") as error_file,
-                ):
-                    proc = await asyncio.create_subprocess_exec(
-                        *cmd,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=error_file,
-                        env=env,
+                with create_backup_artifact(
+                    self,
+                    context,
+                    prefix="postgresql-dump",
+                    suffix=".dump",
+                    backup_root=BACKUP_BASE_PATH,
+                ) as artifact:
+                    evidence = await write_postgresql_archive(target, identity, artifact)
+                    artifact.sidecar_metadata.update(
+                        {
+                            "postgresql_server_version": identity.server_version,
+                            "postgresql_server_version_num": identity.server_version_num,
+                            "server_encoding": identity.server_encoding,
+                            "lc_collate": identity.lc_collate,
+                            "lc_ctype": identity.lc_ctype,
+                            "rls_table_count": len(
+                                cast(list[object], identity.catalog["rls_tables"])
+                            ),
+                            "source_identity_sha256": evidence.source_identity_sha256,
+                            "source_catalog_sha256": evidence.source_catalog_sha256,
+                            "archive_catalog_sha256": evidence.archive_catalog_sha256,
+                            "toc_sha256": evidence.toc_sha256,
+                            "catalog_counts": dict(evidence.catalog_counts),
+                            "validation": "postgresql-custom-v1",
+                        }
                     )
-                    if proc.stdout is None:
-                        raise RuntimeError("pg_dump stdout pipe was not created")
-                    stdout = proc.stdout
-
-                    async def stream_dump() -> int:
-                        eviction_offset = 0
-                        pending_eviction_bytes = 0
-                        while chunk := await stdout.read(STREAM_CHUNK_BYTES):
-                            artifact_file.write(chunk)
-                            pending_eviction_bytes += len(chunk)
-                            if pending_eviction_bytes >= FILE_CACHE_FLUSH_BYTES:
-                                artifact_file.flush()
-                                os.fsync(artifact_file.fileno())
-                                evict_file_cache(
-                                    artifact_file.fileno(),
-                                    eviction_offset,
-                                    pending_eviction_bytes,
-                                )
-                                eviction_offset += pending_eviction_bytes
-                                pending_eviction_bytes = 0
-                        artifact_file.flush()
-                        os.fsync(artifact_file.fileno())
-                        evict_file_cache(
-                            artifact_file.fileno(),
-                            eviction_offset,
-                            pending_eviction_bytes,
-                        )
-                        return await proc.wait()
-
-                    returncode = await run_process_with_timeout(
-                        proc,
-                        stream_dump(),
-                        operation="pg_dump backup",
-                        timeout_seconds=BACKUP_TIMEOUT_SECONDS,
-                    )
-                    error_file.seek(0)
-                    stderr_data = error_file.read(MAX_ERROR_BYTES + 1)
-            except OSError as exc:
-                self._logger.error(
-                    "pg_dump_exec_error | job_id=%s target_id=%s error=%s",
-                    context.job_id,
-                    context.target_id,
-                    exc,
-                )
-                raise
-            if returncode != 0:
-                error_was_truncated = len(stderr_data) > MAX_ERROR_BYTES
-                err = stderr_data[:MAX_ERROR_BYTES].decode(errors="ignore").strip()
-                if error_was_truncated:
-                    err = f"{err} [truncated]"
-                raise RuntimeError(f"pg_dump failed: {err}")
-
-            validator = await asyncio.create_subprocess_exec(
-                "pg_restore",
-                "--list",
-                str(artifact.temporary_path),
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
+                    await publish_postgresql_artifact(artifact, self, context)
+                artifact_bytes = artifact.final_path.stat().st_size
+        except TimeoutError as exc:
+            _LOG.exception(
+                "postgresql_backup_failed | job_id=%s target_id=%s duration_ms=%d",
+                context.job_id,
+                context.target_id,
+                int((time.monotonic() - started) * 1000),
             )
-            _, validation_error = await run_process_with_timeout(
-                validator,
-                validator.communicate(),
-                operation="pg_restore archive validation",
-                timeout_seconds=CONNECT_TIMEOUT_SECONDS,
+            raise RuntimeError(
+                f"PostgreSQL backup timed out after {BACKUP_TIMEOUT_SECONDS:g} seconds"
+            ) from exc
+        except BaseException:
+            _LOG.exception(
+                "postgresql_backup_failed | job_id=%s target_id=%s duration_ms=%d",
+                context.job_id,
+                context.target_id,
+                int((time.monotonic() - started) * 1000),
             )
-            if validator.returncode != 0:
-                raise RuntimeError(
-                    "pg_dump produced an invalid archive: "
-                    f"{validation_error[:MAX_ERROR_BYTES].decode(errors='ignore').strip()}"
-                )
+            raise
 
+        _LOG.info(
+            "postgresql_backup_success | job_id=%s target_id=%s artifact_path=%s "
+            "bytes=%d duration_ms=%d",
+            context.job_id,
+            context.target_id,
+            artifact.final_path,
+            artifact_bytes,
+            int((time.monotonic() - started) * 1000),
+        )
         return {"artifact_path": str(artifact.final_path)}
 
     async def restore(self, context: RestoreContext) -> Dict[str, Any]:
         """Restore one PostgreSQL custom archive transactionally."""
-        cfg = context.config or {}
-        if not await self.validate_config(cfg):
-            raise ValueError("postgresql config requires host, user, password, database")
-        host = str(cfg["host"])
-        port = int(cfg.get("port", 5432))
-        user = str(cfg["user"])
-        password = str(cfg["password"])
-        database = str(cfg["database"]).strip()
-
-        artifact_path = context.artifact_path
-        if not artifact_path or not os.path.exists(artifact_path):
-            raise FileNotFoundError(f"Artifact not found: {artifact_path}")
-
-        env = os.environ.copy()
-        env["PGPASSWORD"] = password
-        cmd = [
-            "pg_restore",
-            "-h",
-            host,
-            "-p",
-            str(port),
-            "-U",
-            user,
-            "--dbname",
-            database,
-            "--exit-on-error",
-            "--single-transaction",
-            "--clean",
-            "--if-exists",
-            "--no-owner",
-            "--no-privileges",
-            artifact_path,
-        ]
-        self._logger.info(
-            "postgresql_restore_start | job_id=%s source=%s dest=%s host=%s "
-            "database=%s artifact=%s",
+        started = time.monotonic()
+        _LOG.info(
+            "postgresql_restore_start | job_id=%s source=%s dest=%s",
             context.job_id,
             context.source_target_id,
             context.destination_target_id,
-            host,
-            database,
-            artifact_path,
         )
-
         try:
-            with tempfile.TemporaryFile(mode="w+b") as error_file:
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=error_file,
-                    env=env,
+            async with asyncio.timeout(RESTORE_TIMEOUT_SECONDS):
+                cfg = context.config or {}
+                if not await self.validate_config(cfg) or cfg.get("mode") != "restore_destination":
+                    raise ValueError(
+                        "PostgreSQL restore requires an exact destination configuration"
+                    )
+                target = PostgreSQLTarget.from_config(cfg)
+                authorize_postgresql_restore(
+                    target,
+                    source_identity=(context.metadata or {}).get("source_database_identity"),
+                    source_target_id=str(context.source_target_id),
+                    destination_target_id=str(context.destination_target_id),
                 )
-                returncode = await run_process_with_timeout(
-                    proc,
-                    proc.wait(),
-                    operation="pg_restore restore",
-                    timeout_seconds=RESTORE_TIMEOUT_SECONDS,
+                artifact_path = context.artifact_path
+                if not artifact_path:
+                    raise FileNotFoundError("PostgreSQL restore artifact was not found")
+                pre_restore_identity = await probe_postgresql(target)
+                await restore_postgresql_archive(
+                    target,
+                    pre_restore_identity,
+                    Path(artifact_path),
+                    context.metadata or {},
                 )
-                error_file.seek(0)
-                stderr_data = error_file.read(MAX_ERROR_BYTES + 1)
-        except OSError as exc:
-            self._logger.error(
-                "psql_exec_error | job_id=%s source=%s dest=%s error=%s",
+                artifact_bytes = int((context.metadata or {})["artifact_bytes"])
+        except TimeoutError as exc:
+            _LOG.exception(
+                "postgresql_restore_failed | job_id=%s source=%s dest=%s duration_ms=%d",
                 context.job_id,
                 context.source_target_id,
                 context.destination_target_id,
-                exc,
+                int((time.monotonic() - started) * 1000),
+            )
+            raise RuntimeError(
+                f"PostgreSQL restore timed out after {RESTORE_TIMEOUT_SECONDS:g} seconds"
+            ) from exc
+        except BaseException:
+            _LOG.exception(
+                "postgresql_restore_failed | job_id=%s source=%s dest=%s duration_ms=%d",
+                context.job_id,
+                context.source_target_id,
+                context.destination_target_id,
+                int((time.monotonic() - started) * 1000),
             )
             raise
 
-        if returncode != 0:
-            truncated = len(stderr_data) > MAX_ERROR_BYTES
-            err = stderr_data[:MAX_ERROR_BYTES].decode(errors="ignore").strip()
-            if truncated:
-                err = f"{err} [truncated]"
-            raise RuntimeError(f"pg_restore failed: {err}")
-
-        artifact_bytes = os.path.getsize(artifact_path)
-
-        self._logger.info(
-            "postgresql_restore_success | job_id=%s source=%s dest=%s artifact=%s bytes=%s",
+        _LOG.info(
+            "postgresql_restore_success | job_id=%s source=%s dest=%s bytes=%d duration_ms=%d",
             context.job_id,
             context.source_target_id,
             context.destination_target_id,
-            artifact_path,
             artifact_bytes,
+            int((time.monotonic() - started) * 1000),
         )
 
         return {
@@ -334,7 +237,25 @@ class PostgreSQLPlugin(BackupPlugin):
             "artifact_bytes": artifact_bytes,
         }
 
-    async def get_status(
-        self, context: BackupContext
-    ) -> Dict[str, Any]:  # pragma: no cover - not implemented
-        return {"status": "unknown"}
+    async def get_status(self, context: BackupContext) -> Dict[str, Any]:
+        """Return only identity evidence checked through the real PG16 probe."""
+        config = context.config or {}
+        if not await self.validate_config(config):
+            return {
+                "status": "error",
+                "error": "Invalid PostgreSQL source or restore-destination configuration",
+            }
+        try:
+            identity = await probe_postgresql(PostgreSQLTarget.from_config(config))
+        except (ConnectionError, FileNotFoundError, RuntimeError, ValueError) as exc:
+            return {"status": "error", "error": str(exc)}
+        except Exception:
+            return {"status": "error", "error": "PostgreSQL status check failed"}
+        return {
+            "status": "ok",
+            "server_version": identity.server_version,
+            "database": identity.database,
+            "server_encoding": identity.server_encoding,
+            "lc_collate": identity.lc_collate,
+            "lc_ctype": identity.lc_ctype,
+        }

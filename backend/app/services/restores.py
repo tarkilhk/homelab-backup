@@ -259,6 +259,7 @@ class RestoreService:
             metadata["artifact_bytes"] = artifact_bytes
         if artifact_sha256:
             metadata["artifact_sha256"] = artifact_sha256
+        metadata["artifact_sidecar"] = dict(validated_artifact.sidecar_metadata)
         if source_tr:
             metadata["backup_started_at"] = (
                 source_tr.started_at.isoformat() if source_tr.started_at else None
@@ -327,6 +328,9 @@ class RestoreService:
                         expected_size=validated_artifact.size_bytes,
                         expected_sha256=validated_artifact.sha256,
                     )
+                    staged_status = staged_artifact.stat(follow_symlinks=False)
+                    metadata["staged_artifact_device"] = staged_status.st_dev
+                    metadata["staged_artifact_inode"] = staged_status.st_ino
 
                     context.artifact_path = str(staged_artifact)
                     result_container["result"] = asyncio.run(plugin.restore(context))

@@ -1,11 +1,39 @@
 {
   "type": "object",
-  "required": ["host", "user", "password", "database"],
+  "additionalProperties": false,
+  "required": ["mode", "host", "port", "database", "user", "password"],
   "properties": {
-    "host": { "type": "string", "title": "Host", "default": "localhost" },
-    "port": { "type": "integer", "title": "Port", "default": 5432 },
-    "user": { "type": "string", "title": "User", "default": "postgres" },
-    "password": { "type": "string", "title": "Password", "default": "secret" },
-    "database": { "type": "string", "title": "Database" }
+    "mode": {
+      "type": "string",
+      "title": "Mode",
+      "enum": ["source", "restore_destination"]
+    },
+    "host": {
+      "type": "string",
+      "title": "Host",
+      "default": "localhost",
+      "minLength": 1,
+      "pattern": "^(?!.*://)(?!.*[\\s/]).+$"
+    },
+    "port": {
+      "type": "integer",
+      "title": "Port",
+      "default": 5432,
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "database": {
+      "type": "string",
+      "title": "Database",
+      "minLength": 1,
+      "pattern": "^[A-Za-z_][A-Za-z0-9_$-]{0,62}$"
+    },
+    "user": {
+      "type": "string",
+      "title": "User",
+      "minLength": 1,
+      "pattern": "^\\S+$"
+    },
+    "password": { "type": "string", "title": "Password", "minLength": 1 }
   }
 }

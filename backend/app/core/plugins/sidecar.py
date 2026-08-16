@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import stat
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +37,8 @@ def write_backup_sidecar(
     artifact_bytes: int | None = None,
     artifact_sha256: str | None = None,
     logger: Optional[logging.Logger] = None,
+    owned_temporary_path: str | None = None,
+    owned_temporary_identity: tuple[int, int] | None = None,
 ) -> tuple[int, int]:
     """Write a JSON sidecar file alongside a backup artifact with metadata.
 
@@ -99,11 +102,25 @@ def write_backup_sidecar(
         sidecar_data.update(extra_metadata)
 
     sidecar_path = f"{artifact_path}.meta.json"
-    sidecar_tmp = f"{sidecar_path}.{uuid.uuid4().hex}.tmp"
+    sidecar_tmp = owned_temporary_path or f"{sidecar_path}.{uuid.uuid4().hex}.tmp"
     sidecar_identity: tuple[int, int] | None = None
     committed = False
     try:
-        descriptor = os.open(sidecar_tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        if owned_temporary_path is None:
+            descriptor = os.open(sidecar_tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        else:
+            flags = os.O_WRONLY | os.O_TRUNC
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            descriptor = os.open(sidecar_tmp, flags)
+            opened_identity = os.fstat(descriptor)
+            if (
+                owned_temporary_identity is None
+                or not stat.S_ISREG(opened_identity.st_mode)
+                or (opened_identity.st_dev, opened_identity.st_ino) != owned_temporary_identity
+            ):
+                os.close(descriptor)
+                raise RuntimeError("Backup sidecar staging identity changed")
         with os.fdopen(descriptor, "w", encoding="utf-8") as sidecar_file:
             json.dump(sidecar_data, sidecar_file, indent=2)
             sidecar_file.flush()
@@ -129,9 +146,13 @@ def write_backup_sidecar(
         return sidecar_identity
     except Exception as exc:
         try:
-            os.unlink(sidecar_tmp)
+            temporary_status = os.stat(sidecar_tmp, follow_symlinks=False)
         except FileNotFoundError:
             pass
+        else:
+            temporary_identity = temporary_status.st_dev, temporary_status.st_ino
+            if owned_temporary_path is None or temporary_identity == owned_temporary_identity:
+                os.unlink(sidecar_tmp)
         if committed and sidecar_identity is not None:
             try:
                 named = os.stat(sidecar_path, follow_symlinks=False)

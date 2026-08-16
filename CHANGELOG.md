@@ -50,6 +50,10 @@ All notable changes to Homelab Backup are recorded here. This project follows
   checks, and two clean exact-image drill rounds. Restore remains honestly
   partial because the vendor importer does not reliably recover embedded
   document bytes into a fresh private destination.
+- A strict PostgreSQL 16 named-database recovery module with denied-write source
+  probes, private bounded custom archives, exact catalog/TOC provenance,
+  descriptor-bound transactional restores, and two clean PostgreSQL 16.14
+  backup-to-fresh-restore drill rounds.
 
 ### Changed
 

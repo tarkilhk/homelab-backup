@@ -2761,6 +2761,7 @@ def test_restore_service_preserves_source_and_records_private_partial_orchestrat
     async def observe_staging(context: RestoreContext) -> dict[str, Any]:
         staged = Path(context.artifact_path)
         observed["path"] = staged
+        observed["device"] = staged.stat().st_dev
         observed["inode"] = staged.stat().st_ino
         observed["mode"] = stat.S_IMODE(staged.stat().st_mode)
         observed["bytes"] = staged.stat().st_size
@@ -2794,6 +2795,15 @@ def test_restore_service_preserves_source_and_records_private_partial_orchestrat
         "source_database_identity": {"base_url": RESTORE_SOURCE_ORIGIN},
         "artifact_bytes": len(source_payload),
         "artifact_sha256": hashlib.sha256(source_payload).hexdigest(),
+        "artifact_sidecar": {
+            "plugin_name": "invoiceninja",
+            "plugin_version": "0.2.1",
+            "target_slug": "invoice-source",
+            "artifact_bytes": len(source_payload),
+            "sha256": hashlib.sha256(source_payload).hexdigest(),
+        },
+        "staged_artifact_device": observed["device"],
+        "staged_artifact_inode": observed["inode"],
         "backup_started_at": source_target_run.started_at.isoformat(),
         "backup_finished_at": source_target_run.finished_at.isoformat(),
     }

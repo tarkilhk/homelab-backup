@@ -6,7 +6,7 @@
 - **Effort**: L
 - **Risk**: HIGH
 - **Depends on**: Plan 001 foundation
-- **State**: IN PROGRESS
+- **State**: DONE (local)
 - **Restore capability**: `automatic` for the named database boundary
 - **Production status**: local work only; every production restore is forbidden
 - **Fixed point**: `4691e11`
@@ -194,6 +194,28 @@ Mark `DONE (local)` only after every gate passes. Production remains
 rollout-pending until the actual PostgreSQL runtime digest/version, network,
 dedicated role/default grants, targets/jobs and a backup-only run are separately
 approved and verified.
+
+### Completion evidence
+
+Completed locally on 2026-08-16 without production contact, deployment, push, or
+restore:
+
+- focused PostgreSQL, Restore API, subprocess, and hygiene suite:
+  `50 passed in 1.50s`;
+- exact immutable PostgreSQL 16.14 drill, including two separately parameterized
+  clean rounds: `2 passed in 100.18s`;
+- full backend suite: `1291 passed, 12 skipped in 272.25s`;
+- frontend Vitest: 9 files and 48 tests passed; ESLint and the production Vite
+  build passed;
+- changed-file Black (12 files), isort, and application mypy (7 files) passed;
+- SemVer consistency reported `0.2.1`;
+- the independent post-drill label audit found no remaining drill container,
+  network, or volume; and
+- final Standards and Spec reviews found no actionable P0-P3 issue.
+
+Repository diff, documentation, and secret-pattern hygiene were checked again
+immediately before the focused milestone commit. Production activation remains a
+separate coverage-ledger task and production restore remains forbidden.
 
 ## STOP conditions
 
