@@ -1,20 +1,39 @@
 {
   "type": "object",
-  "required": ["database_url"],
+  "additionalProperties": false,
+  "required": ["mode", "host", "port", "database", "user", "password"],
   "properties": {
-    "database_url": {
+    "mode": {
       "type": "string",
-      "title": "Database URL (Required)",
-      "format": "uri",
-      "default": "postgresql://user:pass@host:5432/calcom",
-      "description": "Main Cal.com DATABASE_URL. This can be a pooled/proxied connection string."
+      "title": "Mode",
+      "enum": ["source", "restore_destination"]
     },
-    "database_direct_url": {
+    "host": {
       "type": "string",
-      "title": "Direct Database URL (Optional, Preferred for Backups)",
-      "format": "uri",
-      "default": "postgresql://user:pass@postgres.internal:5432/calcom?sslmode=require",
-      "description": "Use the direct PostgreSQL host (DATABASE_DIRECT_URL) when DATABASE_URL goes through PgBouncer/proxy. Backup/test/restore will use this first when set."
+      "title": "PostgreSQL host",
+      "minLength": 1
+    },
+    "port": {
+      "type": "integer",
+      "title": "PostgreSQL port",
+      "minimum": 1,
+      "maximum": 65535,
+      "default": 5432
+    },
+    "database": {
+      "type": "string",
+      "title": "Cal.com database",
+      "minLength": 1
+    },
+    "user": {
+      "type": "string",
+      "title": "PostgreSQL user",
+      "minLength": 1
+    },
+    "password": {
+      "type": "string",
+      "title": "PostgreSQL password",
+      "minLength": 1
     }
   }
 }

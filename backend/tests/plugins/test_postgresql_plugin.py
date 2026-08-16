@@ -824,6 +824,75 @@ async def test_backup_rejects_archive_whose_objects_do_not_match_the_source_cata
 
 
 @pytest.mark.asyncio
+async def test_backup_binds_named_routine_to_type_only_native_toc_signature(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A named PostgreSQL argument must match pg_restore's type-only signature."""
+    config = {
+        "mode": "source",
+        "host": "postgres-source.internal",
+        "port": 5432,
+        "database": "application_production",
+        "user": "backup_reader",
+        "password": "synthetic-password",
+    }
+    source_identity = _safe_source_identity()
+    source_identity["routines"] = [
+        {
+            "schema": "public",
+            "name": "refresh_state",
+            "kind": "f",
+            "identity_arguments": "record_id integer",
+            "toc_identity_arguments": "integer",
+        }
+    ]
+    native_toc = b"\n".join(
+        (
+            b"; PostgreSQL database dump",
+            b"; Dumped from database version: 16.14 (Debian 16.14-1)",
+            b"; Dumped by pg_dump version: 16.14 (Debian 16.14-1)",
+            b"1; 0 0 EXTENSION - plpgsql ",
+            b"2; 1259 16384 TABLE public items application_owner",
+            b"3; 0 16384 TABLE DATA public items application_owner",
+            b"4; 1259 16385 SEQUENCE public items_id_seq application_owner",
+            b"5; 1255 16386 FUNCTION public refresh_state(integer) application_owner",
+            b"",
+        )
+    )
+    dump_bytes = b"PGDMP\x01\x0f named-routine-archive"
+
+    async def fake_exec(*args: str, **kwargs: object) -> DummyProcess:
+        if args[0] == PSQL16:
+            return DummyProcess(stdout=(json.dumps(source_identity) + "\n").encode())
+        if args[:4] == PG_DUMP_PREFIX:
+            output_descriptor = kwargs["stdout"]
+            assert isinstance(output_descriptor, int)
+            os.write(output_descriptor, dump_bytes)
+            return DummyProcess()
+        if args[0] == postgresql_core.SHA256SUM:
+            return StreamOnlyProcess(
+                stdout=f"{hashlib.sha256(dump_bytes).hexdigest()}  artifact\n".encode()
+            )  # type: ignore[return-value]
+        return StreamOnlyProcess(stdout=native_toc)  # type: ignore[return-value]
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr("app.plugins.postgresql.plugin.BACKUP_BASE_PATH", str(tmp_path))
+    context = BackupContext(
+        job_id="named-routine-job",
+        target_id="postgresql-source-target",
+        config=config,
+        metadata={"target_slug": "postgresql-source"},
+    )
+
+    result = await PostgreSQLPlugin(name="postgresql").backup(context)
+
+    artifact = Path(result["artifact_path"])
+    assert artifact.read_bytes() == dump_bytes
+    assert Path(f"{artifact}.meta.json").is_file()
+
+
+@pytest.mark.asyncio
 async def test_backup_rejects_ambiguous_duplicate_archive_catalog_entry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -10,6 +10,7 @@ import os
 import re
 import stat
 import tempfile
+import unicodedata
 from dataclasses import dataclass, field
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
@@ -34,9 +35,11 @@ PUBLICATION_TIMEOUT_SECONDS = 300.0
 WORKER_STOP_TIMEOUT_SECONDS = 5.0
 MAX_ARCHIVE_BYTES = 16 * 1024 * 1024 * 1024
 MAX_TOC_BYTES = 4 * 1024 * 1024
+MAX_SCHEMA_BYTES = 16 * 1024 * 1024
 STREAM_CHUNK_BYTES = 1024 * 1024
 ISOLATED_RESTORE_ENV = "HOMELAB_BACKUP_ALLOW_ISOLATED_RESTORE"
 RESTORE_ALLOWLIST_ENV = "HOMELAB_BACKUP_ISOLATED_POSTGRESQL_RESTORE_DESTINATIONS"
+DEFAULT_RESTORE_SENTINEL = "homelab-backup:postgresql-restore:v1"
 RESTORE_TIMEOUT_SECONDS = 3600.0
 POSTGRESQL_16_BIN = "/usr/local/lib/postgresql/16/bin"
 PSQL16 = f"{POSTGRESQL_16_BIN}/psql"
@@ -45,6 +48,8 @@ PG_RESTORE16 = f"{POSTGRESQL_16_BIN}/pg_restore"
 PRLIMIT = "/usr/bin/prlimit"
 SHA256SUM = "/usr/bin/sha256sum"
 PostgreSQLMode: TypeAlias = Literal["source", "restore_destination"]
+_CONFIG_KEYS = frozenset({"mode", "host", "port", "database", "user", "password"})
+_DATABASE_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_$-]{0,62}$")
 
 _IDENTITY_SQL = """
 SELECT json_build_object(
@@ -141,6 +146,7 @@ SELECT json_build_object(
       AND NOT EXISTS (
         SELECT 1 FROM pg_constraint AS constraint_state
         WHERE constraint_state.conindid = state.indexrelid
+          AND constraint_state.conrelid = state.indrelid
       )
   ),
   'constraints', (
@@ -170,7 +176,8 @@ SELECT json_build_object(
           'schema', n.nspname,
           'name', p.proname,
           'kind', p.prokind,
-          'identity_arguments', pg_get_function_identity_arguments(p.oid)
+          'identity_arguments', pg_get_function_identity_arguments(p.oid),
+          'toc_identity_arguments', oidvectortypes(p.proargtypes)
         ) ORDER BY n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)
       ),
       '[]'::json
@@ -615,6 +622,52 @@ SELECT json_build_object(
 """.strip()
 
 
+def validate_postgresql_config(config: object) -> bool:
+    """Validate the exact flat PG16 source or restore-destination shape."""
+    if not isinstance(config, dict) or set(config) != _CONFIG_KEYS:
+        return False
+    if config.get("mode") not in {"source", "restore_destination"}:
+        return False
+
+    host = config.get("host")
+    if (
+        not isinstance(host, str)
+        or host != host.strip()
+        or not host
+        or any(unicodedata.category(character) == "Cc" for character in host)
+        or "://" in host
+        or "/" in host
+        or any(character.isspace() for character in host)
+    ):
+        return False
+
+    port = config.get("port")
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        return False
+
+    database = config.get("database")
+    if not isinstance(database, str) or _DATABASE_NAME_PATTERN.fullmatch(database) is None:
+        return False
+
+    user = config.get("user")
+    if (
+        not isinstance(user, str)
+        or user != user.strip()
+        or not user
+        or any(unicodedata.category(character) == "Cc" for character in user)
+        or any(character.isspace() for character in user)
+    ):
+        return False
+
+    password = config.get("password")
+    return (
+        isinstance(password, str)
+        and bool(password)
+        and not password.isspace()
+        and not any(unicodedata.category(character) == "Cc" for character in password)
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class PostgreSQLTarget:
     """One named PostgreSQL database and its private client identity."""
@@ -847,6 +900,8 @@ def _parse_identity(
     target: PostgreSQLTarget,
     *,
     expected_state: Literal["source", "fresh_destination", "restored_destination"],
+    allowed_unsupported_database_objects: frozenset[str] = frozenset(),
+    restore_sentinel: str = DEFAULT_RESTORE_SENTINEL,
 ) -> PostgreSQLIdentity:
     if len(payload) > MAX_PROBE_BYTES:
         raise RuntimeError("PostgreSQL identity response exceeded its safety limit")
@@ -939,18 +994,27 @@ def _parse_identity(
     if identity.server_encoding != "UTF8":
         raise RuntimeError("PostgreSQL database encoding must be UTF8")
     if expected_state == "source":
-        _validate_source_catalog(identity.catalog)
+        _validate_source_catalog(
+            identity.catalog,
+            allowed_unsupported_database_objects=allowed_unsupported_database_objects,
+        )
     else:
         _validate_restore_destination(
             value,
             identity.catalog,
             target,
             require_fresh=expected_state == "fresh_destination",
+            restore_sentinel=restore_sentinel,
+            allowed_unsupported_database_objects=allowed_unsupported_database_objects,
         )
     return identity
 
 
-def _validate_source_catalog(catalog: Mapping[str, object]) -> None:
+def _validate_source_catalog(
+    catalog: Mapping[str, object],
+    *,
+    allowed_unsupported_database_objects: frozenset[str] = frozenset(),
+) -> None:
     privileged = (
         "role_superuser",
         "role_bypassrls",
@@ -969,7 +1033,15 @@ def _validate_source_catalog(catalog: Mapping[str, object]) -> None:
         raise RuntimeError("PostgreSQL source contains invalid catalog objects")
     if catalog["event_triggers"] or catalog["system_namespace_user_objects"]:
         raise RuntimeError("PostgreSQL source contains unsupported executable objects")
-    if catalog["unsupported_database_objects"]:
+    unsupported = catalog["unsupported_database_objects"]
+    if not isinstance(unsupported, list) or any(
+        not isinstance(value, str) for value in unsupported
+    ):
+        raise RuntimeError("PostgreSQL source returned an invalid catalog response")
+    observed_unsupported = frozenset(unsupported)
+    if len(observed_unsupported) != len(unsupported):
+        raise RuntimeError("PostgreSQL source returned an ambiguous catalog response")
+    if observed_unsupported != allowed_unsupported_database_objects:
         raise RuntimeError("PostgreSQL source contains unsupported database objects")
     if catalog["security_definer_routines"]:
         raise RuntimeError("PostgreSQL backup identity can execute security definer routines")
@@ -995,8 +1067,10 @@ def _validate_restore_destination(
     target: PostgreSQLTarget,
     *,
     require_fresh: bool,
+    restore_sentinel: str,
+    allowed_unsupported_database_objects: frozenset[str],
 ) -> None:
-    if value.get("database_comment") != "homelab-backup:postgresql-restore:v1":
+    if value.get("database_comment") != restore_sentinel:
         raise RuntimeError("PostgreSQL restore destination sentinel did not match")
     if value.get("database_owner") != target.user or value.get("current_user") != target.user:
         raise RuntimeError("PostgreSQL restore identity must own the destination database")
@@ -1066,7 +1140,13 @@ def _validate_restore_destination(
         raise RuntimeError("PostgreSQL restored database contains unsupported RLS tables")
     if catalog["event_triggers"] or catalog["system_namespace_user_objects"]:
         raise RuntimeError("PostgreSQL restored database contains executable system objects")
-    if catalog["unsupported_database_objects"]:
+    unsupported = catalog["unsupported_database_objects"]
+    if (
+        not isinstance(unsupported, list)
+        or any(not isinstance(value, str) for value in unsupported)
+        or len(frozenset(unsupported)) != len(unsupported)
+        or frozenset(unsupported) != allowed_unsupported_database_objects
+    ):
         raise RuntimeError("PostgreSQL restored database contains unsupported database objects")
     if catalog["invalid_indexes"] or catalog["invalid_constraints"]:
         raise RuntimeError("PostgreSQL restored database contains invalid catalog objects")
@@ -1082,6 +1162,8 @@ async def probe_postgresql(
     target: PostgreSQLTarget,
     *,
     expected_state: Literal["source", "fresh_destination", "restored_destination"] | None = None,
+    allowed_unsupported_database_objects: frozenset[str] = frozenset(),
+    restore_sentinel: str = DEFAULT_RESTORE_SENTINEL,
 ) -> PostgreSQLIdentity:
     """Probe one exact PostgreSQL 16 database using private libpq authentication."""
     password_file = _password_file(target)
@@ -1123,9 +1205,115 @@ async def probe_postgresql(
         if stderr:
             raise RuntimeError("PostgreSQL identity probe emitted diagnostics")
         state = expected_state or ("source" if target.mode == "source" else "fresh_destination")
-        return _parse_identity(stdout, target, expected_state=state)
+        return _parse_identity(
+            stdout,
+            target,
+            expected_state=state,
+            allowed_unsupported_database_objects=allowed_unsupported_database_objects,
+            restore_sentinel=restore_sentinel,
+        )
     finally:
         password_file.unlink(missing_ok=True)
+
+
+async def query_postgresql_json(
+    target: PostgreSQLTarget,
+    query: str,
+    *,
+    operation: str,
+    max_bytes: int = MAX_PROBE_BYTES,
+) -> Mapping[str, object]:
+    """Run one adapter-owned read-only JSON query through private PG16 auth."""
+    password_file = _password_file(target)
+    try:
+        try:
+            process = await asyncio.create_subprocess_exec(
+                PSQL16,
+                "-X",
+                "-h",
+                target.host,
+                "-p",
+                str(target.port),
+                "-U",
+                target.user,
+                "--dbname",
+                target.database,
+                "--set",
+                "ON_ERROR_STOP=on",
+                "-tA",
+                "-c",
+                query,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=_environment(password_file),
+            )
+        except FileNotFoundError as exc:
+            raise FileNotFoundError("PostgreSQL 16 psql client is unavailable") from exc
+        except OSError as exc:
+            raise ConnectionError("Unable to connect to the PostgreSQL database") from exc
+        stdout, stderr = await _communicate_with_limits(
+            process,
+            operation=operation,
+            timeout_seconds=CONNECT_TIMEOUT_SECONDS,
+            stdout_limit_bytes=max_bytes,
+            stderr_limit_bytes=MAX_PROBE_BYTES,
+        )
+        if process.returncode != 0:
+            raise ConnectionError("Unable to query the PostgreSQL database")
+        if stderr:
+            raise RuntimeError(f"{operation} emitted diagnostics")
+        try:
+            value = json.loads(stdout.decode("utf-8").strip())
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"{operation} returned an invalid response") from exc
+        if not isinstance(value, dict):
+            raise RuntimeError(f"{operation} returned an invalid response")
+        return value
+    finally:
+        password_file.unlink(missing_ok=True)
+
+
+async def postgresql_archive_schema_sha256(descriptor: int) -> str:
+    """Render and hash normalized schema SQL from one bound custom archive."""
+    inspector = await asyncio.create_subprocess_exec(
+        PG_RESTORE16,
+        "--schema-only",
+        "--no-owner",
+        "--no-privileges",
+        "--file=-",
+        f"/proc/self/fd/{descriptor}",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        pass_fds=(descriptor,),
+    )
+    payload, diagnostics = await _communicate_with_limits(
+        inspector,
+        operation="PostgreSQL archive schema inspection",
+        timeout_seconds=CONNECT_TIMEOUT_SECONDS,
+        stdout_limit_bytes=MAX_SCHEMA_BYTES,
+        stderr_limit_bytes=MAX_PROBE_BYTES,
+    )
+    if inspector.returncode != 0 or diagnostics:
+        raise RuntimeError("PostgreSQL archive schema inspection failed")
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError("PostgreSQL archive schema was malformed") from exc
+    normalized_lines: list[str] = []
+    restrict_count = 0
+    unrestrict_count = 0
+    for line in text.splitlines():
+        if re.fullmatch(r"\\restrict [A-Za-z0-9]+", line):
+            restrict_count += 1
+            continue
+        if re.fullmatch(r"\\unrestrict [A-Za-z0-9]+", line):
+            unrestrict_count += 1
+            continue
+        normalized_lines.append(line)
+    if restrict_count != 1 or unrestrict_count != 1 or "\x00" in text:
+        raise RuntimeError("PostgreSQL archive schema was malformed")
+    normalized = ("\n".join(normalized_lines) + "\n").encode("utf-8")
+    return hashlib.sha256(normalized).hexdigest()
 
 
 def _validate_archive_toc(
@@ -1183,6 +1371,7 @@ _TOC_DESCRIPTORS = (
     "ENCODING",
     "COMMENT",
     "DEFAULT",
+    "TRIGGER",
     "SCHEMA",
     "TABLE",
     "INDEX",
@@ -1347,7 +1536,7 @@ def _require_archive_objects_match_catalog(
             raise RuntimeError("PostgreSQL source returned an invalid catalog response")
         schema = require_identifier(value.get("schema"))
         name = require_identifier(value.get("name"))
-        arguments = value.get("identity_arguments")
+        arguments = value.get("toc_identity_arguments")
         kind = value.get("kind")
         descriptor = routine_descriptors.get(kind) if isinstance(kind, str) else None
         if not isinstance(arguments, str) or descriptor is None:
@@ -1393,7 +1582,9 @@ def _require_archive_objects_match_catalog(
                 None,
             )
             if descriptor in _PRIMARY_TOC_CLASSES:
-                raise RuntimeError("PostgreSQL archive objects did not match the source catalog")
+                raise RuntimeError(
+                    f"PostgreSQL archive {descriptor} objects did not match the source catalog"
+                )
             continue
         if len(candidates) != 1:
             raise RuntimeError("PostgreSQL archive returned an ambiguous TOC")
@@ -1480,7 +1671,7 @@ def _catalog_projection(catalog: Mapping[str, object]) -> Mapping[str, object]:
             raise RuntimeError("PostgreSQL source returned an ambiguous catalog response")
         constraints.add(descriptor)
 
-    routines: set[tuple[str, str, str]] = set()
+    routines: set[tuple[str, str, str, str]] = set()
     routine_types = {
         "a": "AGGREGATE",
         "f": "FUNCTION",
@@ -1494,14 +1685,21 @@ def _catalog_projection(catalog: Mapping[str, object]) -> Mapping[str, object]:
         name = value.get("name")
         kind = value.get("kind")
         arguments = value.get("identity_arguments")
+        toc_arguments = value.get("toc_identity_arguments")
         if (
             not isinstance(schema, str)
             or not isinstance(name, str)
             or kind not in routine_types
             or not isinstance(arguments, str)
+            or not isinstance(toc_arguments, str)
         ):
             raise RuntimeError("PostgreSQL source returned an invalid catalog response")
-        routine_descriptor = (routine_types[kind], schema, f"{name}({arguments})")
+        routine_descriptor = (
+            routine_types[kind],
+            schema,
+            f"{name}({arguments})",
+            f"{name}({toc_arguments})",
+        )
         if routine_descriptor in routines:
             raise RuntimeError("PostgreSQL source returned an ambiguous catalog response")
         routines.add(routine_descriptor)
@@ -1564,6 +1762,8 @@ async def write_postgresql_archive(
     target: PostgreSQLTarget,
     identity: PostgreSQLIdentity,
     artifact: PendingBackupArtifact,
+    *,
+    allowed_unsupported_database_objects: frozenset[str] = frozenset(),
 ) -> PostgreSQLArchiveEvidence:
     """Stream, bind and inspect one custom archive into a pending artifact."""
     password_file = _password_file(target)
@@ -1641,7 +1841,10 @@ async def write_postgresql_archive(
             raise RuntimeError("PostgreSQL pg_dump produced an invalid archive")
         toc_sha256, catalog_sha256 = _validate_archive_toc(toc, identity)
         source_catalog_sha256 = _expected_archive_catalog_sha256(identity.catalog)
-        stable_identity = await probe_postgresql(target)
+        stable_identity = await probe_postgresql(
+            target,
+            allowed_unsupported_database_objects=allowed_unsupported_database_objects,
+        )
         if _expected_archive_catalog_sha256(stable_identity.catalog) != source_catalog_sha256:
             raise RuntimeError("PostgreSQL source catalog changed during capture")
         artifact.publication_sha256 = streamed_sha256
@@ -1682,9 +1885,16 @@ def _expected_archive_catalog_sha256(catalog: Mapping[str, object]) -> str:
     return _canonical_sha256(_catalog_projection(catalog))
 
 
+def postgresql_catalog_sha256(identity: PostgreSQLIdentity) -> str:
+    """Return the normalized non-secret object-catalog digest for an identity."""
+    return _expected_archive_catalog_sha256(identity.catalog)
+
+
 def _require_restore_metadata(
     metadata: Mapping[str, object],
     source_identity: Mapping[str, object],
+    *,
+    validation: str,
 ) -> VerifiedRestoreArtifact:
     artifact_bytes = metadata.get("artifact_bytes")
     artifact_sha256 = metadata.get("artifact_sha256")
@@ -1722,7 +1932,7 @@ def _require_restore_metadata(
     }
     if not required_sidecar <= set(sidecar):
         raise ValueError("PostgreSQL restore requires complete archive provenance")
-    if sidecar.get("validation") != "postgresql-custom-v1":
+    if sidecar.get("validation") != validation:
         raise ValueError("PostgreSQL restore archive validation provenance is invalid")
     if sidecar.get("source_identity_sha256") != _canonical_sha256(source_identity):
         raise ValueError("PostgreSQL restore source provenance did not match")
@@ -1869,12 +2079,21 @@ async def restore_postgresql_archive(
     pre_restore_identity: PostgreSQLIdentity,
     artifact_path: Path,
     metadata: Mapping[str, object],
+    *,
+    validation: str = "postgresql-custom-v1",
+    restore_sentinel: str = DEFAULT_RESTORE_SENTINEL,
+    allowed_unsupported_database_objects: frozenset[str] = frozenset(),
+    expected_schema_sha256: str | None = None,
 ) -> PostgreSQLIdentity:
     """Validate and transactionally restore one staged custom archive descriptor."""
     source_identity = metadata.get("source_database_identity")
     if not isinstance(source_identity, dict):
         raise ValueError("PostgreSQL restore requires exact source database provenance")
-    verified_artifact = _require_restore_metadata(metadata, source_identity)
+    verified_artifact = _require_restore_metadata(
+        metadata,
+        source_identity,
+        validation=validation,
+    )
     sidecar = verified_artifact.sidecar
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
@@ -1897,6 +2116,11 @@ async def restore_postgresql_archive(
             != verified_artifact.sha256
         ):
             raise ValueError("PostgreSQL verified staging identity did not match")
+        if (
+            expected_schema_sha256 is not None
+            and await postgresql_archive_schema_sha256(descriptor) != expected_schema_sha256
+        ):
+            raise ValueError("PostgreSQL restore archive schema did not match its provenance")
         inspector = await asyncio.create_subprocess_exec(
             PG_RESTORE16,
             "--list",
@@ -1966,7 +2190,12 @@ async def restore_postgresql_archive(
             raise RuntimeError("PostgreSQL pg_restore failed")
         if diagnostics:
             raise RuntimeError("PostgreSQL pg_restore emitted diagnostics")
-        restored = await probe_postgresql(target, expected_state="restored_destination")
+        restored = await probe_postgresql(
+            target,
+            expected_state="restored_destination",
+            allowed_unsupported_database_objects=allowed_unsupported_database_objects,
+            restore_sentinel=restore_sentinel,
+        )
         if _expected_archive_catalog_sha256(restored.catalog) != sidecar["source_catalog_sha256"]:
             raise RuntimeError("PostgreSQL restored catalog did not match the archive")
         return restored
@@ -1982,6 +2211,7 @@ def authorize_postgresql_restore(
     source_identity: object,
     source_target_id: str,
     destination_target_id: str,
+    restore_allowlist_env: str = RESTORE_ALLOWLIST_ENV,
 ) -> None:
     """Authorize one create-only PostgreSQL restore without performing I/O."""
     if target.mode != "restore_destination":
@@ -1989,7 +2219,7 @@ def authorize_postgresql_restore(
     if os.environ.get(ISOLATED_RESTORE_ENV) != "1":
         raise ValueError("PostgreSQL restore is disabled outside an isolated local drill")
     destination = f"{target.host.lower()}:{target.port}/{target.database}"
-    raw_allowlist = os.environ.get(RESTORE_ALLOWLIST_ENV, "")
+    raw_allowlist = os.environ.get(restore_allowlist_env, "")
     allowed: set[str] = set()
     for raw_entry in raw_allowlist.split(","):
         entry = raw_entry.strip()

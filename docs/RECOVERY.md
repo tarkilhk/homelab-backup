@@ -30,7 +30,7 @@ files, partial files, and artifacts with missing or inconsistent sidecars.
 | Plugin | Capability | Meaning |
 | --- | --- | --- |
 | Bazarr | Partial | Creates validated Bazarr 1.5.6 SQLite and YAML state only in a fresh sentinel-marked local directory. Media, subtitle files, Sonarr, Radarr, and exact-image boot verification remain separate recovery prerequisites. |
-| Cal.com | Automatic | Restores a validated PostgreSQL custom archive transactionally. |
+| Cal.com | Partial | Restores one exact Cal.com 6.2.0 PostgreSQL 16 archive transactionally into an explicitly authorized fresh sentinel database and verifies migration, catalog, and control-plane marker equality. The original encryption/deployment configuration, external providers, and application lifecycle remain operator prerequisites. |
 | Gitea | Automatic | Restores a validated native dump into an explicitly labeled isolated Gitea 1.27.1 container, verifies application state, and rolls back on failure. |
 | Homelab Backup | Partial | Creates a validated database only in a fresh sentinel-marked offline directory. Booting and verifying the exact recorded backend image remains a separate operator step. |
 | MySQL | Partial | Imports only into an empty database and validates tables; MySQL DDL is non-transactional, so a failed import requires the destination to be reset before retry. |
@@ -290,9 +290,13 @@ Backup.
   other connections, and use an owner without cluster-wide authority. Restore
   stops on the first error inside one transaction and never creates or drops a
   database.
-- Cal.com currently uses its legacy PostgreSQL archive path. Its exact
-  application-level current-contract proof is tracked separately from the generic
-  PostgreSQL 16 foundation.
+- Cal.com restore accepts only a RestoreService-staged artifact with exact
+  v6.2.0 migration, schema, catalog, marker, size/SHA-256, and sidecar provenance.
+  The destination must be a separately authorized PostgreSQL 16 database created
+  from `template0`, carry the Cal.com-specific sentinel, and contain no user
+  objects or competing connections. The plugin restores the database in one
+  transaction and reports `partial`; boot the exact app separately with the
+  original encryption/deployment configuration and verify external integrations.
 - WordPress restore rejects roots, symlinks, paths overlapping `/backups`, and
   artifacts stored below the destination. Files and database are rolled back when
   any restore or validation step fails.
@@ -307,6 +311,9 @@ The following isolated drills were run with synthetic data and no published port
 - MySQL 8.4.0
 - PostgreSQL 16.14 using pinned linux/amd64 manifest
   `sha256:670391653713782e51974845b217c56fed4dd8729142299c43c919a8d3e15e00`
+- Cal.com 6.2.0 using pinned linux/amd64 manifest
+  `sha256:9d962292d21244382560a129fc0a5519b83fff9fd2ad77baa72947db2b3c5001`
+  against the PostgreSQL 16.14 manifest above
 - Pi-hole 2026.07.2
 - Jellyfin 10.11.11
 - Lidarr 3.1.0.4875, Radarr 6.3.0.10514, and Sonarr 4.0.19.2979
@@ -336,6 +343,15 @@ local capability evidence only: production remains gated on the actual runtime
 digest, database inventory, dedicated denied-write role/default grants, network,
 targets/jobs, and a separately approved backup-only run. Production restore is
 forbidden.
+
+The Cal.com milestone reuses that PostgreSQL foundation and adds exact v6.2.0
+application evidence. Each of two clean rounds produced immutable A/B archives,
+restored both into independently fresh databases, booted the pinned Cal.com
+image against each, proved phase-specific public event/booking and typed
+control-plane markers, then repeated the proof after database and app restart.
+Production remains gated on the actual Cal.com/PostgreSQL runtime digests, a
+dedicated denied-write role, the DMZ database-only network path, targets/jobs,
+and a separately approved backup-only run. Production restore is forbidden.
 Re-run drills after any component-version upgrade.
 
 Use `backend/scripts/plugin_drill.py` to repeat that contract. Provide source and

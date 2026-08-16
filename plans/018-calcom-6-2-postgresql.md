@@ -6,7 +6,7 @@
 - **Effort**: L
 - **Risk**: HIGH
 - **Depends on**: Plan 017 generic PostgreSQL 16 foundation
-- **State**: IN PROGRESS
+- **State**: DONE (local)
 - **Restore capability**: `partial`
 - **Production status**: local work only; every production restore is forbidden
 - **Fixed point**: `2e317c7`
@@ -176,13 +176,18 @@ For each of two clean parameterized rounds:
    prove immutable image/source identity plus app readiness.
 2. Create a dedicated denied-write backup role and prove every required positive
    read and negative authority boundary.
-3. Through supported Cal.com paths seed phase A user/profile, schedule, event
-   type, attendee/booking, credential/calendar, workflow, webhook, and API-key
-   markers without contacting an external provider.
+3. Create the phase-A user through Cal.com's supported first-party setup HTTP
+   route. Stop the disposable app, seed the remaining deterministic synthetic
+   schedule, event, booking, credential/calendar, workflow, webhook, and API-key
+   fixture directly against the exact pinned Prisma schema, then restart the app
+   and prove every marker through its public pages plus the typed database
+   projection. This is recovery evidence, not a claim that every control-plane
+   object was created through a stable public Cal.com mutation API.
 4. Back up through real Target/Job/Run/TargetRun; independently inspect private
    artifact/sidecar/hash, exact migration/catalog/profile, and absence of secrets.
-5. Mutate supported state to phase B and create immutable artifact B. Prove B is
-   distinct and A stayed byte-identical with phase-A-only evidence.
+5. Stop the disposable app, apply the phase-B fixture against the same exact
+   schema, restart it, and create immutable artifact B. Prove B is distinct and
+   A stayed byte-identical with phase-A-only evidence.
 6. Create separate destination A from `template0` with its own owner/sentinel,
    restore A through RestoreService, and prove exact database markers.
 7. Boot the exact app against destination A with the synthetic external config;
@@ -190,10 +195,16 @@ For each of two clean parameterized rounds:
    app on unchanged volumes and repeat.
 8. Destroy destination A and repeat restore/boot/restart proof for B on a
    separately fresh destination, including phase-B differences.
-9. Exercise representative wrong app/PG/migration/schema, overprivileged/RLS,
-   dump warning/failure/cancellation, corrupt/replaced/wrong-plugin/altered
-   artifact, missing sentinel, same/nonfresh/unapproved destination,
-   transactional failure, wrong encryption key at boot, and marker mismatch.
+9. Exercise the Cal.com-specific exact negatives: wrong app/image identity,
+   PostgreSQL patch, migration/schema, overprivileged/RLS source, corrupt or
+   altered Cal.com artifact evidence, missing sentinel, and nonfresh/unapproved
+   destination. Reuse Plan 017's public generic PostgreSQL regressions and exact
+   drill evidence for dump warning/failure/cancellation, descriptor replacement,
+   same-target authorization, TOC ambiguity, and transactional restore failure
+   rather than duplicating those mechanics here. Prove the source key decrypts
+   restored synthetic credentials and an independently wrong key cannot; Cal.com
+   itself does not fail startup merely because an encrypted integration is not
+   read during boot.
 10. Remove and independently audit every labeled/prefixed container, network,
     volume, runner image, listener, temporary artifact, and synthetic credential.
 
@@ -215,6 +226,27 @@ Mark `DONE (local)` only after every item passes. Production remains
 rollout-pending until actual app/database runtime digests, the DMZ database-only
 network path, exact dedicated role/default grants, target/job, and one approved
 backup-only run are separately verified.
+
+## Completion evidence
+
+Completed locally on 2026-08-16 without production contact, push, or deploy:
+
+- focused Cal.com, PostgreSQL, and capability suite: `67 passed`;
+- full backend suite: `1317 passed, 14 skipped in 275.42s`;
+- exact Cal.com 6.2.0/PostgreSQL 16.14 drill: `2 passed in 398.07s`, with
+  two clean parameterized rounds, four distinct A/B artifacts, four independent
+  fresh RestoreService destinations, exact-image app boots/restarts, and an
+  independently empty label/prefix resource audit;
+- frontend: ESLint passed, `48 passed`, and production build passed;
+- application mypy: `104 source files` clean; all seven changed Python files
+  passed Black and isort; synchronized version `0.2.1`, diff check, repository
+  hygiene tests, and scoped high-risk secret scan passed; and
+- final Spec and Standards re-reviews: no remaining P0-P3 findings.
+
+Repository-wide Black/isort and whole-test-tree mypy remain affected by existing
+untouched baseline formatting and duplicate `conftest` module names. No unrelated
+files were rewritten to disguise those pre-existing results; the full functional
+backend and frontend gates above are green.
 
 ## STOP conditions
 

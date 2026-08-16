@@ -54,6 +54,11 @@ All notable changes to Homelab Backup are recorded here. This project follows
   probes, private bounded custom archives, exact catalog/TOC provenance,
   descriptor-bound transactional restores, and two clean PostgreSQL 16.14
   backup-to-fresh-restore drill rounds.
+- A strict Cal.com 6.2.0 adapter over the PostgreSQL 16 recovery module with
+  exact migration/catalog/control-plane profiles, stable online A/B archives,
+  fresh transactional RestoreService destinations, and exact-image boot/restart
+  proof in two clean rounds. Restore remains `partial` because application
+  configuration, encryption keys, external providers, and lifecycle are external.
 
 ### Changed
 

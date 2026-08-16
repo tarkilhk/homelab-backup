@@ -7,7 +7,7 @@ def test_plugins_publish_honest_restore_capabilities() -> None:
     expected = {
         "audiobookshelf": "partial",
         "bazarr": "partial",
-        "calcom": "automatic",
+        "calcom": "partial",
         "gitea": "automatic",
         "hindsight": "partial",
         "homelab_backup": "partial",

@@ -225,11 +225,13 @@ owner. PostgreSQL guarantees that single-transaction restore either completes
 all commands or applies none and that it implies exit-on-error
 ([transactional restore](https://www.postgresql.org/docs/16/app-pgrestore.html#APP-PGRESTORE-OPTIONS)).
 Inside the same bounded workflow, prove exact migrations, schema/TOC identity,
-constraints, sequences, row counts, and content-marker hashes, then `ANALYZE`.
-On failure leave the fresh sentinel database for inspection; the plugin never
-drops, cleans, or retries destructively. Return an honest `partial` result that
-names the remaining exact-image/configuration boot proof without revealing
-content.
+constraints, sequences, row counts, and content-marker hashes. PostgreSQL
+planner statistics are regenerable operational state, not an artifact invariant;
+the plugin does not run a broad `ANALYZE` as part of the transaction. The exact
+app boot/read/restart drill is the readiness proof. On failure leave the fresh
+sentinel database for inspection; the plugin never drops, cleans, or retries
+destructively. Return an honest `partial` result that names the remaining
+exact-image/configuration boot proof without revealing content.
 
 ## Exact two-round disposable Docker drill
 
@@ -251,20 +253,21 @@ For one authoritative sequence:
    migrate and seed it. Record image manifests, PostgreSQL 16.14, migration
    head, exact catalog fingerprint, app readiness, and the backup role's
    positive reads plus every required denial.
-2. Through the Cal.com UI create phase-A synthetic user/profile, availability
-   schedule, event type, attendee and booking. Add synthetic credential/
-   selected-calendar, workflow, webhook, and API-key-shaped records through
-   first-party application paths where v6.2.0 exposes them. Do not contact a
-   real external provider. Record only canonical hashes/counts and prove the
-   public event page plus authenticated booking/event views.
+2. Create the phase-A synthetic user/profile through Cal.com's supported setup
+   HTTP route. With the disposable app stopped, seed the remaining schedule,
+   event, attendee/booking, credential/calendar, workflow, webhook, and
+   API-key-shaped test fixture directly against the exact pinned Prisma schema.
+   Restart the app, record only canonical hashes/counts, and prove the public
+   event and booking pages. This deterministic fixture proves recovered
+   application reads; it does not claim a stable public mutation API for every
+   Cal.com control-plane model. Do not contact a real external provider.
 3. While the exact app remains online, create artifact A through the real
    target/job/plugin path. Require private mode, valid sidecar/hash, distinct
    source fingerprint, strict TOC, and no publication on an injected dump
    warning/failure/timeout/cancellation.
-4. Mutate the same source through the UI to phase B: add a distinguishable
-   event type, attendee/booking and workflow/webhook state, and change one
-   schedule. Create artifact B. Require a different path and SHA-256 and prove
-   A describes only phase A while B describes A+B.
+4. Stop the same source, apply the distinguishable phase-B fixture against the
+   exact schema, restart it, and create artifact B. Require a different path and
+   SHA-256 and prove A describes only phase A while B describes A+B.
 5. Create destination A from `template0` with its own owner and sentinel.
    Restore A through `RestoreService`, prove exact database markers, then boot
    the exact Cal.com image against it with the synthetic source key/config.
@@ -274,13 +277,14 @@ For one authoritative sequence:
    content proof, and restart on a separately created destination B. Prove the
    phase-B differences. Neither destination may be reused or pre-seeded with
    Cal.com objects.
-7. Prove fail-closed behavior for bad/unreachable/owner/write-capable/RLS source
-   identities, wrong server/client/app/migration/schema, unknown large object,
-   corrupt/truncated/replaced/wrong-plugin archive, altered sidecar, unexpected
-   TOC/DDL, missing sentinel, same source/destination, nonempty or externally
-   reachable destination, wrong encryption key at boot, and injected restore
-   SQL failure. No negative case may publish success or change pre-existing
-   state.
+7. Prove Cal.com-specific fail-closed behavior for wrong immutable app identity
+   or PostgreSQL patch, write-capable/RLS source identities, migration/schema
+   drift, corrupt or altered Cal.com artifact evidence, missing sentinel, and
+   nonempty or unapproved destination. Reuse Plan 017's generic PostgreSQL unit
+   and exact-drill evidence for dump lifecycle, descriptor replacement, TOC/DDL,
+   same-database authorization, and transactional failure. Prove the correct
+   synthetic key decrypts restored integration data and a wrong key does not;
+   do not expect startup itself to fail when no encrypted integration is read.
 8. Tear down by exact drill labels and audit both label and generated-name
    prefixes. Require zero containers, networks, volumes, runners, listeners,
    credentials, and temporary artifacts after each round and after the whole
@@ -290,10 +294,10 @@ The two independently created artifacts, two independently fresh databases,
 two exact-image boots, and two restart proofs are the consecutive recovery
 drills. Running two backups and restoring only one is insufficient.
 
-## Current plugin gaps
+## Pre-milestone baseline and implemented contract
 
-The current `backend/app/plugins/calcom/plugin.py` is a useful streaming
-prototype but is not this contract:
+At the start of this research, `backend/app/plugins/calcom/plugin.py` was a
+streaming prototype rather than the selected contract:
 
 - it accepts URL configs, unknown keys and a `database_direct_url` fallback;
 - it normally uses the application owner and `PGPASSWORD`, not a dedicated
@@ -308,9 +312,21 @@ prototype but is not this contract:
   source/destination, sentinel, emptiness, allowlist, or migration guard; and
 - it reports automatic success without Cal.com content/readiness proof.
 
-The existing three unit tests cover only the happy path and do not establish
+The original three unit tests covered only the happy path and did not establish
 least privilege, strict schema/TOC identity, negative publication, immutable
 staging, fresh-only restore, rollback, application boot, or two-round recovery.
+
+Plan 018 now closes that baseline locally. The adapter uses strict flat
+source/destination fields, the committed version-addressable PostgreSQL 16
+foundation and private `PGPASSFILE`, exact Cal.com 6.2.0 migration/catalog/
+marker identity, stable pre/post capture profiles, descriptor-bound private
+artifacts and sidecars, create-only sentinel RestoreService destinations, and an
+honest `partial` outcome. Two clean exact-image rounds each produced immutable
+A/B scheduler artifacts, restored both into separate fresh databases, proved
+phase-specific application pages and typed control-plane markers, and repeated
+the proof after app/database restart. Production connectivity, target/job setup,
+least-privilege grants, and any backup-only run remain separate rollout gates;
+production restore remains forbidden.
 
 ## STOP conditions
 

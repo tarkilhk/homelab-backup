@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import time
-import unicodedata
 from pathlib import Path
 from typing import Any, Dict, cast
 
@@ -16,19 +14,14 @@ from app.core.plugins.postgresql import (
     probe_postgresql,
     publish_postgresql_artifact,
     restore_postgresql_archive,
+    validate_postgresql_config,
     write_postgresql_archive,
 )
 
 BACKUP_BASE_PATH = "/backups"
 BACKUP_TIMEOUT_SECONDS = 3600.0
 RESTORE_TIMEOUT_SECONDS = 3600.0
-_CONFIG_KEYS = frozenset({"mode", "host", "port", "database", "user", "password"})
-_DATABASE_NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_$-]{0,62}$")
 _LOG = logging.getLogger(__name__)
-
-
-def _has_control_characters(value: str) -> bool:
-    return any(unicodedata.category(character) == "Cc" for character in value)
 
 
 class PostgreSQLPlugin(BackupPlugin):
@@ -41,50 +34,7 @@ class PostgreSQLPlugin(BackupPlugin):
 
     async def validate_config(self, config: Dict[str, Any]) -> bool:
         """Validate one exact source or restore-destination configuration."""
-        if not isinstance(config, dict) or set(config) != _CONFIG_KEYS:
-            return False
-        if config.get("mode") not in {"source", "restore_destination"}:
-            return False
-
-        host = config.get("host")
-        if (
-            not isinstance(host, str)
-            or host != host.strip()
-            or not host
-            or _has_control_characters(host)
-        ):
-            return False
-        if "://" in host or "/" in host or any(character.isspace() for character in host):
-            return False
-
-        port = config.get("port")
-        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
-            return False
-
-        database = config.get("database")
-        if not isinstance(database, str) or _DATABASE_NAME_PATTERN.fullmatch(database) is None:
-            return False
-
-        user = config.get("user")
-        if (
-            not isinstance(user, str)
-            or user != user.strip()
-            or not user
-            or _has_control_characters(user)
-        ):
-            return False
-        if any(character.isspace() for character in user):
-            return False
-
-        password = config.get("password")
-        if (
-            not isinstance(password, str)
-            or not password
-            or password.isspace()
-            or _has_control_characters(password)
-        ):
-            return False
-        return True
+        return validate_postgresql_config(config)
 
     async def test(self, config: Dict[str, Any]) -> bool:
         """Check connectivity through the same pinned PostgreSQL client toolchain."""
