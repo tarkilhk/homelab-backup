@@ -134,7 +134,7 @@ class _NoResultConnection:
         return False
 
     def recv(self) -> object:
-        raise AssertionError("No worker result is available")
+        raise EOFError("No worker result is available")
 
     def close(self) -> None:
         self.closed = True
@@ -591,6 +591,7 @@ def _manual_backup(
     filename: str | None = None,
     path: str | None = None,
     observed_at: datetime | None = None,
+    size: int = 4096,
 ) -> dict[str, object]:
     resolved_filename = filename or f"{plugin_key}_backup_v{version}_2026.08.16_12.00.00.zip"
     return {
@@ -598,7 +599,7 @@ def _manual_backup(
         "name": resolved_filename,
         "type": "manual",
         "path": path or f"/backup/manual/{resolved_filename}",
-        "size": 4096,
+        "size": size,
         "time": (observed_at or datetime.now(timezone.utc)).isoformat(),
     }
 
@@ -620,6 +621,7 @@ def _install_single_archive_backup(
         backup_id=301,
         filename=filename,
         observed_at=datetime.now(timezone.utc) + timedelta(seconds=1),
+        size=len(archive_bytes),
     )
     requests: list[httpx.Request] = []
     list_calls = 0
@@ -1211,6 +1213,7 @@ async def test_backup_rechecks_exact_status_and_publishes_attributed_native_arch
         version,
         backup_id=10,
         filename=f"{plugin_key}_backup_v{version}_2026.08.16_11.59.59.zip",
+        size=len(archive_bytes),
     )
     created = _manual_backup(
         plugin_key,
@@ -1218,6 +1221,7 @@ async def test_backup_rechecks_exact_status_and_publishes_attributed_native_arch
         backup_id=11,
         filename=f"{plugin_key}_backup_v{version}_2026.08.16_12.00.01.zip",
         observed_at=datetime.now(timezone.utc) + timedelta(seconds=1),
+        size=len(archive_bytes),
     )
     baseline_path = backup_directory / str(baseline["name"])
     created_path = backup_directory / str(created["name"])
@@ -1479,6 +1483,7 @@ async def test_backup_rejects_unattributable_manual_archive(
         backup_id=91,
         filename=f"{plugin_key}_backup_v{version}_2026.08.16_12.00.01.zip",
         observed_at=now + timedelta(seconds=1),
+        size=len(archive_bytes),
     )
     second = _manual_backup(
         plugin_key,
@@ -1486,6 +1491,7 @@ async def test_backup_rejects_unattributable_manual_archive(
         backup_id=92,
         filename=f"{plugin_key}_backup_v{version}_2026.08.16_12.00.02.zip",
         observed_at=now + timedelta(seconds=1),
+        size=len(archive_bytes),
     )
     stale = _manual_backup(
         plugin_key,
@@ -1493,6 +1499,7 @@ async def test_backup_rejects_unattributable_manual_archive(
         backup_id=93,
         filename=f"{plugin_key}_backup_v{version}_2026.08.15_12.00.00.zip",
         observed_at=now - timedelta(days=1),
+        size=len(archive_bytes),
     )
     post_trigger_entries = {
         "ambiguous": [fresh, second],
@@ -1594,6 +1601,7 @@ async def test_backup_refuses_unsafe_or_untrusted_local_source(
         filename=filename,
         path=candidate_path,
         observed_at=datetime.now(timezone.utc) + timedelta(seconds=1),
+        size=len(archive_bytes),
     )
     requests: list[httpx.Request] = []
     list_calls = 0
@@ -1874,6 +1882,7 @@ async def test_backup_cleanup_failure_preserves_published_and_source_copies(
         version,
         backup_id=400,
         filename=f"{plugin_key}_backup_v{version}_2026.08.16_12.40.00.zip",
+        size=len(archive_bytes),
     )
     created = _manual_backup(
         plugin_key,
@@ -1881,6 +1890,7 @@ async def test_backup_cleanup_failure_preserves_published_and_source_copies(
         backup_id=401,
         filename=f"{plugin_key}_backup_v{version}_2026.08.16_12.41.00.zip",
         observed_at=datetime.now(timezone.utc) + timedelta(seconds=1),
+        size=len(archive_bytes),
     )
     baseline_path = backup_directory / str(baseline["name"])
     created_path = backup_directory / str(created["name"])
@@ -2849,7 +2859,7 @@ async def test_restore_fails_closed_for_bounded_protocol_failures(
         "non-string-start-time",
     }:
         with pytest.raises(RuntimeError):
-            await asyncio.wait_for(operation, timeout=0.25)
+            await asyncio.wait_for(operation, timeout=1.0)
     else:
         with pytest.raises((RuntimeError, ValueError, httpx.HTTPError)):
             await operation

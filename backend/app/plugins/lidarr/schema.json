@@ -1,17 +1,27 @@
 {
   "type": "object",
-  "required": ["base_url", "api_key"],
+  "additionalProperties": false,
+  "required": ["base_url", "api_key", "backup_directory"],
   "properties": {
     "base_url": {
       "type": "string",
-      "format": "uri",
       "title": "Base URL",
-      "default": "http://lidarr.local:8686"
+      "default": "http://lidarr.local:8686",
+      "minLength": 1,
+      "pattern": "^https?://[^/?#]+$"
     },
     "api_key": {
       "type": "string",
       "title": "API Key",
-      "default": "your_api_key"
+      "minLength": 1
+    },
+    "backup_directory": {
+      "type": "string",
+      "title": "Backup Directory",
+      "default": "/sources/lidarr/backups",
+      "const": "/sources/lidarr/backups",
+      "minLength": 1,
+      "pattern": "^/.*"
     }
   }
 }

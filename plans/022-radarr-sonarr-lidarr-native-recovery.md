@@ -159,9 +159,11 @@ descriptor-bound artifact before destination contact. Require:
 
 Required table sets are exactly those in the research note. Sidecars contain
 only application/version/package, backend/migration, command/native IDs and
-times, structural inventory/counts, validator identity, selected OCI identity,
-and artifact size/SHA-256. They never contain keys, origins, paths, settings,
-titles, database values, providers, or other application content.
+times, structural inventory/counts, validator identity, and artifact
+size/SHA-256. The plugin cannot observe its source application's OCI identity,
+so the independent exact-image drill binds that evidence instead of copying an
+adapter constant into the sidecar. Sidecars never contain keys, origins, paths,
+settings, titles, database values, providers, or other application content.
 
 ## Create-only isolated restore
 
@@ -174,6 +176,12 @@ Restore must flow through RestoreService and requires:
 - exact status and every fresh-resource endpoint returning an empty list; and
 - a new disposable exact-image destination with separate empty config, no
   published port, production route, shared mount, or production credential.
+
+That precondition deliberately leaves no prior authoritative destination state
+to preserve or roll back. Any failure at or after native upload marks the
+disposable destination tainted: the run must fail, no success may be reported,
+and the drill/orchestrator must destroy it rather than retrying or reusing it.
+This is not authorization to restore onto an existing or production target.
 
 Fresh-resource paths:
 
@@ -241,10 +249,19 @@ Repeat from entirely empty state with new source, credentials, volumes,
 artifacts, and destinations. Per app this is four backups and four independent
 fresh restores; the trio totals twelve backups and twelve fresh restores.
 
-Run the representative identity, package/version/backend/migration, command,
-attribution/collision, mount/swap, source mutation, archive/resource,
-config-only, cleanup, provenance, same/nonfresh destination, restored-key,
-restart/state-loss, cancellation, and cleanup negative matrix once per app.
+In the exact-image drill, run the safely inducible identity,
+package/version/backend/migration, failed/ambiguous command, mount/swap,
+corrupt artifact, unauthorized restore, and nonfresh-destination negatives once
+per app. Run the exhaustive attribution/collision, source mutation,
+archive/resource/config-only, cleanup preservation, provenance, same-target,
+restored-key, restart/state-loss, timeout, cancellation, and worker-reaping
+matrix once against the shared public Servarr deep-module seams. Parameterize
+the trio adapters for every adapter-specific identity, API prefix, package,
+migration, fixed mount, database/member/table, sidecar, fresh-resource, and
+semantic restored-content rule plus one full public backup, restore, and
+RestoreService journey each. Do not duplicate identical process-lifecycle
+tests for thin constant-only adapters or weaken production code merely to
+inject destructive vendor-process failures into the exact-image drill.
 
 ## Verification and completion
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import multiprocessing
 import os
@@ -13,6 +14,7 @@ import sqlite3
 import stat
 import tempfile
 import threading
+import time
 import zipfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -30,8 +32,12 @@ import httpx
 from app.core.plugins.artifacts import create_backup_artifact
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
 
+logger = logging.getLogger(__name__)
+
 _LOCKS_GUARD = threading.Lock()
 _BACKUP_LOCKS: dict[str, threading.Lock] = {}
+_TRIGGER_SECONDS_GUARD = threading.Lock()
+_LAST_TRIGGER_SECONDS: dict[str, int] = {}
 
 _MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 _MAX_ZIP_MEMBERS = 3
@@ -41,7 +47,16 @@ _MAX_EXPANSION_RATIO = 200
 _MAX_CONFIG_BYTES = 4 * 1024 * 1024
 _MAX_INFO_BYTES = 64 * 1024
 _MAX_DATABASE_BYTES = 1024 * 1024 * 1024
+_MAX_SCHEMA_OBJECTS = 2048
+_MAX_SQLITE_VM_STEPS = 5_000_000
+_SQLITE_PROGRESS_INTERVAL = 1000
+_MAX_RESTORE_CONTENT_ROWS = 1_000_000
+_MAX_SEMANTIC_MARKERS = 100_000
+_MAX_SEMANTIC_LABEL_BYTES = 4096
+_MAX_SEMANTIC_LABEL_TOTAL_BYTES = 4 * 1024 * 1024
+_MAX_RESTORE_API_BYTES = 16 * 1024 * 1024
 _BACKUP_WORKER_TIMEOUT_SECONDS = 300.0
+_RESTORE_WORKER_TIMEOUT_SECONDS = 300.0
 _WORKER_STOP_TIMEOUT_SECONDS = 5.0
 _ISOLATED_RESTORE_ENV = "HOMELAB_BACKUP_ALLOW_ISOLATED_RESTORE"
 _ISOLATED_RESTORE_ORIGINS_ENV = "HOMELAB_BACKUP_ISOLATED_RESTORE_ALLOWED_ORIGINS"
@@ -83,6 +98,20 @@ class _ArchiveEvidence:
     sha256: str
 
 
+@dataclass(frozen=True)
+class _RestoreContentEvidence:
+    resource_counts: tuple[tuple[str, int], ...]
+    tag_labels_sha256: str
+
+
+@dataclass(frozen=True)
+class _RestoreWorkerEvidence:
+    source: _FileEvidence
+    sha256: str
+    content: _RestoreContentEvidence
+    restored_api_key: str
+
+
 def _file_evidence(status: os.stat_result) -> _FileEvidence:
     return _FileEvidence(
         device=status.st_dev,
@@ -90,6 +119,17 @@ def _file_evidence(status: os.stat_result) -> _FileEvidence:
         size=status.st_size,
         modified_ns=status.st_mtime_ns,
         changed_ns=status.st_ctime_ns,
+    )
+
+
+def _same_open_file_content(status: os.stat_result, expected: _FileEvidence) -> bool:
+    """Bind an open descriptor while allowing an unlink-only ctime change."""
+
+    return (
+        status.st_dev == expected.device
+        and status.st_ino == expected.inode
+        and status.st_size == expected.size
+        and status.st_mtime_ns == expected.modified_ns
     )
 
 
@@ -123,6 +163,21 @@ def _canonical_origin(value: str) -> str:
 def _backup_lock(key: str) -> threading.Lock:
     with _LOCKS_GUARD:
         return _BACKUP_LOCKS.setdefault(key, threading.Lock())
+
+
+async def _reserve_trigger_second(key: str) -> datetime:
+    """Reserve and cross a distinct whole-second vendor filename boundary."""
+
+    now = datetime.now(timezone.utc)
+    current_second = int(now.timestamp())
+    with _TRIGGER_SECONDS_GUARD:
+        target_second = max(
+            current_second + 1,
+            _LAST_TRIGGER_SECONDS.get(key, current_second) + 1,
+        )
+        _LAST_TRIGGER_SECONDS[key] = target_second
+    await asyncio.sleep(max(0.0, target_second - now.timestamp()))
+    return datetime.fromtimestamp(target_second, tz=timezone.utc)
 
 
 @asynccontextmanager
@@ -210,6 +265,22 @@ def _hash_descriptor(descriptor: int) -> str:
             return digest.hexdigest()
         digest.update(chunk)
         offset += len(chunk)
+
+
+def _semantic_labels_sha256(labels: list[str] | tuple[str, ...]) -> str:
+    digest = hashlib.sha256()
+    total_bytes = 0
+    for label in sorted(labels):
+        encoded = label.encode("utf-8")
+        total_bytes += len(encoded)
+        if (
+            len(encoded) > _MAX_SEMANTIC_LABEL_BYTES
+            or total_bytes > _MAX_SEMANTIC_LABEL_TOTAL_BYTES
+        ):
+            raise RuntimeError("Servarr semantic labels exceed their byte limit")
+        digest.update(len(encoded).to_bytes(4, "big"))
+        digest.update(encoded)
+    return digest.hexdigest()
 
 
 def _worker_error_kind(exc: BaseException) -> str:
@@ -308,6 +379,111 @@ def _start_backup_process(
     return process, receiving
 
 
+def _restore_process_worker(
+    plugin_name: str,
+    artifact_path: Path,
+    expected_size: int,
+    expected_sha256: str,
+    validation_root: Path,
+    validation_identity: tuple[int, int],
+    connection: Connection,
+) -> None:
+    validation_fd: int | None = None
+    artifact_fd: int | None = None
+    try:
+        from app.core.plugins.loader import get_plugin
+
+        plugin = get_plugin(plugin_name)
+        if not isinstance(plugin, ServarrPlugin):
+            raise RuntimeError("Servarr restore worker received an incompatible plugin")
+        validation_fd = _open_owned_directory(validation_root, validation_identity)
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        artifact_fd = os.open(artifact_path, flags)
+        before = os.fstat(artifact_fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_size != expected_size:
+            raise ValueError(f"{plugin.app_name} restore artifact size is not verified")
+        try:
+            named = artifact_path.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError(
+                f"{plugin.app_name} restore artifact changed during verification"
+            ) from exc
+        if _file_evidence(before) != _file_evidence(named):
+            raise ValueError(f"{plugin.app_name} restore artifact changed during verification")
+        digest = _hash_descriptor(artifact_fd)
+        if digest != expected_sha256:
+            raise ValueError(f"{plugin.app_name} restore artifact hash is not verified")
+        descriptor_path = Path(f"/proc/self/fd/{artifact_fd}")
+        content = plugin._validate_exact_native_archive(
+            descriptor_path,
+            validation_root=Path(f"/proc/self/fd/{validation_fd}"),
+        )
+        restored_api_key = plugin._restored_api_key(descriptor_path)
+        after = os.fstat(artifact_fd)
+        try:
+            named_after = artifact_path.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise ValueError(
+                f"{plugin.app_name} restore artifact changed during verification"
+            ) from exc
+        source = _file_evidence(before)
+        if source != _file_evidence(after) or source != _file_evidence(named_after):
+            raise ValueError(f"{plugin.app_name} restore artifact changed during verification")
+        _send_worker_result(
+            connection,
+            (
+                "ok",
+                "",
+                _RestoreWorkerEvidence(
+                    source=source,
+                    sha256=digest,
+                    content=content,
+                    restored_api_key=restored_api_key,
+                ),
+            ),
+        )
+    except BaseException as exc:
+        _send_worker_result(connection, (_worker_error_kind(exc), str(exc), None))
+        raise SystemExit(1) from None
+    finally:
+        if artifact_fd is not None:
+            os.close(artifact_fd)
+        if validation_fd is not None:
+            os.close(validation_fd)
+        connection.close()
+
+
+def _start_restore_process(
+    plugin_name: str,
+    artifact_path: Path,
+    expected_size: int,
+    expected_sha256: str,
+    validation_root: Path,
+    validation_identity: tuple[int, int],
+) -> tuple[BaseProcess, Connection]:
+    context = multiprocessing.get_context("spawn")
+    receiving, sending = context.Pipe(duplex=False)
+    process = context.Process(
+        target=_restore_process_worker,
+        args=(
+            plugin_name,
+            artifact_path,
+            expected_size,
+            expected_sha256,
+            validation_root,
+            validation_identity,
+            sending,
+        ),
+        name="servarr-restore",
+        daemon=True,
+    )
+    process.start()
+    sending.close()
+    return process, receiving
+
+
 async def _join_worker_process(process: BaseProcess, timeout_seconds: float) -> None:
     await asyncio.to_thread(process.join, timeout_seconds)
 
@@ -364,21 +540,27 @@ async def _await_worker(
     *,
     timeout_seconds: float,
 ) -> object | None:
+    receive_task = asyncio.create_task(asyncio.to_thread(connection.recv))
     try:
         await _join_worker_process(process, timeout_seconds)
         if process.is_alive():
             await _stop_worker_process_before_return(process)
             raise TimeoutError("Servarr backup worker timed out")
         result: tuple[str, str, object | None] | None = None
-        if connection.poll():
-            received = connection.recv()
-            if (
-                isinstance(received, tuple)
-                and len(received) == 3
-                and isinstance(received[0], str)
-                and isinstance(received[1], str)
-            ):
-                result = received
+        try:
+            received = await asyncio.wait_for(
+                asyncio.shield(receive_task),
+                timeout=_WORKER_STOP_TIMEOUT_SECONDS,
+            )
+        except (EOFError, OSError, TimeoutError):
+            received = None
+        if (
+            isinstance(received, tuple)
+            and len(received) == 3
+            and isinstance(received[0], str)
+            and isinstance(received[1], str)
+        ):
+            result = received
         payload = _raise_worker_result(result)
         if process.exitcode != 0:
             raise RuntimeError("Servarr backup worker failed")
@@ -392,6 +574,12 @@ async def _await_worker(
         raise
     finally:
         connection.close()
+        if not receive_task.done():
+            receive_task.cancel()
+        try:
+            await receive_task
+        except BaseException:
+            pass
 
 
 class ServarrPlugin(BackupPlugin):
@@ -401,11 +589,16 @@ class ServarrPlugin(BackupPlugin):
     api_prefix = "/api/v3"
     database_members: tuple[str, ...] = ()
     expected_version: str | None = None
+    expected_package_version: str | None = None
     expected_migration: int | None = None
     expected_database_type = "sqlite"
+    require_start_time = False
+    require_distinct_trigger_second = False
+    require_persistence_restart = False
     native_backup_mount: Path | None = None
     required_native_tables: frozenset[str] = frozenset()
     fresh_restore_resource_paths: tuple[str, ...] = ()
+    restore_content_tables: tuple[tuple[str, str], ...] = ()
     command_result_required = True
     backup_deadline_seconds = 120.0
     poll_interval_seconds = 1.0
@@ -419,7 +612,7 @@ class ServarrPlugin(BackupPlugin):
             name=name,
             version=version or installed_package_version("homelab-backup"),
         )
-        self._logger = logging.getLogger(self.__class__.__module__)
+        self._logger = logger
 
     async def validate_config(self, config: Dict[str, Any]) -> bool:
         required_keys = {"base_url", "api_key"}
@@ -434,7 +627,12 @@ class ServarrPlugin(BackupPlugin):
             or not base_url
             or base_url != base_url.strip()
             or not isinstance(api_key, str)
-            or not api_key.strip()
+            or not api_key
+            or api_key != api_key.strip()
+            or any(
+                character.isspace() or ord(character) < 32 or ord(character) == 127
+                for character in api_key
+            )
         ):
             return False
         try:
@@ -512,7 +710,31 @@ class ServarrPlugin(BackupPlugin):
             raise RuntimeError(
                 f"{self.app_name} native backup file must be a regular non-link file"
             )
+        expected_size = item.get("size")
+        if (
+            isinstance(expected_size, bool)
+            or not isinstance(expected_size, int)
+            or status.st_size != expected_size
+        ):
+            raise RuntimeError(
+                f"{self.app_name} native backup file size does not match its API entry"
+            )
         return candidate
+
+    def _validate_manual_backup_entries(
+        self,
+        directory: Path,
+        backups: list[dict[str, Any]],
+    ) -> None:
+        observed_paths: set[str] = set()
+        for item in backups:
+            if item.get("type") != "manual":
+                continue
+            api_path = self._download_path(item)
+            if api_path in observed_paths:
+                raise RuntimeError(f"{self.app_name} manual backup entry collision")
+            observed_paths.add(api_path)
+            self._local_backup_path(directory, item)
 
     def _copy_stable_local_backup(
         self,
@@ -587,6 +809,11 @@ class ServarrPlugin(BackupPlugin):
                 raise RuntimeError(f"{self.app_name} application identity is incompatible")
             if version != self.expected_version:
                 raise RuntimeError(f"{self.app_name} version is incompatible")
+            if (
+                self.expected_package_version is not None
+                and data.get("packageVersion") != self.expected_package_version
+            ):
+                raise RuntimeError(f"{self.app_name} package version is incompatible")
             if str(data.get("databaseType", "")).lower() != self.expected_database_type:
                 raise RuntimeError(f"{self.app_name} database must be SQLite")
             migration = data.get("migrationVersion")
@@ -596,6 +823,16 @@ class ServarrPlugin(BackupPlugin):
                 or migration != self.expected_migration
             ):
                 raise RuntimeError(f"{self.app_name} database migration is incompatible")
+        if self.require_start_time:
+            start_time = data.get("startTime")
+            if not isinstance(start_time, str) or not start_time:
+                raise RuntimeError(f"{self.app_name} process start time is invalid")
+            try:
+                parsed_start_time = datetime.fromisoformat(start_time.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise RuntimeError(f"{self.app_name} process start time is invalid") from exc
+            if parsed_start_time.tzinfo is None:
+                raise RuntimeError(f"{self.app_name} process start time is invalid")
         return data
 
     async def test(self, config: Dict[str, Any]) -> bool:
@@ -630,12 +867,7 @@ class ServarrPlugin(BackupPlugin):
                     headers,
                 )
                 if backup_directory is not None:
-                    existing = next(
-                        (item for item in backups if item.get("type") == "manual"),
-                        None,
-                    )
-                    if existing is not None:
-                        self._local_backup_path(backup_directory, existing)
+                    self._validate_manual_backup_entries(backup_directory, backups)
         except RuntimeError:
             raise
         except (httpx.HTTPError, ValueError) as exc:
@@ -659,11 +891,13 @@ class ServarrPlugin(BackupPlugin):
             raise RuntimeError(f"{self.app_name} backup list response is invalid") from exc
         if not isinstance(data, list) or any(not isinstance(item, dict) for item in data):
             raise RuntimeError(f"{self.app_name} backup list response is invalid")
+        expected_fields = {"id", "name", "path", "type", "size", "time"}
         for item in data:
             backup_id = item.get("id")
             size = item.get("size")
             if (
-                not isinstance(backup_id, int)
+                set(item) != expected_fields
+                or not isinstance(backup_id, int)
                 or isinstance(backup_id, bool)
                 or not isinstance(size, int)
                 or isinstance(size, bool)
@@ -739,23 +973,24 @@ class ServarrPlugin(BackupPlugin):
         if not isinstance(backup_path, str) or not isinstance(backup_name, str):
             raise RuntimeError(f"{self.app_name} backup entry contained an unsafe path")
         parsed = urlsplit(backup_path)
-        parts = Path(parsed.path).parts
         if (
-            parsed.scheme
+            not backup_name
+            or backup_name in {".", ".."}
+            or "/" in backup_name
+            or "\\" in backup_name
+            or any(ord(character) < 32 or ord(character) == 127 for character in backup_name)
+            or parsed.scheme
             or parsed.netloc
             or parsed.query
             or parsed.fragment
-            or not parsed.path.startswith("/backup/manual/")
-            or ".." in parts
-            or Path(parsed.path).name != backup_name
+            or parsed.path != f"/backup/manual/{backup_name}"
         ):
             raise RuntimeError(f"{self.app_name} backup entry contained an unsafe path")
         return parsed.path
 
-    def _validate_archive(self, archive_path: Path) -> None:
+    def _validate_archive(self, archive_path: Path) -> _RestoreContentEvidence | None:
         if self.native_backup_mount is not None:
-            self._validate_exact_native_archive(archive_path)
-            return
+            return self._validate_exact_native_archive(archive_path)
         with tempfile.TemporaryDirectory(prefix="servarr-verify-") as directory:
             try:
                 with zipfile.ZipFile(archive_path) as archive:
@@ -801,6 +1036,7 @@ class ServarrPlugin(BackupPlugin):
                 ) from exc
             if result is None or result[0] != "ok":
                 raise RuntimeError(f"{self.app_name} backup contains an invalid SQLite database")
+        return None
 
     @staticmethod
     def _require_no_trailing_zip_data(archive_path: Path, archive_size: int) -> None:
@@ -821,7 +1057,7 @@ class ServarrPlugin(BackupPlugin):
         *,
         validation_root: Path | None = None,
         limits: _ArchiveLimits | None = None,
-    ) -> None:
+    ) -> _RestoreContentEvidence:
         active_limits = limits or _current_archive_limits()
         try:
             archive_status = archive_path.stat()
@@ -942,8 +1178,15 @@ class ServarrPlugin(BackupPlugin):
                 raise RuntimeError(f"{self.app_name} backup contains an incompatible config.xml")
 
             try:
-                info_lines = info_bytes.decode("utf-8").splitlines()
-                if len(info_lines) != 2 or info_lines[0] != f"v{self.expected_version}":
+                info_text = info_bytes.decode("utf-8")
+                if "\r" in info_text or not info_text.endswith("\n"):
+                    raise ValueError
+                info_lines = info_text.split("\n")
+                if (
+                    len(info_lines) != 3
+                    or info_lines[2] != ""
+                    or info_lines[0] != f"v{self.expected_version}"
+                ):
                     raise ValueError
                 datetime.strptime(info_lines[1], "%Y-%m-%d %H:%M:%S")
             except (UnicodeDecodeError, ValueError) as exc:
@@ -956,24 +1199,87 @@ class ServarrPlugin(BackupPlugin):
                     f"file:{database_path}?mode=ro&immutable=1",
                     uri=True,
                 ) as connection:
-                    quick_check = connection.execute("PRAGMA quick_check").fetchall()
-                    foreign_keys = connection.execute("PRAGMA foreign_key_check").fetchall()
+                    observed_steps = 0
+
+                    def enforce_step_limit() -> int:
+                        nonlocal observed_steps
+                        observed_steps += _SQLITE_PROGRESS_INTERVAL
+                        return int(observed_steps > _MAX_SQLITE_VM_STEPS)
+
+                    connection.set_progress_handler(
+                        enforce_step_limit,
+                        _SQLITE_PROGRESS_INTERVAL,
+                    )
+                    quick_check = connection.execute("PRAGMA quick_check(1)").fetchall()
+                    foreign_key_violation = connection.execute(
+                        "PRAGMA foreign_key_check"
+                    ).fetchone()
+                    schema_count_row = connection.execute(
+                        "SELECT COUNT(*) FROM sqlite_schema"
+                    ).fetchone()
+                    if (
+                        schema_count_row is None
+                        or len(schema_count_row) != 1
+                        or not isinstance(schema_count_row[0], int)
+                        or schema_count_row[0] > _MAX_SCHEMA_OBJECTS
+                    ):
+                        raise RuntimeError(
+                            f"{self.app_name} backup exceeds its schema object limit"
+                        )
                     tables = {
                         row[0]
                         for row in connection.execute(
                             "SELECT name FROM sqlite_master WHERE type = 'table'"
-                        )
+                        ).fetchmany(_MAX_SCHEMA_OBJECTS + 1)
                     }
                     migration_row = connection.execute(
                         'SELECT MAX("Version") FROM "VersionInfo"'
                     ).fetchone()
+                    if not self.required_native_tables.issubset(tables):
+                        raise RuntimeError(
+                            f"{self.app_name} backup is missing required database tables"
+                        )
+                    resource_counts: list[tuple[str, int]] = []
+                    for resource_path, table_name in self.restore_content_tables:
+                        count_row = connection.execute(
+                            f'SELECT COUNT(*) FROM "{table_name}"'
+                        ).fetchone()
+                        if (
+                            count_row is None
+                            or len(count_row) != 1
+                            or isinstance(count_row[0], bool)
+                            or not isinstance(count_row[0], int)
+                            or count_row[0] < 0
+                            or count_row[0] > _MAX_RESTORE_CONTENT_ROWS
+                        ):
+                            raise RuntimeError(
+                                f"{self.app_name} backup exceeds its restored-content row limit"
+                            )
+                        resource_counts.append((resource_path, count_row[0]))
+                    tag_count = dict(resource_counts).get("tag", 0)
+                    if tag_count > _MAX_SEMANTIC_MARKERS:
+                        raise RuntimeError(
+                            f"{self.app_name} backup exceeds its semantic marker limit"
+                        )
+                    tag_labels_sha256 = _semantic_labels_sha256(())
+                    if "tag" in dict(resource_counts):
+                        tag_rows = connection.execute(
+                            'SELECT "Label" FROM "Tags" ORDER BY "Label"'
+                        ).fetchmany(_MAX_SEMANTIC_MARKERS + 1)
+                        if len(tag_rows) != tag_count or any(
+                            len(row) != 1 or not isinstance(row[0], str) for row in tag_rows
+                        ):
+                            raise RuntimeError(
+                                f"{self.app_name} backup contains invalid semantic markers"
+                            )
+                        tag_labels_sha256 = _semantic_labels_sha256([row[0] for row in tag_rows])
             except sqlite3.Error as exc:
                 raise RuntimeError(
                     f"{self.app_name} backup contains an unreadable SQLite database"
                 ) from exc
             if quick_check != [("ok",)]:
                 raise RuntimeError(f"{self.app_name} backup contains an invalid SQLite database")
-            if foreign_keys:
+            if foreign_key_violation is not None:
                 raise RuntimeError(f"{self.app_name} backup contains foreign-key violations")
             if not self.required_native_tables.issubset(tables):
                 raise RuntimeError(f"{self.app_name} backup is missing required database tables")
@@ -983,6 +1289,10 @@ class ServarrPlugin(BackupPlugin):
                 or migration_row[0] != self.expected_migration
             ):
                 raise RuntimeError(f"{self.app_name} backup database migration is incompatible")
+            return _RestoreContentEvidence(
+                resource_counts=tuple(resource_counts),
+                tag_labels_sha256=tag_labels_sha256,
+            )
         finally:
             database_path.unlink(missing_ok=True)
             if temporary_directory is not None:
@@ -1032,11 +1342,11 @@ class ServarrPlugin(BackupPlugin):
                 f"{self.app_name} restore origin is not authorized for this isolated drill"
             )
 
-    def _validate_restore_artifact_identity(
+    async def _open_verified_restore_artifact(
         self,
         artifact: Path,
         metadata: dict[str, Any],
-    ) -> int:
+    ) -> tuple[int, _RestoreWorkerEvidence]:
         expected_size = metadata.get("artifact_bytes")
         expected_sha256 = metadata.get("artifact_sha256")
         if (
@@ -1049,6 +1359,42 @@ class ServarrPlugin(BackupPlugin):
             raise ValueError(
                 f"{self.app_name} restore requires verified artifact size and hash metadata"
             )
+        validation_root, validation_fd, validation_identity = _create_private_validation_directory(
+            artifact.parent
+        )
+        process: BaseProcess | None = None
+        try:
+            process, connection = _start_restore_process(
+                self.name,
+                artifact,
+                expected_size,
+                expected_sha256,
+                validation_root,
+                validation_identity,
+            )
+            payload = await _await_worker(
+                process,
+                connection,
+                timeout_seconds=_RESTORE_WORKER_TIMEOUT_SECONDS,
+            )
+            if not isinstance(payload, _RestoreWorkerEvidence):
+                raise RuntimeError(f"{self.app_name} restore worker returned an invalid result")
+        finally:
+            try:
+                if process is None or not process.is_alive():
+                    parent_fd = os.open(validation_root.parent, _directory_flags())
+                    try:
+                        _remove_owned_directory(
+                            parent_fd,
+                            validation_fd,
+                            expected=validation_identity,
+                            name=validation_root.name,
+                        )
+                    finally:
+                        os.close(parent_fd)
+            finally:
+                os.close(validation_fd)
+
         flags = os.O_RDONLY
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
@@ -1057,37 +1403,42 @@ class ServarrPlugin(BackupPlugin):
         except OSError as exc:
             raise ValueError(f"{self.app_name} restore artifact could not be opened") from exc
         try:
-            before = os.fstat(descriptor)
-            if not stat.S_ISREG(before.st_mode) or before.st_size != expected_size:
-                raise ValueError(f"{self.app_name} restore artifact size is not verified")
-            digest = hashlib.sha256()
-            offset = 0
-            while True:
-                chunk = os.pread(descriptor, 1024 * 1024, offset)
-                if not chunk:
-                    break
-                digest.update(chunk)
-                offset += len(chunk)
-            after = os.fstat(descriptor)
-            try:
-                named = artifact.stat(follow_symlinks=False)
-            except OSError as exc:
-                raise ValueError(
-                    f"{self.app_name} restore artifact changed during verification"
-                ) from exc
-            if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
-                after.st_dev,
-                after.st_ino,
-                after.st_size,
-                after.st_mtime_ns,
-            ) or (after.st_dev, after.st_ino) != (named.st_dev, named.st_ino):
-                raise ValueError(f"{self.app_name} restore artifact changed during verification")
-            if digest.hexdigest() != expected_sha256:
-                raise ValueError(f"{self.app_name} restore artifact hash is not verified")
-            return descriptor
+            named = artifact.stat(follow_symlinks=False)
+            if (
+                _file_evidence(os.fstat(descriptor)) != payload.source
+                or _file_evidence(named) != payload.source
+                or payload.sha256 != expected_sha256
+            ):
+                raise ValueError(f"{self.app_name} restore artifact changed after verification")
+            return descriptor, payload
         except BaseException:
             os.close(descriptor)
             raise
+
+    async def _bounded_resource_list(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        headers: dict[str, str],
+        purpose: str,
+    ) -> list[Any]:
+        body = bytearray()
+        async with client.stream("GET", url, headers=headers) as response:
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"{self.app_name} {purpose} returned status {response.status_code}"
+                )
+            async for chunk in response.aiter_bytes():
+                body.extend(chunk)
+                if len(body) > _MAX_RESTORE_API_BYTES:
+                    raise RuntimeError(f"{self.app_name} {purpose} exceeds its response size limit")
+        try:
+            payload = json.loads(body)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"{self.app_name} {purpose} response is invalid") from exc
+        if not isinstance(payload, list) or len(payload) > _MAX_RESTORE_CONTENT_ROWS:
+            raise RuntimeError(f"{self.app_name} {purpose} response is invalid")
+        return payload
 
     async def _require_fresh_restore_destination(
         self,
@@ -1095,26 +1446,130 @@ class ServarrPlugin(BackupPlugin):
         base_url: str,
         headers: dict[str, str],
     ) -> None:
-        for resource_path in self.fresh_restore_resource_paths:
-            response = await client.get(
+        resource_paths = (
+            tuple(path for path, _table in self.restore_content_tables)
+            if self.restore_content_tables
+            else self.fresh_restore_resource_paths
+        )
+        for resource_path in resource_paths:
+            payload = await self._bounded_resource_list(
+                client,
                 f"{base_url}{self.api_prefix}/{resource_path}",
-                headers=headers,
+                headers,
+                "fresh-destination check",
             )
-            if response.status_code != 200:
-                raise RuntimeError(
-                    f"{self.app_name} fresh-destination check returned status "
-                    f"{response.status_code}"
-                )
-            try:
-                payload = response.json()
-            except ValueError as exc:
-                raise RuntimeError(
-                    f"{self.app_name} fresh-destination response is invalid"
-                ) from exc
-            if not isinstance(payload, list) or payload:
+            if payload:
                 raise RuntimeError(f"{self.app_name} restore destination is not fresh and empty")
 
+    async def _require_restored_content(
+        self,
+        client: httpx.AsyncClient,
+        base_url: str,
+        headers: dict[str, str],
+        evidence: _RestoreContentEvidence,
+    ) -> None:
+        for resource_path, expected_count in evidence.resource_counts:
+            payload = await self._bounded_resource_list(
+                client,
+                f"{base_url}{self.api_prefix}/{resource_path}",
+                headers,
+                "restored-content check",
+            )
+            if len(payload) != expected_count:
+                raise RuntimeError(f"{self.app_name} restored content does not match its archive")
+            if resource_path == "tag":
+                labels: list[str] = []
+                for item in payload:
+                    label = item.get("label") if isinstance(item, dict) else None
+                    if isinstance(label, str):
+                        labels.append(label)
+                if (
+                    len(labels) != len(payload)
+                    or _semantic_labels_sha256(labels) != evidence.tag_labels_sha256
+                ):
+                    raise RuntimeError(
+                        f"{self.app_name} restored content does not match its archive"
+                    )
+
+    async def _request_restore_restart(
+        self,
+        client: httpx.AsyncClient,
+        restart_url: str,
+        headers: dict[str, str],
+    ) -> None:
+        restart = await client.post(restart_url, headers=headers, content=b"")
+        if restart.status_code != 200:
+            raise RuntimeError(
+                f"{self.app_name} restore restart returned status {restart.status_code}"
+            )
+        try:
+            restart_data = restart.json()
+        except ValueError as exc:
+            raise RuntimeError(f"{self.app_name} restore restart response is invalid") from exc
+        if not isinstance(restart_data, dict) or restart_data.get("restarting") is not True:
+            raise RuntimeError(f"{self.app_name} did not acknowledge the restore restart")
+
+    async def _wait_for_restored_readiness(
+        self,
+        client: httpx.AsyncClient,
+        status_url: str,
+        restored_headers: dict[str, str],
+        previous_start: str,
+    ) -> str:
+        deadline = asyncio.get_running_loop().time() + self.restore_deadline_seconds
+        while True:
+            try:
+                status_response = await client.get(status_url, headers=restored_headers)
+                if status_response.status_code == 200:
+                    try:
+                        status_data = status_response.json()
+                    except ValueError as exc:
+                        raise RuntimeError(
+                            f"{self.app_name} post-restore status is invalid"
+                        ) from exc
+                    self._validate_status(status_data)
+                    current_start = status_data.get("startTime")
+                    if (
+                        isinstance(current_start, str)
+                        and current_start
+                        and current_start != previous_start
+                    ):
+                        return current_start
+                # Restart is asynchronous. The old process can briefly reject
+                # the restored key; only exact status with a new start succeeds.
+            except httpx.HTTPError:
+                pass
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RuntimeError(f"{self.app_name} did not become ready after restore restart")
+            await asyncio.sleep(self.restore_poll_interval_seconds)
+
     async def backup(self, context: BackupContext) -> Dict[str, Any]:
+        """Create one native backup with secret-safe lifecycle evidence."""
+
+        started = time.monotonic()
+        log_context = {"job_id": context.job_id, "target_id": context.target_id}
+        self._logger.info("%s backup started", self.app_name, extra=log_context)
+        try:
+            result = await self._backup_operation(context)
+        except BaseException as exc:
+            self._logger.error(
+                "%s backup failed duration_seconds=%.3f error_type=%s",
+                self.app_name,
+                time.monotonic() - started,
+                type(exc).__name__,
+                extra=log_context,
+            )
+            raise
+        self._logger.info(
+            "%s backup succeeded artifact_path=%s duration_seconds=%.3f",
+            self.app_name,
+            result.get("artifact_path", "[missing]"),
+            time.monotonic() - started,
+            extra=log_context,
+        )
+        return result
+
+    async def _backup_operation(self, context: BackupContext) -> Dict[str, Any]:
         if not await self.validate_config(context.config or {}):
             raise ValueError(
                 "Invalid configuration: base_url, api_key, and backup_directory are required"
@@ -1136,14 +1591,20 @@ class ServarrPlugin(BackupPlugin):
                 if self.expected_version is not None:
                     await self._require_exact_status(client, base_url, headers)
                 baseline = await self._list_backups(client, list_url, headers)
+                if backup_directory is not None:
+                    self._validate_manual_backup_entries(backup_directory, baseline)
                 known = {
                     self._backup_identity(item) for item in baseline if item.get("type") == "manual"
                 }
 
-                # The exact v1 backup-list resource serializes timestamps only to
-                # whole seconds. Baseline identity still separates pre-existing
-                # entries, so compare at the vendor's actual clock precision.
-                triggered_at = datetime.now(timezone.utc).replace(microsecond=0)
+                # Native names and list timestamps have whole-second precision.
+                # Reserve and cross a new boundary for every serialized trigger
+                # rather than relying on a drill-only sleep or filename overwrite.
+                triggered_at = (
+                    await _reserve_trigger_second(lock_key)
+                    if self.require_distinct_trigger_second
+                    else datetime.now(timezone.utc).replace(microsecond=0)
+                )
                 trigger = await client.post(
                     command_url,
                     headers={**headers, "Content-Type": "application/json"},
@@ -1179,8 +1640,14 @@ class ServarrPlugin(BackupPlugin):
 
                 backup_item: dict[str, Any] | None = None
                 while backup_item is None:
+                    observed_backups = await self._list_backups(client, list_url, headers)
+                    if backup_directory is not None:
+                        self._validate_manual_backup_entries(
+                            backup_directory,
+                            observed_backups,
+                        )
                     candidates = self._new_manual_backups(
-                        await self._list_backups(client, list_url, headers),
+                        observed_backups,
                         known,
                         triggered_at,
                     )
@@ -1305,6 +1772,10 @@ class ServarrPlugin(BackupPlugin):
                                 "validation": "strict-native-v1",
                             }
                         )
+                        if self.expected_package_version is not None:
+                            artifact.sidecar_metadata["package_version"] = (
+                                self.expected_package_version
+                            )
                 artifact_path = str(artifact.final_path)
                 if backup_directory is not None:
                     backup_id = backup_item.get("id")
@@ -1323,6 +1794,36 @@ class ServarrPlugin(BackupPlugin):
         return {"artifact_path": artifact_path}
 
     async def restore(self, context: RestoreContext) -> Dict[str, Any]:
+        """Restore one native artifact with secret-safe lifecycle evidence."""
+
+        started = time.monotonic()
+        log_context = {
+            "job_id": context.job_id,
+            "source_target_id": context.source_target_id,
+            "destination_target_id": context.destination_target_id,
+        }
+        self._logger.info("%s restore started", self.app_name, extra=log_context)
+        try:
+            result = await self._restore_operation(context)
+        except BaseException as exc:
+            self._logger.error(
+                "%s restore failed duration_seconds=%.3f error_type=%s",
+                self.app_name,
+                time.monotonic() - started,
+                type(exc).__name__,
+                extra=log_context,
+            )
+            raise
+        self._logger.info(
+            "%s restore succeeded artifact_path=%s duration_seconds=%.3f",
+            self.app_name,
+            result.get("artifact_path", "[missing]"),
+            time.monotonic() - started,
+            extra=log_context,
+        )
+        return result
+
+    async def _restore_operation(self, context: RestoreContext) -> Dict[str, Any]:
         if not await self.validate_config(context.config or {}):
             raise ValueError(f"Invalid {self.app_name} restore configuration")
         base_url, headers = self._request_config(context.config or {})
@@ -1349,8 +1850,9 @@ class ServarrPlugin(BackupPlugin):
             raise FileNotFoundError(f"Artifact not found: {artifact_path}")
         artifact = Path(artifact_path)
         artifact_fd: int | None = None
+        restore_worker_evidence: _RestoreWorkerEvidence | None = None
         if self.native_backup_mount is not None:
-            artifact_fd = self._validate_restore_artifact_identity(
+            artifact_fd, restore_worker_evidence = await self._open_verified_restore_artifact(
                 artifact,
                 context.metadata or {},
             )
@@ -1361,8 +1863,18 @@ class ServarrPlugin(BackupPlugin):
             os.fstat(artifact_fd).st_size if artifact_fd is not None else artifact.stat().st_size
         )
         try:
-            self._validate_archive(verified_artifact)
-            restored_key = self._restored_api_key(verified_artifact)
+            content_evidence = (
+                restore_worker_evidence.content
+                if restore_worker_evidence is not None
+                else self._validate_archive(verified_artifact)
+            )
+            if self.restore_content_tables and content_evidence is None:
+                raise RuntimeError(f"{self.app_name} restore content evidence is missing")
+            restored_key = (
+                restore_worker_evidence.restored_api_key
+                if restore_worker_evidence is not None
+                else self._restored_api_key(verified_artifact)
+            )
             status_url = f"{base_url}{self.api_prefix}/system/status"
             upload_url = f"{base_url}{self.api_prefix}/system/backup/restore/upload"
             restart_url = f"{base_url}{self.api_prefix}/system/restart"
@@ -1397,6 +1909,16 @@ class ServarrPlugin(BackupPlugin):
                     if artifact_fd is not None
                     else os.open(artifact, os.O_RDONLY)
                 )
+                if (
+                    artifact_fd is not None
+                    and restore_worker_evidence is not None
+                    and not _same_open_file_content(
+                        os.fstat(artifact_fd),
+                        restore_worker_evidence.source,
+                    )
+                ):
+                    os.close(upload_descriptor)
+                    raise ValueError(f"{self.app_name} restore artifact changed before upload")
                 with os.fdopen(upload_descriptor, "rb") as artifact_file:
                     upload = await client.post(
                         upload_url,
@@ -1425,53 +1947,40 @@ class ServarrPlugin(BackupPlugin):
                 ):
                     raise RuntimeError(f"{self.app_name} did not accept the restore archive")
 
-                restart = await client.post(restart_url, headers=headers, content=b"")
-                if restart.status_code != 200:
-                    raise RuntimeError(
-                        f"{self.app_name} restore restart returned status " f"{restart.status_code}"
-                    )
-                try:
-                    restart_data = restart.json()
-                except ValueError as exc:
-                    raise RuntimeError(
-                        f"{self.app_name} restore restart response is invalid"
-                    ) from exc
-                if not isinstance(restart_data, dict) or restart_data.get("restarting") is not True:
-                    raise RuntimeError(f"{self.app_name} did not acknowledge the restore restart")
-
+                await self._request_restore_restart(client, restart_url, headers)
                 restored_headers = {"X-Api-Key": restored_key}
-                deadline = asyncio.get_running_loop().time() + self.restore_deadline_seconds
-                while True:
-                    try:
-                        status_response = await client.get(
-                            status_url,
-                            headers=restored_headers,
+                current_start = await self._wait_for_restored_readiness(
+                    client,
+                    status_url,
+                    restored_headers,
+                    previous_start,
+                )
+                if content_evidence is not None:
+                    await self._require_restored_content(
+                        client,
+                        base_url,
+                        restored_headers,
+                        content_evidence,
+                    )
+                if self.require_persistence_restart:
+                    await self._request_restore_restart(
+                        client,
+                        restart_url,
+                        restored_headers,
+                    )
+                    await self._wait_for_restored_readiness(
+                        client,
+                        status_url,
+                        restored_headers,
+                        current_start,
+                    )
+                    if content_evidence is not None:
+                        await self._require_restored_content(
+                            client,
+                            base_url,
+                            restored_headers,
+                            content_evidence,
                         )
-                        if status_response.status_code == 200:
-                            try:
-                                status_data = status_response.json()
-                            except ValueError as exc:
-                                raise RuntimeError(
-                                    f"{self.app_name} post-restore status is invalid"
-                                ) from exc
-                            self._validate_status(status_data)
-                            current_start = status_data.get("startTime")
-                            if (
-                                isinstance(current_start, str)
-                                and current_start
-                                and current_start != previous_start
-                            ):
-                                break
-                        # Restart is asynchronous. The old process can briefly
-                        # reject the key from restored config.xml; only a bounded
-                        # exact-status response with a new start time succeeds.
-                    except httpx.HTTPError:
-                        pass
-                    if asyncio.get_running_loop().time() >= deadline:
-                        raise RuntimeError(
-                            f"{self.app_name} did not become ready after restore restart"
-                        )
-                    await asyncio.sleep(self.restore_poll_interval_seconds)
 
             return {
                 "status": "success",

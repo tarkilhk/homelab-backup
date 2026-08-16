@@ -1,8 +1,27 @@
 {
   "type": "object",
-  "required": ["base_url", "api_key"],
+  "additionalProperties": false,
+  "required": ["base_url", "api_key", "backup_directory"],
   "properties": {
-    "base_url": { "type": "string", "format": "uri", "title": "Base URL", "default": "http://radarr.local:7878" },
-    "api_key": { "type": "string", "title": "API Key", "default": "yourapikey" }
+    "base_url": {
+      "type": "string",
+      "title": "Base URL",
+      "default": "http://radarr.local:7878",
+      "minLength": 1,
+      "pattern": "^https?://[^/?#]+$"
+    },
+    "api_key": {
+      "type": "string",
+      "title": "API Key",
+      "minLength": 1
+    },
+    "backup_directory": {
+      "type": "string",
+      "title": "Backup Directory",
+      "default": "/sources/radarr/backups",
+      "const": "/sources/radarr/backups",
+      "minLength": 1,
+      "pattern": "^/.*"
+    }
   }
 }
