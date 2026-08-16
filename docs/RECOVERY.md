@@ -41,7 +41,7 @@ files, partial files, and artifacts with missing or inconsistent sidecars.
 | Invoice Ninja | Partial | Imports only into an explicitly authorized fresh local destination, verifies company/client/invoice markers, and records a partial outcome. Version 5.13.31 exposes no terminal import status and cannot reliably recover embedded document bytes into a fresh private destination. |
 | Jellyfin | Automatic | Stages a validated archive in Jellyfin's shared backup directory and invokes the official restore endpoint. Success requires an observed restart and readiness transition. |
 | Lidarr | Automatic | Uploads a validated archive, restarts Lidarr, and waits for a new ready process. |
-| Pi-hole | Automatic | Imports a validated Teleporter archive and proves the service can export again. |
+| Pi-hole (legacy) | Automatic | The existing adapter imports a minimally checked Teleporter ZIP and proves only that an export remains possible. Plan 020 current-contract revalidation is blocked pending explicit export-consistency and source-authority policies; do not treat the v0.2.1 baseline as complete recovery evidence. |
 | Radarr | Automatic | Uploads a validated archive, restarts Radarr, and waits for a new ready process. |
 | Readarr | Automatic | Uploads an exact validated Readarr 0.4.18.2805 control-plane archive, restarts the isolated destination, and proves a different ready process. Books and download working data remain external. |
 | SFTPGo | Partial | Creates a validated SFTPGo 2.7.5 provider database only in a fresh sentinel-marked offline directory; application boot verification remains separate. |
@@ -303,7 +303,12 @@ Backup.
 - WordPress restore rejects roots, symlinks, paths overlapping `/backups`, and
   artifacts stored below the destination. Files and database are rolled back when
   any restore or validation step fails.
-- Pi-hole v6 backup uses SID authentication and validates Teleporter contents.
+- Pi-hole v6 backup uses SID authentication, but the legacy adapter validates
+  only ZIP readability plus one member and has not passed the current two-round
+  semantic/DNS recovery contract. Exact 2026.07.2 export is non-atomic across
+  its restorable stores, and its application password is not endpoint-scoped;
+  see `plans/020-pihole-teleporter-current-contract.md` for the two decision
+  gates.
 - Jellyfin's server-generated source archives are outside Homelab Backup retention;
   manage that shared directory with Jellyfin's own backup retention policy.
 

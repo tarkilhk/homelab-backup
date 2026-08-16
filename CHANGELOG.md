@@ -70,6 +70,11 @@ All notable changes to Homelab Backup are recorded here. This project follows
   warning that consistency could not be guaranteed with the proposed
   schema-scoped identity. Broader privileges or a proven quiescence boundary
   require an explicit decision before implementation resumes.
+- Pi-hole Teleporter recovery is explicitly classified as legacy-only and
+  decision-gated after exact 2026.07.2 source review proved sequential,
+  non-atomic export and no endpoint-scoped read-only credential. A consistency
+  policy and source-authority policy require explicit approval before current-
+  contract implementation resumes.
 
 ## [0.2.1] - 2026-08-15
 
