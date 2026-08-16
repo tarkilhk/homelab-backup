@@ -18,7 +18,7 @@ The SQLite database is authoritative for users, authentication and sessions,
 requests and their statuses, media availability records, issues and comments,
 blacklists, watchlists, override rules, user preferences, and migration state.
 `settings.json` is authoritative for the application API key, session-signing
-identifier, Web Push keys, Jellyfin/Plex/Radarr/Sonarr integrations, notification
+and Web Push material, Jellyfin/Plex/Radarr/Sonarr integrations, notification
 credentials, schedules, public settings, and network configuration. Both files
 are credential-bearing and the artifact must be treated as secret material.
 
