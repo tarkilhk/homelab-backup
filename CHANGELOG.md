@@ -38,6 +38,12 @@ All notable changes to Homelab Backup are recorded here. This project follows
   authoritative application state through a create-only local restore. Radarr,
   Sonarr, Git hosting, credentials, and production restore remain outside its
   boundary.
+- Exact Readarr 0.4.18.2805 and Prowlarr 2.4.0.5397 control-plane plugins that
+  create native backups through the API, stream them from narrow read-only
+  backup mounts, validate and publish them privately, clean up only the
+  attributed native copy, and prove isolated upload/restart recovery in two
+  clean exact-image drill rounds. Books, download data, and external services
+  remain separate prerequisites.
 
 ### Changed
 

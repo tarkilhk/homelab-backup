@@ -20,6 +20,8 @@ async def test_test(monkeypatch):
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/system/status"):
             return httpx.Response(200, json={"version": "3.0"})
+        if request.url.path.endswith("/system/backup"):
+            return httpx.Response(200, json=[])
         return httpx.Response(404)
 
     transport = httpx.MockTransport(handler)
@@ -71,7 +73,16 @@ async def test_backup_writes_artifact(tmp_path, monkeypatch, make_servarr_zip):
                 return httpx.Response(200, json=[])
             return httpx.Response(
                 200,
-                json=[{"id": 3, "type": "manual", "path": "/backup/manual/sonarr.zip"}],
+                json=[
+                    {
+                        "id": 3,
+                        "name": "sonarr.zip",
+                        "type": "manual",
+                        "path": "/backup/manual/sonarr.zip",
+                        "size": 1024,
+                        "time": "2099-01-01T00:00:00Z",
+                    }
+                ],
             )
         if request.method == "POST" and request.url.path == "/api/v3/command":
             return httpx.Response(201, json={"id": 5})

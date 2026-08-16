@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -42,6 +43,11 @@ class _PartialRestorePlugin(_RestorePlugin):
 
     async def restore(self, context: RestoreContext) -> dict[str, Any]:
         return {"status": "partial", "message": "Restore accepted but not verified"}
+
+
+class _CancelledRestorePlugin(_RestorePlugin):
+    async def restore(self, context: RestoreContext) -> dict[str, Any]:
+        raise asyncio.CancelledError
 
 
 def _target(db: Session, plugin_name: str = "test-plugin") -> Target:
@@ -160,6 +166,31 @@ def test_partial_restore_result_is_recorded_as_partial(
 
     assert result.status == "partial"
     assert result.target_runs[0].status == "partial"
+
+
+def test_cancelled_restore_is_audited_as_failed_before_propagation(
+    db_session: Session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    plugin = _CancelledRestorePlugin("test-plugin")
+    target = _target(db_session)
+    artifact = _artifact(tmp_path, plugin)
+    monkeypatch.setenv("BACKUP_BASE_PATH", str(tmp_path))
+    monkeypatch.setattr("app.services.restores.get_plugin", lambda _: plugin)
+
+    with pytest.raises(asyncio.CancelledError):
+        RestoreService(db_session).restore_from_path(
+            artifact_path=str(artifact),
+            destination_target_id=target.id,
+        )
+
+    run = db_session.query(Run).one()
+    target_run = db_session.query(TargetRun).one()
+    assert run.status == "failed"
+    assert run.finished_at is not None
+    assert target_run.status == "failed"
+    assert target_run.finished_at is not None
 
 
 def test_restore_overlap_is_recorded_as_skipped(

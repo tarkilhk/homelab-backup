@@ -18,6 +18,7 @@ Each executor must read its plan fully, honor STOP conditions, and update status
 | 011 | Add Hindsight 0.8.6 PostgreSQL backup and isolated restore | P1 | M | 001 foundation | DONE (local) |
 | 012 | Add Bazarr 1.5.6 native backup and isolated restore | P1 | M | 001 foundation | DONE (local) |
 | 013 | Add Profilarr 1.1.5 SQLite and Git backup with isolated restore | P1 | L | 001 foundation | DONE (local) |
+| 014 | Add exact Readarr and Prowlarr native backup and isolated restore | P1 | M | 001 foundation; Servarr core | DONE (local) |
 
 Status: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`, or `REJECTED`.
 

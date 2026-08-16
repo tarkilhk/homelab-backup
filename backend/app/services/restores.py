@@ -346,7 +346,7 @@ class RestoreService:
                             raise RuntimeError(
                                 "Restore failed and private staging cleanup was not confirmed"
                             ) from cleanup_exc
-            except Exception as exc:  # noqa: BLE001
+            except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001
                 result_container["error"] = exc
         finally:
             operation_lock.release()
@@ -409,7 +409,7 @@ class RestoreService:
                 run.logs_text += "\nCRITICAL: private staging cleanup was not confirmed"
             self.db.add(run)
             self.db.commit()
-        except Exception as exc:  # noqa: BLE001
+        except (Exception, asyncio.CancelledError) as exc:  # noqa: BLE001
             target_run.finished_at = finished_at
             target_run.status = TargetRunStatus.FAILED.value
             target_run.message = f"Restore failed: {exc}"

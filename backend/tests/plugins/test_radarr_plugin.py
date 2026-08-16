@@ -13,6 +13,8 @@ async def test_validate_and_test(monkeypatch):
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/api/v3/system/status"):
             return httpx.Response(200, json={"version": "4"})
+        if request.url.path.endswith("/api/v3/system/backup"):
+            return httpx.Response(200, json=[])
         return httpx.Response(404)
 
     transport = httpx.MockTransport(handler)
@@ -51,9 +53,11 @@ async def test_backup_waits_for_its_command_and_writes_verified_artifact(
                 json=[
                     {
                         "id": 12,
+                        "name": "radarr-test.zip",
                         "type": "manual",
                         "path": "/backup/manual/radarr-test.zip",
-                        "time": "2026-08-15T00:00:00Z",
+                        "size": 1024,
+                        "time": "2099-01-01T00:00:00Z",
                     }
                 ],
             )

@@ -14,6 +14,8 @@ def test_plugins_publish_honest_restore_capabilities() -> None:
         "mysql": "partial",
         "postgresql": "automatic",
         "profilarr": "automatic",
+        "prowlarr": "automatic",
+        "readarr": "automatic",
         "vaultwarden": "automatic",
         "wordpress": "automatic",
         "invoiceninja": "partial",

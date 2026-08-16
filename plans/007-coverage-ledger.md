@@ -96,8 +96,8 @@ included in a broad image job, or a plugin directory exists.
 | Radarr | `planned-plugin` | Existing Servarr plugin and exact local drill; production target/run evidence remains. |
 | Sonarr | `planned-plugin` | Existing Servarr plugin and exact local drill; production target/run evidence remains. |
 | Lidarr | `planned-plugin` | Existing Servarr plugin and exact local drill; production target/run evidence remains. |
-| Readarr | `planned-plugin` | Thin exact-version Servarr subclass remains a lower-priority milestone. |
-| Prowlarr | `planned-plugin` | Thin exact-version Servarr subclass remains a lower-priority milestone. |
+| Readarr | `plugin-local` | Exact 0.4.18.2805 native backup and isolated restore passed two clean A/B drill rounds under Plan 014. Production needs an immutable image pin, narrow read-only native-backup mount, approved native-copy cleanup, target, schedule, and backup-only proof. Books and download data remain external. |
+| Prowlarr | `plugin-local` | Exact 2.4.0.5397 native backup and isolated restore passed two clean A/B drill rounds under Plan 014. Production needs an immutable image pin, narrow read-only native-backup mount, approved native-copy cleanup, target, schedule, and backup-only proof; an unprivileged backend also needs readable source ownership/ACLs. |
 | Plex | `blocked` | Exact 1.43.2 control-plane state requires the full Plex data directory while Plex is stopped or after a stopped atomic snapshot. Select a narrow external stop/snapshot/read-only-export/start mechanism before implementation; media payload remains excluded. |
 | Audiobookshelf | `plugin-local` | Exact 2.36.0 read-only SQLite plus bounded item/author metadata backup and two fresh exact-image restore/boot drills pass locally under Plan 009; media remains excluded. Production needs only the two documented read-only control-plane mounts. |
 | Calibre | `blocked` | Exact v9.11.0 has worthwhile config/library metadata, but reliable capture requires the actual library root plus coordinated quiescence of Calibre and every writer sharing `/eBooks` (including Readarr). Ebook formats and other payload remain external. |

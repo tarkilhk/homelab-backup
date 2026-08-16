@@ -36,12 +36,14 @@ files, partial files, and artifacts with missing or inconsistent sidecars.
 | MySQL | Partial | Imports only into an empty database and validates tables; MySQL DDL is non-transactional, so a failed import requires the destination to be reset before retry. |
 | PostgreSQL | Automatic | Restores a validated custom archive transactionally with cleanup and stop-on-error semantics. |
 | Profilarr | Automatic | Creates and independently validates a complete Profilarr 1.1.5 SQLite control plane and reconstructed all-ref Git repository in a fresh sentinel-marked local directory. Radarr, Sonarr, Git hosting, credentials, and exact-image boot remain separate recovery-stack prerequisites. |
+| Prowlarr | Automatic | Uploads an exact validated Prowlarr 2.4.0.5397 control-plane archive, restarts the isolated destination, and proves a different ready process. External indexers and download clients remain recovery prerequisites. |
 | WordPress | Automatic | Replaces site files, imports the database, validates both, and rolls back on failure. The destination must be an isolated mounted WordPress root. |
 | Invoice Ninja | Partial | Queues the official company import. Invoice Ninja exposes no terminal import status, so application-level verification remains required. |
 | Jellyfin | Automatic | Stages a validated archive in Jellyfin's shared backup directory and invokes the official restore endpoint. Success requires an observed restart and readiness transition. |
 | Lidarr | Automatic | Uploads a validated archive, restarts Lidarr, and waits for a new ready process. |
 | Pi-hole | Automatic | Imports a validated Teleporter archive and proves the service can export again. |
 | Radarr | Automatic | Uploads a validated archive, restarts Radarr, and waits for a new ready process. |
+| Readarr | Automatic | Uploads an exact validated Readarr 0.4.18.2805 control-plane archive, restarts the isolated destination, and proves a different ready process. Books and download working data remain external. |
 | SFTPGo | Partial | Creates a validated SFTPGo 2.7.5 provider database only in a fresh sentinel-marked offline directory; application boot verification remains separate. |
 | Sonarr | Automatic | Uploads a validated archive, restarts Sonarr, and waits for a new ready process. |
 | Vaultwarden | Automatic | Stops the destination, restores a validated component manifest through an isolated helper, checks SQLite, proves Docker health or `/alive`, and rolls back before restart on failure. |
@@ -240,6 +242,33 @@ commits, or recreate infrastructure. Never expose the restore authorization
 variable on a production backend and never restore Profilarr in production
 through Homelab Backup.
 
+### Readarr and Prowlarr control-plane recovery
+
+The `readarr` and `prowlarr` plugins ask the exact application API to create a
+native manual backup, then copy the uniquely attributed ZIP from a dedicated
+read-only backup-directory mount. They never download artifacts through the UI
+route. Each archive must contain exactly lowercase `config.xml`, `INFO`, and the
+exact SQLite database, pass bounded ZIP/XML/SQLite validation, and match the
+pinned application version and migration before publication.
+
+Restore is permitted only in a disposable local drill. Set
+`HOMELAB_BACKUP_ALLOW_ISOLATED_RESTORE=1` and list only the exact disposable
+destination origins in `HOMELAB_BACKUP_ISOLATED_RESTORE_ALLOWED_ORIGINS`, then
+invoke `RestoreService` with a fresh destination target. Before upload, the
+plugin requires the exact version/migration and empty tag, integration,
+notification, download-client, and root/application resource lists. It stages
+and hashes the artifact, holds that verified descriptor through revalidation
+and upload, requests restart, switches to the restored API key only in memory,
+and requires a different non-empty process start time plus the exact version
+and migration. A failed disposable restore destination must be discarded rather
+than reused.
+
+The artifacts restore application control-plane state only. Readarr books and
+download data, Prowlarr's external services, and every media payload remain
+separate prerequisites. Never enable the restore environment gates on a normal
+backend and never restore either application in production through Homelab
+Backup.
+
 ## Plugin-specific cautions
 
 - Vaultwarden backup requires a version with the built-in `/vaultwarden backup`
@@ -271,6 +300,7 @@ The following isolated drills were run with synthetic data and no published port
 - Pi-hole 2026.07.2
 - Jellyfin 10.11.11
 - Lidarr 3.1.0.4875, Radarr 6.3.0.10514, and Sonarr 4.0.19.2979
+- Readarr 0.4.18.2805 and Prowlarr 2.4.0.5397 (pinned linux/amd64 manifests)
 - Vaultwarden 1.37.1
 - WordPress 7.0.2
 - Invoice Ninja 5.13.31
