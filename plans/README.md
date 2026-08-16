@@ -20,6 +20,7 @@ Each executor must read its plan fully, honor STOP conditions, and update status
 | 013 | Add Profilarr 1.1.5 SQLite and Git backup with isolated restore | P1 | L | 001 foundation | DONE (local) |
 | 014 | Add exact Readarr and Prowlarr native backup and isolated restore | P1 | M | 001 foundation; Servarr core | DONE (local) |
 | 015 | Revalidate exact Vaultwarden 1.37.1 backup and isolated restore | P0 | L | 001 foundation; downtime decision | BLOCKED |
+| 016 | Revalidate exact Invoice Ninja 5.13.31 native recovery | P0 | L | 001 foundation | DONE (local) |
 
 Status: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`, or `REJECTED`.
 

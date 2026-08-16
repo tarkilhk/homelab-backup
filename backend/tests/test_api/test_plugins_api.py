@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
+from app.plugins.invoiceninja.plugin import InvoiceNinjaPlugin
+
 
 def test_profilarr_discovery_exposes_flat_mode_aware_schema(client: TestClient) -> None:
     plugins_response = client.get("/api/v1/plugins/")
@@ -44,6 +46,50 @@ def test_profilarr_discovery_exposes_flat_mode_aware_schema(client: TestClient) 
         "source": ["database_path", "repository_path"],
         "restore_destination": ["restore_directory"],
     }
+
+
+def test_invoice_ninja_public_discovery_schema_and_connectivity(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "invoice-api-test-token-must-not-escape"
+
+    async def successful_probe(
+        _self: InvoiceNinjaPlugin,
+        config: dict[str, object],
+    ) -> tuple[str, str]:
+        assert config["token"] == secret
+        return "Synthetic company", "Synthetic user"
+
+    monkeypatch.setattr(InvoiceNinjaPlugin, "_probe", successful_probe)
+    plugins_response = client.get("/api/v1/plugins/")
+    assert plugins_response.status_code == 200
+    entry = next(item for item in plugins_response.json() if item["key"] == "invoiceninja")
+    assert entry["restore_capability"] == "partial"
+
+    schema_response = client.get("/api/v1/plugins/invoiceninja/schema")
+    assert schema_response.status_code == 200
+    assert schema_response.json()["required"] == ["base_url", "token"]
+
+    config = {"base_url": "https://invoice.local", "token": secret}
+    success = client.post("/api/v1/plugins/invoiceninja/test", json=config)
+    assert success.status_code == 200
+    assert success.json() == {"ok": True}
+
+    async def failed_probe(
+        _self: InvoiceNinjaPlugin,
+        _config: dict[str, object],
+    ) -> tuple[str, str]:
+        raise ConnectionError("Invoice Ninja synthetic connection failure")
+
+    monkeypatch.setattr(InvoiceNinjaPlugin, "_probe", failed_probe)
+    failure = client.post("/api/v1/plugins/invoiceninja/test", json=config)
+    assert failure.status_code == 200
+    assert failure.json() == {
+        "ok": False,
+        "error": "Invoice Ninja synthetic connection failure",
+    }
+    assert secret not in failure.text
 
 
 def test_plugins_test_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

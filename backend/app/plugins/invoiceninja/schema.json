@@ -1,9 +1,21 @@
 {
   "type": "object",
+  "additionalProperties": false,
   "required": ["base_url", "token"],
   "properties": {
-    "base_url": { "type": "string", "format": "uri", "title": "Base URL", "default": "http://invoiceninja.local" },
-    "token": { "type": "string", "title": "API Token", "default": "your token" },
+    "base_url": {
+      "type": "string",
+      "format": "uri",
+      "title": "Base URL",
+      "default": "http://invoiceninja.local",
+      "minLength": 1,
+      "pattern": "^https?://[^/?#]+$"
+    },
+    "token": {
+      "type": "string",
+      "title": "API Token",
+      "minLength": 1
+    },
     "export_timeout_seconds": {
       "type": "integer",
       "title": "Export timeout (seconds)",

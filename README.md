@@ -131,8 +131,10 @@ deletion failure preserves the database record so the failure remains visible.
 Restore support is plugin-specific. Cal.com, PostgreSQL, WordPress, Jellyfin,
 Pi-hole, Vaultwarden, and the Servarr plugins have automatic workflows with
 plugin-specific readiness checks. MySQL and the create-only Homelab Backup and
-SFTPGo database restores are partial; Invoice Ninja is partial because its API
-only queues an import. See [docs/RECOVERY.md](docs/RECOVERY.md) for prerequisites,
+SFTPGo database restores are partial. Invoice Ninja is partial because its API
+only queues an import and version 5.13.31 does not reliably restore embedded
+document bytes into a fresh private destination. See
+[docs/RECOVERY.md](docs/RECOVERY.md) for prerequisites,
 the exact capability matrix, isolated drill versions, and safety limits.
 
 The application has no built-in user authentication. Keep the API and UI on a

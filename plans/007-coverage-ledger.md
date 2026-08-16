@@ -33,7 +33,7 @@ included in a broad image job, or a plugin directory exists.
 
 | Service/scope | Current category | Evidence or remaining gap |
 | --- | --- | --- |
-| Invoice Ninja | `planned-plugin` | Existing native plugin has the legacy two-backup/one-restore baseline. Current-contract evidence still needs two exact fresh import rounds with application markers; production target/run evidence also remains. |
+| Invoice Ninja | `plugin-local` | Exact 5.13.31 native export and honestly partial import passed two clean local rounds with four fresh RestoreService destinations, restart persistence, final repository gates, and clean Standards/Spec reviews. Company/client/invoice state is proven; source/export document bytes are proven, while upstream cannot reliably restore them into a fresh private destination. Production rollout evidence remains. |
 | Cal.com | `planned-plugin` | Existing native PostgreSQL export has the legacy two-backup/one-restore baseline. Current-contract evidence still needs two exact fresh restores with Cal.com application boot/content proof; DMZ reachability and production target/run evidence remain. |
 | WordPress | `retired` | User explicitly removed it from this program; historical plugin remains only. |
 | Astro company site | `git-rebuild` | Authoritative source is the primary-Gitea `hollinger.asia-site` repository; CI builds and deploys reproducible `dist`. Unpublished local work remains outside that protection. |

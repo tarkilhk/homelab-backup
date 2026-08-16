@@ -38,7 +38,7 @@ files, partial files, and artifacts with missing or inconsistent sidecars.
 | Profilarr | Automatic | Creates and independently validates a complete Profilarr 1.1.5 SQLite control plane and reconstructed all-ref Git repository in a fresh sentinel-marked local directory. Radarr, Sonarr, Git hosting, credentials, and exact-image boot remain separate recovery-stack prerequisites. |
 | Prowlarr | Automatic | Uploads an exact validated Prowlarr 2.4.0.5397 control-plane archive, restarts the isolated destination, and proves a different ready process. External indexers and download clients remain recovery prerequisites. |
 | WordPress | Automatic | Replaces site files, imports the database, validates both, and rolls back on failure. The destination must be an isolated mounted WordPress root. |
-| Invoice Ninja | Partial | Queues the official company import. Invoice Ninja exposes no terminal import status, so application-level verification remains required. |
+| Invoice Ninja | Partial | Imports only into an explicitly authorized fresh local destination, verifies company/client/invoice markers, and records a partial outcome. Version 5.13.31 exposes no terminal import status and cannot reliably recover embedded document bytes into a fresh private destination. |
 | Jellyfin | Automatic | Stages a validated archive in Jellyfin's shared backup directory and invokes the official restore endpoint. Success requires an observed restart and readiness transition. |
 | Lidarr | Automatic | Uploads a validated archive, restarts Lidarr, and waits for a new ready process. |
 | Pi-hole | Automatic | Imports a validated Teleporter archive and proves the service can export again. |
@@ -309,10 +309,14 @@ The following isolated drills were run with synthetic data and no published port
 - SFTPGo 2.7.5 (`9888a3d`, pinned Alpine image digest)
 - Bazarr 1.5.6 in LinuxServer image ls349
 
-Each completed drill includes a non-destructive connection test, two distinct
-validated backups with sidecars, and an isolated restore. Invoice Ninja remains
-partial even though the local import marker arrived, because its API does not
-provide a terminal status. Re-run drills after any component-version upgrade.
+Each completed legacy drill includes a non-destructive connection test, two
+distinct validated backups with sidecars, and an isolated restore. The current
+Invoice Ninja milestone goes further: two clean rounds produced four distinct
+exports and four independent fresh RestoreService destinations, with exact
+company/client/invoice marker checks after every import. It remains partial
+because its API does not provide terminal job status and exact 5.13.31 does not
+reliably recover embedded document bytes into a fresh private destination.
+Re-run drills after any component-version upgrade.
 
 Use `backend/scripts/plugin_drill.py` to repeat that contract. Provide source and
 destination plugin configurations as JSON files mounted from outside the

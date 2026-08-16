@@ -19,6 +19,7 @@ import traceback
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, Literal, Optional
+from urllib.parse import urlsplit
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler  # type: ignore[import-untyped]
 from apscheduler.triggers.cron import CronTrigger  # type: ignore[import-untyped]
@@ -48,6 +49,23 @@ from app.services.jobs import run_job_for_tag
 from app.services.retention import apply_retention, apply_retention_all
 
 logger = logging.getLogger(__name__)
+
+
+def _canonical_source_origin(value: object) -> str:
+    if not isinstance(value, str):
+        raise ValueError("Source base_url must be a string")
+    parsed = urlsplit(value)
+    hostname = parsed.hostname
+    if hostname is None:
+        raise ValueError("Source base_url has no hostname")
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme.lower() == "https" else 80
+    normalized_host = hostname.lower()
+    if ":" in normalized_host:
+        normalized_host = f"[{normalized_host}]"
+    return f"{parsed.scheme.lower()}://{normalized_host}:{port}"
+
 
 # Global scheduler instance
 _scheduler: Optional[AsyncIOScheduler] = None
@@ -315,6 +333,8 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
             for key in ("host", "port", "database", "user")
             if key in config_dict
         }
+        if "base_url" in config_dict:
+            source_identity["base_url"] = _canonical_source_origin(config_dict["base_url"])
         target_run.source_identity_json = (
             json.dumps(source_identity, sort_keys=True, separators=(",", ":"))
             if source_identity
