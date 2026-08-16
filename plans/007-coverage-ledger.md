@@ -33,8 +33,8 @@ included in a broad image job, or a plugin directory exists.
 
 | Service/scope | Current category | Evidence or remaining gap |
 | --- | --- | --- |
-| Invoice Ninja | `planned-plugin` | Existing native plugin and local version drill; production target/run evidence still needs final audit. |
-| Cal.com | `planned-plugin` | Existing native PostgreSQL export plugin; DMZ reachability and production target/run evidence remain. |
+| Invoice Ninja | `planned-plugin` | Existing native plugin has the legacy two-backup/one-restore baseline. Current-contract evidence still needs two exact fresh import rounds with application markers; production target/run evidence also remains. |
+| Cal.com | `planned-plugin` | Existing native PostgreSQL export has the legacy two-backup/one-restore baseline. Current-contract evidence still needs two exact fresh restores with Cal.com application boot/content proof; DMZ reachability and production target/run evidence remain. |
 | WordPress | `retired` | User explicitly removed it from this program; historical plugin remains only. |
 | Astro company site | `git-rebuild` | Authoritative source is the primary-Gitea `hollinger.asia-site` repository; CI builds and deploys reproducible `dist`. Unpublished local work remains outside that protection. |
 | Primary Gitea | `plugin-local` | Exact Gitea 1.27.1 backup/restore milestone is committed; production rollout evidence remains. |
@@ -42,7 +42,7 @@ included in a broad image job, or a plugin directory exists.
 | Gitea Actions runners | `stateless` | Runners are disposable executors; configuration is declared in Git. |
 | Gitea OCI/package registry | `plugin-local` | Included in the Gitea native dump contract; production artifact proof remains. |
 | Bitwarden Lite | `blocked` | Active pilot declaration still floats on `beta`, while the canonical vault route remains on NAS Vaultwarden. Confirm authoritative use and pin an exact version before designing PostgreSQL/files coverage. |
-| Vaultwarden | `planned-plugin` | Existing component plugin and exact local drill; production target/run evidence remains. |
+| Vaultwarden | `planned-plugin` | Existing component plugin has the legacy two-backup/one-restore baseline. Current-contract evidence still needs an honest status check and two exact fresh application-level restore rounds; production target/run evidence remains. |
 | Standard Notes | `blocked` | Exact composite boundary requires a short scheduled source downtime; explicit approval is pending. |
 | Monica | `blocked` | Declared Monica 4.1.2/MariaDB 12.3 state shows near-zero recent use. Confirm valuable company CRM data before researching a composite plugin. |
 | Metabase | `planned-plugin` | Named shared-PostgreSQL database is authoritative; explicit production target/run evidence remains. |
@@ -54,15 +54,17 @@ included in a broad image job, or a plugin directory exists.
 | OneCLI `/app/data` | `blocked` | Active 1.45.0 state warrants coordinated PostgreSQL/files coverage, but constrained Claw access and the documented do-not-copy CA-key policy require explicit decisions. |
 | Airbyte | `blocked` | Declared abctl/Kind deployment lacks an exact version and verified active connections. Confirm current use and checkpoint value before selecting native/PV coverage. |
 | GenBI | `blocked` | Manual-only stack contains several stores. Confirm which object/catalog/notebook/database data is authoritative before splitting coverage by mechanism. |
-| Cloudflare | `planned-plugin` | Read-only account export is a selected Wave 1 boundary; exact scopes and isolated replay validation remain. |
+| Cloudflare | `blocked` | Primary-source research selected normalized zone DNS, remotely managed tunnel configurations, and active private routes, excluding connector tokens and dynamic fail2ban bans. Exact scope still needs a read-only live inventory, and current-contract restore proof needs a separate disposable Cloudflare account/zone plus an independently allowlisted write token; local mocks cannot prove the vendor restore. |
 | pfSense | `blocked` | Native encrypted full-config export and an isolated appliance drill are specified, but the narrowest WebGUI privilege combines backup and destructive restore while the plugin has no safe automatic restore seam. Implementation awaits an explicit privilege decision and an approved restore contract. |
-| Synology DSM configuration | `planned-plugin` | Native DSM configuration export selected; API/export and isolated restore evidence remain. |
+| Synology DSM configuration | `blocked` | DSM 7 supports administrator-only manual `.dss` export/restore but publishes no automation contract or artifact-format specification. Supported restore proof requires Virtual DSM on compatible Synology VMM hardware; the Ubuntu dev VM cannot provide it and production NAS restore is forbidden. |
 | Synology datasets/photos | `external` | Bulk dataset protection belongs to storage replication/backup, not this application; current external evidence still needs final audit. |
 | Homelab Backup Docker host | `plugin-local` | Exact 0.2.1 self-backup and two isolated boots are committed. |
 | Homelab Backup NAS | `plugin-local` | Same self-backup contract; distinct production target/run evidence remains. |
 | Portainer | `blocked` | EE 2.41.1 has UI-only endpoint/registry/credential metadata in `portainer_data`; choose acceptable runbook rebuild or approve native/volume backup privilege. |
 | Portainer NAS agent | `stateless` | Agent is a rebuildable endpoint bridge; declaration is in Git. |
-| Shared PostgreSQL databases | `planned-plugin` | Generic per-database PostgreSQL plugin is drilled; all authoritative DB targets/jobs need final enumeration. |
+| Shared PostgreSQL databases | `planned-plugin` | The generic per-database plugin has the legacy two-backup/one-restore baseline. Current-contract evidence still needs two exact fresh transactional restore rounds; all authoritative production DB targets/jobs also need final enumeration. |
+| Generic MySQL/MariaDB databases | `planned-plugin` | The generic plugin has the legacy two-backup/one-restore baseline and an honestly partial restore contract because DDL is non-transactional. Current-contract work must add vendor-level dump validation plus two exact fresh marker restores before application-specific use is considered locally complete. |
+| Pi-hole | `planned-plugin` | The existing Teleporter plugin has the legacy two-backup/one-restore baseline. Current-contract work still needs a real status check and two exact fresh Teleporter restore rounds with configuration/readiness evidence; production target/run proof remains. |
 | `postgres2` | `blocked` | No current manifest consumer is declared. Identify its owner/databases before adding coverage or separately retiring it. |
 
 ## Personal and high-value services
@@ -92,10 +94,10 @@ included in a broad image job, or a plugin directory exists.
 
 | Service/scope | Current category | Evidence or remaining gap |
 | --- | --- | --- |
-| Jellyfin | `planned-plugin` | Existing native plugin and exact local drill; production path/target evidence remains. |
-| Radarr | `planned-plugin` | Existing Servarr plugin and exact local drill; production target/run evidence remains. |
-| Sonarr | `planned-plugin` | Existing Servarr plugin and exact local drill; production target/run evidence remains. |
-| Lidarr | `planned-plugin` | Existing Servarr plugin and exact local drill; production target/run evidence remains. |
+| Jellyfin | `planned-plugin` | Existing native plugin has the legacy two-backup/one-restore baseline. Current-contract evidence still needs two exact fresh restore/readiness rounds; production path/target evidence remains. |
+| Radarr | `planned-plugin` | Existing Servarr plugin has the legacy two-backup/one-restore baseline. Current-contract evidence still needs a version-pinned adapter and two exact fresh restore rounds; production target/run evidence remains. |
+| Sonarr | `planned-plugin` | Existing Servarr plugin has the legacy two-backup/one-restore baseline. Current-contract evidence still needs a version-pinned adapter, functional restore regression, and two exact fresh restore rounds; production target/run evidence remains. |
+| Lidarr | `planned-plugin` | Existing Servarr plugin has the legacy two-backup/one-restore baseline. Current-contract evidence still needs a version-pinned adapter, functional restore regression, and two exact fresh restore rounds; production target/run evidence remains. |
 | Readarr | `plugin-local` | Exact 0.4.18.2805 native backup and isolated restore passed two clean A/B drill rounds under Plan 014. Production needs an immutable image pin, narrow read-only native-backup mount, approved native-copy cleanup, target, schedule, and backup-only proof. Books and download data remain external. |
 | Prowlarr | `plugin-local` | Exact 2.4.0.5397 native backup and isolated restore passed two clean A/B drill rounds under Plan 014. Production needs an immutable image pin, narrow read-only native-backup mount, approved native-copy cleanup, target, schedule, and backup-only proof; an unprivileged backend also needs readable source ownership/ACLs. |
 | Plex | `blocked` | Exact 1.43.2 control-plane state requires the full Plex data directory while Plex is stopped or after a stopped atomic snapshot. Select a narrow external stop/snapshot/read-only-export/start mechanism before implementation; media payload remains excluded. |
