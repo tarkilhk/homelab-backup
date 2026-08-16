@@ -1,9 +1,13 @@
-FROM mysql:8.4.0 AS mysql-client
+FROM mysql@sha256:3e5649c69e6d75cf88fc6f8f39f877453faa4e5167b5e648007e45f54bb17f6b AS mysql-client
 FROM postgres@sha256:714b08dd70c05160db032e4321033ac4e5b6328935b2d03ed419c3a898aa8219 AS postgres16-client
 FROM postgres@sha256:b939b3851e2cccb017dc4497af63b15e34efa57fba036548773c53b2f16a8871 AS postgres-client
 FROM wordpress:cli-2.12.0-php8.2 AS wordpress-cli
 
-FROM python:3.11-slim-bookworm
+FROM python@sha256:bb3a5d38989ec658710f06b08bc23cb78d079eb852405e42b124fdf430281454
+
+ADD --checksum=sha256:5e9576a3e65d1f21d6879882e5c4e73b63b3ac49b6356a171b68b0be7f342621 \
+    https://repo.mysql.com/apt/debian/pool/mysql-8.4-lts/m/mysql-shell/mysql-shell_8.4.0-1debian12_amd64.deb \
+    /tmp/mysql-shell.deb
 
 # Set working directory
 WORKDIR /app
@@ -18,6 +22,7 @@ RUN apt-get update && apt-get install -y \
     gcc \
     git \
     libncurses6 \
+    locales \
     libpq5 \
     libssl3 \
     libstdc++6 \
@@ -27,6 +32,12 @@ RUN apt-get update && apt-get install -y \
     php-mysql \
     util-linux \
     zlib1g \
+    /tmp/mysql-shell.deb \
+    && localedef -i en_US -f UTF-8 en_US.UTF-8 \
+    && test "$(dpkg-query -W -f='${Version} ${Architecture}' mysql-shell)" = \
+      "8.4.0-1debian12 amd64" \
+    && mysqlsh --version | grep -F '8.4.0' \
+    && rm -f /tmp/mysql-shell.deb \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=mysql-client /usr/bin/mysql /usr/local/bin/mysql

@@ -129,6 +129,7 @@ jobs:
           docker run --rm --entrypoint mysql "${image}" --version | grep '8.4.0'
           docker run --rm --entrypoint mysqldump \
             "${image}" --version | grep '8.4.0'
+          docker run --rm --entrypoint mysqlsh "${image}" --version | grep '8.4.0'
           docker run --rm --entrypoint mysqlcheck \
             "${image}" --version
           docker run --rm --entrypoint pg_dump \
