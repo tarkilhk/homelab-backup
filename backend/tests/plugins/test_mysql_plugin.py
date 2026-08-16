@@ -1,6 +1,8 @@
 import asyncio
 import json
+import logging
 import os
+import stat
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -8,7 +10,9 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.core.plugins import mysql as mysql_core
 from app.core.plugins.base import BackupContext, RestoreContext
+from app.core.plugins.mysql import MySQLIdentity
 from app.main import app
 from app.plugins.mysql import MySQLPlugin
 from app.services.targets import TargetService
@@ -36,6 +40,92 @@ class DummyStream:
     async def read(self, size):
         assert 0 < size <= 1024 * 1024
         return self.chunks.pop(0) if self.chunks else b""
+
+
+class ProbeProcess:
+    def __init__(
+        self,
+        *,
+        stdout: bytes = b"",
+        stderr: bytes = b"",
+        returncode: int = 0,
+    ) -> None:
+        self.returncode: int | None = None
+        self._desired_returncode = returncode
+        self.stdout = DummyStream(stdout)
+        self.stderr = DummyStream(stderr)
+
+    async def wait(self) -> int:
+        self.returncode = self._desired_returncode
+        return self._desired_returncode
+
+    def terminate(self) -> None:
+        self.returncode = -15
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+
+def _safe_identity_payload(*, schema_exists: int = 1) -> dict[str, object]:
+    populated = schema_exists == 1
+    return {
+        "server_version": "8.4.0",
+        "version_comment": "MySQL Community Server - GPL",
+        "version_compile_os": "Linux",
+        "version_compile_machine": "x86_64",
+        "server_uuid": "11111111-2222-3333-4444-555555555555",
+        "gtid_mode": "OFF",
+        "default_storage_engine": "InnoDB",
+        "character_set_server": "utf8mb4",
+        "collation_server": "utf8mb4_0900_ai_ci",
+        "lower_case_table_names": 0,
+        "max_allowed_packet": 67108864,
+        "current_user": "backup_reader@%",
+        "database": "application_production",
+        "schema_exists": schema_exists,
+        "tables": (
+            [
+                {
+                    "name": "items",
+                    "type": "BASE TABLE",
+                    "engine": "InnoDB",
+                    "row_format": "Dynamic",
+                    "collation": "utf8mb4_0900_ai_ci",
+                    "create_options": "",
+                    "auto_increment": 3,
+                }
+            ]
+            if populated
+            else []
+        ),
+        "columns": [],
+        "views": [],
+        "routines": [],
+        "triggers": [],
+        "events": [],
+        "partitions": [],
+        "constraints": [],
+        "constraint_columns": [],
+        "indexes": [],
+        "generated_columns": [],
+    }
+
+
+def _source_grants() -> tuple[str, ...]:
+    return (
+        "GRANT USAGE ON *.* TO 'backup_reader'@'%'",
+        "GRANT SELECT, SHOW VIEW, TRIGGER, EVENT, LOCK TABLES "
+        "ON `application_production`.* TO 'backup_reader'@'%'",
+    )
+
+
+def _probe_output(
+    payload: dict[str, object],
+    grants: tuple[str, ...] | None = None,
+) -> bytes:
+    return (
+        json.dumps(payload, sort_keys=True) + "\n" + "\n".join(grants or _source_grants()) + "\n"
+    ).encode()
 
 
 def _source_config() -> dict[str, object]:
@@ -219,28 +309,191 @@ def test_frontend_mock_does_not_claim_automatic_mysql_restore() -> None:
 
 
 @pytest.mark.asyncio
-async def test_test_returns_true(monkeypatch):
-    async def fake_exec(*args, **kwargs):
-        assert args[0] == "mysql"
-        assert args[-2:] == ("-e", "SELECT 1")
-        assert kwargs["env"]["MYSQL_PWD"] == "synthetic-password"
-        return DummyProcess(returncode=0, stdout=b"1\n")
+async def test_mysql_public_test_uses_private_auth_and_exact_source_probe(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Connectivity must prove exact MySQL 8.4 state without ambient credentials."""
+    secret = str(_source_config()["password"])
+    option_paths: list[Path] = []
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setenv("MYSQL_PWD", "ambient-password-must-be-removed")
+    monkeypatch.setenv("MYSQL_HOST", "ambient-host-must-be-removed")
+    monkeypatch.setenv("MYSQL_TCP_PORT", "9999")
+    caplog.set_level(logging.DEBUG)
+
+    async def fake_exec(*args: str, **kwargs: object) -> ProbeProcess:
+        calls.append(args)
+        environment = kwargs["env"]
+        assert isinstance(environment, dict)
+        assert "MYSQL_PWD" not in environment
+        assert "MYSQL_HOST" not in environment
+        assert "MYSQL_TCP_PORT" not in environment
+        assert secret not in "\0".join(args)
+        assert secret not in json.dumps(environment, sort_keys=True)
+        assert kwargs["stdout"] == asyncio.subprocess.PIPE
+        assert kwargs["stderr"] == asyncio.subprocess.PIPE
+        if args[0] == mysql_core.MYSQLSH:
+            assert args == (mysql_core.MYSQLSH, "--version")
+            return ProbeProcess(
+                stdout=(
+                    b"mysqlsh   Ver 8.4.0 for Linux on x86_64 - for MySQL 8.4.0 "
+                    b"(MySQL Community Server (GPL))\n"
+                )
+            )
+        assert args[0] == mysql_core.MYSQL
+        assert args[1].startswith("--defaults-file=")
+        option_path = Path(args[1].split("=", 1)[1])
+        option_paths.append(option_path)
+        assert stat.S_IMODE(option_path.stat().st_mode) == 0o600
+        option_text = option_path.read_text(encoding="utf-8")
+        assert "[client]" in option_text
+        assert "host=mysql-source.internal" in option_text
+        assert "port=3306" in option_text
+        assert "user=backup_reader" in option_text
+        assert "database=application_production" in option_text
+        assert "ssl-mode=REQUIRED" in option_text
+        assert secret in option_text
+        assert "--batch" in args
+        assert "--raw" in args
+        assert "--skip-column-names" in args
+        assert "--execute" in args
+        return ProbeProcess(stdout=_probe_output(_safe_identity_payload()))
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    plugin = MySQLPlugin(name="mysql")
-    ok = await plugin.test(_source_config())
-    assert ok is True
+    assert await MySQLPlugin(name="mysql").test(_source_config()) is True
+
+    assert [call[0] for call in calls] == [mysql_core.MYSQLSH, mysql_core.MYSQL]
+    assert option_paths and all(not path.exists() for path in option_paths)
+    assert all(not path.parent.exists() for path in option_paths)
+    assert secret not in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_test_raises_when_mysql_returns_unexpected_result(monkeypatch):
-    async def fake_exec(*args, **kwargs):
-        return DummyProcess(returncode=0, stdout=b"0\n")
+@pytest.mark.parametrize(
+    ("payload_update", "grants", "error"),
+    (
+        ({"server_version": "8.4.1"}, None, "server identity"),
+        (
+            {
+                "tables": [
+                    {
+                        "name": "items",
+                        "type": "BASE TABLE",
+                        "engine": "MyISAM",
+                        "row_format": "Dynamic",
+                        "collation": "utf8mb4_0900_ai_ci",
+                        "create_options": "",
+                        "auto_increment": 3,
+                    }
+                ]
+            },
+            None,
+            "non-InnoDB",
+        ),
+        (
+            {},
+            (
+                "GRANT USAGE ON *.* TO 'backup_reader'@'%'",
+                "GRANT ALL PRIVILEGES ON *.* TO 'backup_reader'@'%' WITH GRANT OPTION",
+            ),
+            "least-privilege",
+        ),
+        ({"schema_exists": 0, "tables": []}, None, "configured schema"),
+        ({"current_user": ""}, None, "identity response"),
+    ),
+)
+async def test_mysql_public_test_rejects_unsafe_source_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    payload_update: dict[str, object],
+    grants: tuple[str, ...] | None,
+    error: str,
+) -> None:
+    """Version, engine, schema, identity, and privilege drift must fail closed."""
+    payload = {**_safe_identity_payload(), **payload_update}
+
+    async def fake_exec(*args: str, **_kwargs: object) -> ProbeProcess:
+        if args[0] == mysql_core.MYSQLSH:
+            return ProbeProcess(stdout=b"mysqlsh Ver 8.4.0 for Linux on x86_64 - for MySQL 8.4.0\n")
+        return ProbeProcess(stdout=_probe_output(payload, grants))
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-
-    with pytest.raises(ConnectionError, match="validate MySQL connection"):
+    with pytest.raises((ConnectionError, RuntimeError), match=error):
         await MySQLPlugin(name="mysql").test(_source_config())
+
+
+@pytest.mark.asyncio
+async def test_mysql_public_test_accepts_only_an_absent_restore_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Restore-destination connectivity must prove create-only sentinel state."""
+    payload = _safe_identity_payload(schema_exists=0)
+    payload["current_user"] = "restore_owner@%"
+    grants = (
+        "GRANT USAGE ON *.* TO 'restore_owner'@'%'",
+        "GRANT ALL PRIVILEGES ON `application_production`.* TO 'restore_owner'@'%'",
+    )
+
+    async def fake_exec(*args: str, **_kwargs: object) -> ProbeProcess:
+        if args[0] == mysql_core.MYSQLSH:
+            return ProbeProcess(stdout=b"mysqlsh Ver 8.4.0 for Linux on x86_64 - for MySQL 8.4.0\n")
+        option_path = Path(args[1].split("=", 1)[1])
+        assert "database=" not in option_path.read_text(encoding="utf-8")
+        return ProbeProcess(stdout=_probe_output(payload, grants))
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    assert await MySQLPlugin(name="mysql").test(_restore_config()) is True
+
+    existing = _safe_identity_payload()
+    existing["current_user"] = "restore_owner@%"
+
+    async def existing_exec(*args: str, **_kwargs: object) -> ProbeProcess:
+        if args[0] == mysql_core.MYSQLSH:
+            return ProbeProcess(stdout=b"mysqlsh Ver 8.4.0 for Linux on x86_64 - for MySQL 8.4.0\n")
+        return ProbeProcess(stdout=_probe_output(existing, grants))
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", existing_exec)
+    with pytest.raises(RuntimeError, match="must be absent"):
+        await MySQLPlugin(name="mysql").test(_restore_config())
+
+
+@pytest.mark.asyncio
+async def test_mysql_get_status_is_truthful_and_secret_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Status must reflect a real probe and degrade safely on probe failure."""
+    identity = MySQLIdentity.from_payload(
+        _safe_identity_payload(),
+        _source_grants(),
+        target=mysql_core.MySQLTarget.from_config(_source_config()),
+        shell_version="8.4.0",
+    )
+
+    async def healthy_probe(_target: mysql_core.MySQLTarget) -> MySQLIdentity:
+        return identity
+
+    monkeypatch.setattr("app.plugins.mysql.plugin.probe_mysql", healthy_probe)
+    context = BackupContext(
+        job_id="status",
+        target_id="mysql-source",
+        config=_source_config(),
+        metadata={},
+    )
+    assert await MySQLPlugin(name="mysql").get_status(context) == {
+        "status": "ok",
+        "server_version": "8.4.0",
+        "database_state": "source",
+        "catalog_sha256": identity.catalog_sha256,
+    }
+
+    async def failed_probe(_target: mysql_core.MySQLTarget) -> MySQLIdentity:
+        raise ConnectionError("private endpoint and credential details")
+
+    monkeypatch.setattr("app.plugins.mysql.plugin.probe_mysql", failed_probe)
+    assert await MySQLPlugin(name="mysql").get_status(context) == {
+        "status": "error",
+        "database_state": "unavailable",
+    }
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ from typing import Any, Dict
 
 from app.core.plugins.artifacts import create_backup_artifact, evict_file_cache
 from app.core.plugins.base import BackupContext, BackupPlugin, RestoreContext
+from app.core.plugins.mysql import MySQLTarget, probe_mysql
 from app.core.subprocesses import run_process_with_timeout
 
 BACKUP_BASE_PATH = "/backups"
@@ -92,51 +93,10 @@ class MySQLPlugin(BackupPlugin):
         }
 
     async def test(self, config: Dict[str, Any]) -> bool:
-        """Check database connectivity using the shipped MySQL client."""
+        """Prove the exact MySQL 8.4 source or fresh restore destination."""
         if not await self.validate_config(config):
             raise ValueError("Invalid MySQL source or restore-destination configuration")
-        host = str(config["host"])
-        port = int(config.get("port", 3306))
-        user = str(config["user"])
-        password = str(config["password"])
-        database = str(config["database"])
-        env = os.environ.copy()
-        env["MYSQL_PWD"] = password
-        try:
-            process = await asyncio.create_subprocess_exec(
-                "mysql",
-                "-h",
-                host,
-                "-P",
-                str(port),
-                "-u",
-                user,
-                "--database",
-                database,
-                "--batch",
-                "--skip-column-names",
-                "-e",
-                "SELECT 1",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
-            stdout, stderr = await run_process_with_timeout(
-                process,
-                process.communicate(),
-                operation="mysql connection test",
-                timeout_seconds=CONNECT_TIMEOUT_SECONDS,
-            )
-        except FileNotFoundError as exc:
-            raise FileNotFoundError("mysql client command not found") from exc
-        except OSError as exc:
-            self._logger.warning("mysql_test_failed | host=%s error=%s", host, exc)
-            raise ConnectionError(f"Failed to connect to MySQL database: {exc}") from exc
-        if process.returncode != 0:
-            detail = stderr[:MAX_ERROR_BYTES].decode(errors="ignore").strip()
-            raise ConnectionError(f"Failed to connect to MySQL database: {detail}")
-        if stdout.decode(errors="ignore").strip() != "1":
-            raise ConnectionError("Failed to validate MySQL connection")
+        await probe_mysql(MySQLTarget.from_config(config))
         return True
 
     async def backup(self, context: BackupContext) -> Dict[str, Any]:
@@ -429,7 +389,19 @@ class MySQLPlugin(BackupPlugin):
             "artifact_bytes": artifact_bytes,
         }
 
-    async def get_status(
-        self, context: BackupContext
-    ) -> Dict[str, Any]:  # pragma: no cover - not implemented
-        return {"status": "unknown"}
+    async def get_status(self, context: BackupContext) -> Dict[str, Any]:
+        """Return secret-free status from the exact identity probe."""
+        config = context.config or {}
+        if not await self.validate_config(config):
+            return {"status": "error", "database_state": "unavailable"}
+        try:
+            target = MySQLTarget.from_config(config)
+            identity = await probe_mysql(target)
+        except Exception:
+            return {"status": "error", "database_state": "unavailable"}
+        return {
+            "status": "ok",
+            "server_version": identity.server_version,
+            "database_state": ("source" if target.mode == "source" else "fresh_destination"),
+            "catalog_sha256": identity.catalog_sha256,
+        }
