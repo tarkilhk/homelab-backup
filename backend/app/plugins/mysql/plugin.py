@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
 import os
+import re
 import tempfile
 from typing import Any, Dict
 
@@ -17,46 +19,82 @@ FILE_CACHE_FLUSH_BYTES = 8 * 1024 * 1024
 CONNECT_TIMEOUT_SECONDS = 30.0
 BACKUP_TIMEOUT_SECONDS = 3600.0
 RESTORE_TIMEOUT_SECONDS = 3600.0
+_CONFIG_KEYS = frozenset({"mode", "host", "port", "database", "user", "password", "ssl_mode"})
+_SYSTEM_SCHEMAS = frozenset({"information_schema", "mysql", "performance_schema", "sys"})
+_DATABASE_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,63}\Z")
+_USER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]{0,31}\Z")
+_HOST_LABEL_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\Z")
+logger = logging.getLogger(__name__)
+
+
+def _contains_forbidden_text(value: str) -> bool:
+    return any(
+        character.isspace() or ord(character) < 32 or 127 <= ord(character) <= 159
+        for character in value
+    )
+
+
+def _valid_host(value: object) -> bool:
+    if not isinstance(value, str) or not value or len(value) > 253:
+        return False
+    if _contains_forbidden_text(value) or any(
+        marker in value for marker in ("/", "\\", "?", "#", "@")
+    ):
+        return False
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return all(_HOST_LABEL_RE.fullmatch(label) for label in value.split("."))
+
+
+def _valid_secret(value: object) -> bool:
+    return isinstance(value, str) and 0 < len(value) <= 1024 and not _contains_forbidden_text(value)
 
 
 class MySQLPlugin(BackupPlugin):
-    restore_capability = "partial"
-    """MySQL backup plugin using the pinned MySQL client binaries.
+    """Strict Oracle MySQL 8.4 single-schema backup plugin.
 
-    Research notes:
-    - mysqldump is the standard utility to export a MySQL database.
-    - Connectivity tests use the same pinned client shipped for backup/restore.
-    SQL dumps are stored under
-    `/backups/<slug>/<date>/mysql-dump-<timestamp>.sql`.
+    The public adapter keeps source and create-only restore-destination modes
+    explicit. MySQL Shell dump/load mechanics live in the shared MySQL core.
     """
 
-    def __init__(self, name: str, version: str = "0.1.0") -> None:
-        super().__init__(name=name, version=version)
-        self._logger = logging.getLogger(__name__)
+    restore_capability = "partial"
 
-    async def validate_config(self, config: Dict[str, Any]) -> bool:  # pragma: no cover - trivial
-        if not isinstance(config, dict):
+    def __init__(self, name: str, version: str = "0.2.1") -> None:
+        super().__init__(name=name, version=version)
+        self._logger = logger
+
+    async def validate_config(self, config: Dict[str, Any]) -> bool:
+        """Return whether config is the exact clean-breaking MySQL target shape."""
+        if not isinstance(config, dict) or set(config) != _CONFIG_KEYS:
             return False
-        host = config.get("host")
-        user = config.get("user")
-        password = config.get("password")
+        if config.get("mode") not in {"source", "restore_destination"}:
+            return False
+        if not _valid_host(config.get("host")):
+            return False
+        port = config.get("port")
+        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+            return False
         database = config.get("database")
-        if not host or not isinstance(host, str):
+        if (
+            not isinstance(database, str)
+            or _DATABASE_RE.fullmatch(database) is None
+            or database.lower() in _SYSTEM_SCHEMAS
+        ):
             return False
-        if not user or not isinstance(user, str):
+        user = config.get("user")
+        if not isinstance(user, str) or _USER_RE.fullmatch(user) is None:
             return False
-        if not password or not isinstance(password, str):
-            return False
-        if not database or not isinstance(database, str):
-            return False
-        return True
+        return _valid_secret(config.get("password")) and config.get("ssl_mode") in {
+            "REQUIRED",
+            "DISABLED",
+        }
 
     async def test(self, config: Dict[str, Any]) -> bool:
         """Check database connectivity using the shipped MySQL client."""
         if not await self.validate_config(config):
-            raise ValueError(
-                "Invalid configuration: host, user, password, and database are required"
-            )
+            raise ValueError("Invalid MySQL source or restore-destination configuration")
         host = str(config["host"])
         port = int(config.get("port", 3306))
         user = str(config["user"])

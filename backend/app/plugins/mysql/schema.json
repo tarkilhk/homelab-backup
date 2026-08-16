@@ -1,11 +1,59 @@
 {
   "type": "object",
-  "required": ["host", "user", "password", "database"],
+  "additionalProperties": false,
+  "required": [
+    "mode",
+    "host",
+    "port",
+    "database",
+    "user",
+    "password",
+    "ssl_mode"
+  ],
   "properties": {
-    "host": { "type": "string", "title": "Host", "default": "localhost" },
-    "port": { "type": "integer", "title": "Port", "default": 3306 },
-    "user": { "type": "string", "title": "User", "default": "root" },
-    "password": { "type": "string", "title": "Password", "default": "secret" },
-    "database": { "type": "string", "title": "Database", "default": "mysql" }
+    "mode": {
+      "type": "string",
+      "title": "Mode",
+      "enum": ["source", "restore_destination"]
+    },
+    "host": {
+      "type": "string",
+      "title": "MySQL host",
+      "minLength": 1,
+      "maxLength": 253,
+      "pattern": "^(?!.*://)[^/\\\\?#@\\s\\u0000-\\u001F\\u007F-\\u009F]+$"
+    },
+    "port": {
+      "type": "integer",
+      "title": "MySQL port",
+      "minimum": 1,
+      "maximum": 65535
+    },
+    "database": {
+      "type": "string",
+      "title": "MySQL schema",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^(?!(?:[mM][yY][sS][qQ][lL]|[sS][yY][sS]|[iI][nN][fF][oO][rR][mM][aA][tT][iI][oO][nN]_[sS][cC][hH][eE][mM][aA]|[pP][eE][rR][fF][oO][rR][mM][aA][nN][cC][eE]_[sS][cC][hH][eE][mM][aA])$)[A-Za-z_][A-Za-z0-9_]{0,63}$"
+    },
+    "user": {
+      "type": "string",
+      "title": "MySQL user",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[A-Za-z_][A-Za-z0-9_.-]{0,31}$"
+    },
+    "password": {
+      "type": "string",
+      "title": "MySQL password",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^[^\\s\\u0000-\\u001F\\u007F-\\u009F]+$"
+    },
+    "ssl_mode": {
+      "type": "string",
+      "title": "TLS mode",
+      "enum": ["REQUIRED", "DISABLED"]
+    }
   }
 }
