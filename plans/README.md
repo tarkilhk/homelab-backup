@@ -23,6 +23,7 @@ Each executor must read its plan fully, honor STOP conditions, and update status
 | 016 | Revalidate exact Invoice Ninja 5.13.31 native recovery | P0 | L | 001 foundation | DONE (local) |
 | 017 | Revalidate PostgreSQL 16 logical archive recovery | P0 | L | 001 foundation | DONE (local) |
 | 018 | Revalidate Cal.com 6.2.0 PostgreSQL recovery | P0 | L | 017 PostgreSQL | DONE (local) |
+| 019 | Revalidate Oracle MySQL 8.4 schema recovery | P0 | XL | 001 foundation | IN PROGRESS |
 
 Status: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`, or `REJECTED`.
 
