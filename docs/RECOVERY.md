@@ -39,7 +39,7 @@ files, partial files, and artifacts with missing or inconsistent sidecars.
 | Prowlarr | Automatic | Uploads an exact validated Prowlarr 2.4.0.5397 control-plane archive, restarts the isolated destination, and proves a different ready process. External indexers and download clients remain recovery prerequisites. |
 | WordPress | Automatic | Replaces site files, imports the database, validates both, and rolls back on failure. The destination must be an isolated mounted WordPress root. |
 | Invoice Ninja | Partial | Imports only into an explicitly authorized fresh local destination, verifies company/client/invoice markers, and records a partial outcome. Version 5.13.31 exposes no terminal import status and cannot reliably recover embedded document bytes into a fresh private destination. |
-| Jellyfin | Automatic | Stages a validated archive in Jellyfin's shared backup directory and invokes the official restore endpoint. Success requires an observed restart and readiness transition. |
+| Jellyfin (legacy) | Automatic | The existing adapter stages a minimally validated native archive and treats an observed restart/readiness transition as success. Plan 021 current-contract revalidation is blocked: the archive is not coherent across all reads, omits authoritative `/config` state, requires unrestricted Administrator authority, and exposes no terminal restore/rollback proof. Do not treat the v0.2.1 baseline as complete recovery evidence. |
 | Lidarr | Automatic | Uploads a validated archive, restarts Lidarr, and waits for a new ready process. |
 | Pi-hole (legacy) | Automatic | The existing adapter imports a minimally checked Teleporter ZIP and proves only that an export remains possible. Plan 020 current-contract revalidation is blocked pending explicit export-consistency and source-authority policies; do not treat the v0.2.1 baseline as complete recovery evidence. |
 | Radarr | Automatic | Uploads a validated archive, restarts Radarr, and waits for a new ready process. |
@@ -309,8 +309,12 @@ Backup.
   its restorable stores, and its application password is not endpoint-scoped;
   see `plans/020-pihole-teleporter-current-contract.md` for the two decision
   gates.
-- Jellyfin's server-generated source archives are outside Homelab Backup retention;
-  manage that shared directory with Jellyfin's own backup retention policy.
+- Jellyfin's legacy server-generated archives are outside Homelab Backup
+  retention, but archive retention is not the current blocker. Exact 10.11.11
+  research found a non-atomic database/file boundary, omitted plugins and device
+  identity, unrestricted API-key authority, and a destructive restore without
+  terminal proof. See `plans/021-jellyfin-current-contract.md` before changing
+  its native-backup directory or credential.
 
 ## Locally verified component versions
 

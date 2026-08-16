@@ -75,6 +75,13 @@ All notable changes to Homelab Backup are recorded here. This project follows
   non-atomic export and no endpoint-scoped read-only credential. A consistency
   policy and source-authority policy require explicit approval before current-
   contract implementation resumes.
+- Jellyfin recovery is explicitly classified as legacy-only and decision-gated
+  after exact 10.11.11 source review proved the native database/file archive is
+  not one coherent snapshot, omits plugin/device and other `/config` state,
+  requires unrestricted Administrator authority, and has no terminal or
+  rollback-aware restore result. Boundary/downtime, omitted-state inventory,
+  credential-authority, and restore-claim decisions are required before
+  current-contract implementation resumes.
 
 ## [0.2.1] - 2026-08-15
 

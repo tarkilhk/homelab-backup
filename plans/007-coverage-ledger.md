@@ -94,7 +94,7 @@ included in a broad image job, or a plugin directory exists.
 
 | Service/scope | Current category | Evidence or remaining gap |
 | --- | --- | --- |
-| Jellyfin | `planned-plugin` | Existing native plugin has the legacy two-backup/one-restore baseline. Current-contract evidence still needs two exact fresh restore/readiness rounds; production path/target evidence remains. |
+| Jellyfin | `blocked` | The existing native plugin has only the legacy two-backup/one-restore baseline. Exact 10.11.11 source proves the archive is non-atomic across its database and copied files, every API key is unrestricted Administrator authority, and the archive omits plugins, plugin configuration, device identity, and other `/config` state. Plan 021 is stopped pending recovery-boundary/downtime, omitted-state inventory, credential-authority, and restore-claim decisions. |
 | Radarr | `planned-plugin` | Existing Servarr plugin has the legacy two-backup/one-restore baseline. Current-contract evidence still needs a version-pinned adapter and two exact fresh restore rounds; production target/run evidence remains. |
 | Sonarr | `planned-plugin` | Existing Servarr plugin has the legacy two-backup/one-restore baseline. Current-contract evidence still needs a version-pinned adapter, functional restore regression, and two exact fresh restore rounds; production target/run evidence remains. |
 | Lidarr | `planned-plugin` | Existing Servarr plugin has the legacy two-backup/one-restore baseline. Current-contract evidence still needs a version-pinned adapter, functional restore regression, and two exact fresh restore rounds; production target/run evidence remains. |
