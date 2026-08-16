@@ -12,35 +12,49 @@ single-schema foundation**, then let application plugins call that deep core.
 Do not duplicate the database protocol in Standard Notes or another adapter,
 and do not treat MariaDB as compatible evidence.
 
-The clean target should use MySQL Shell 8.4 `util.dumpSchemas()` and
-`util.loadDump()`, not publish the existing raw `mysqldump` stdout. MySQL Shell
-has the first-party primitives this program needs: a consistent multi-session
-snapshot, a completion marker and feature metadata, optional source/load
-checksums, an incomplete/corrupt-dump error model, and a non-mutating load dry
-run. Oracle documents these facilities in the
+The clean artifact/restore candidate should use MySQL Shell 8.4
+`util.dumpSchemas()` and `util.loadDump()`, not publish the existing raw
+`mysqldump` stdout. MySQL Shell has the first-party primitives this program
+needs: coordinated dump workers, a completion marker and feature metadata,
+optional source/load checksums, an incomplete/corrupt-dump error model, and a
+non-mutating load dry run. Oracle documents these facilities in the
 [MySQL Shell schema-dump guide](https://dev.mysql.com/doc/mysql-shell/8.4/en/mysql-shell-utilities-dump-instance-schema.html)
 and
 [dump-loading guide](https://dev.mysql.com/doc/mysql-shell/8.4/en/mysql-shell-utilities-load-dump.html).
 
-There is a narrow online path without global `BACKUP_ADMIN` or `RELOAD`:
+**Correction after the exact local 8.4.0 run:** the earlier proposed narrow
+online path using only schema-scoped grants is not proved and must not be
+implemented. With `SELECT`, `SHOW VIEW`, `TRIGGER`, `EVENT`, and `LOCK TABLES`
+on the selected schema, Shell first failed while inspecting active/default
+roles. Adding `SELECT` on `mysql.default_roles` let `dumpSchemas()` finish, but
+Shell reported that it lacked `BACKUP_ADMIN`, could not acquire the global
+read lock because it lacked `RELOAD`, could not lock the `mysql` system tables
+because it lacked `LOCK TABLES` and `SELECT` there, lacked
+`REPLICATION CLIENT` for binary-log coordinates, and explicitly warned that
+consistency could not be guaranteed. The process nevertheless returned zero.
+This is local empirical evidence from the pinned MySQL Shell 8.4.0 drill; it
+did not contact production and includes no production identifier or secret.
 
-- every base table must be InnoDB;
-- the backup identity has schema-scoped `LOCK TABLES`;
-- `consistent: true` briefly locks the dumped tables while every worker starts
-  a `REPEATABLE READ` consistent-snapshot transaction;
-- after releasing those locks, MySQL Shell performs its documented extra
-  consistency check because the identity deliberately lacks `BACKUP_ADMIN`;
-  and
-- any consistency diagnostic is fatal even though Oracle says a schema dump
-  can continue while returning an error message.
+Oracle's dump
+[requirements and restrictions](https://dev.mysql.com/doc/mysql-shell/8.4/en/mysql-shell-utilities-dump-instance-schema.html)
+explain the result: `LOCK TABLES` on all dumped tables can substitute for
+`RELOAD`, but consistent dumping also performs broader locking/consistency
+work; without `BACKUP_ADMIN`, a failed consistency check is reported while a
+schema/table dump can continue. The same section requires access to
+`mysql.default_roles` or `mysql.role_edges` for role discovery and explains
+that missing `REPLICATION CLIENT` omits binary-log coordinates. Oracle's
+[grant-table reference](https://dev.mysql.com/doc/refman/8.4/en/grant-tables.html)
+defines `mysql.default_roles`, and its
+[privilege reference](https://dev.mysql.com/doc/refman/8.4/en/privileges-provided.html)
+defines `RELOAD`, `LOCK TABLES`, `BACKUP_ADMIN`, and `REPLICATION CLIENT`.
 
-This is online, but the short alignment lock can stall writers. Production
-activation therefore still needs explicit approval for the new scoped
-privilege and the bounded lock effect. If any table is MyISAM, MEMORY, or
-another nontransactional engine, if the lock cannot be tolerated, or if the
-extra consistency check cannot be interpreted fail-closed, **stop**. The
-alternatives are an approved write-quiescence/downtime window or a more
-powerful server-wide lock identity; neither may be inferred.
+Therefore implementation and production activation are **stopped pending an
+explicit user policy choice**: either authorize and empirically prove the exact
+broader privileges/capabilities required for a warning-free online dump, or
+approve a separately specified, externally provable writer-quiescence/downtime
+contract. This note does not choose between them. All-InnoDB remains necessary
+for transactional table data, but it does not cure the failed Shell-wide
+consistency contract.
 
 ## Exact declarations and immutable candidates
 
@@ -195,7 +209,8 @@ run, or catalog-to-payload binding. A zero exit status and nonempty stdout are
 not strict validation. The current unit test intentionally accepts the bytes
 `dump data`, demonstrating that the published payload need not even be SQL.
 
-MySQL Shell is a better clean target. Its dump directory contains DDL, chunked
+MySQL Shell remains the better clean artifact-format candidate. Its dump
+directory contains DDL, chunked
 data, feature/version metadata, and `@.done.json`; `checksum: true` adds
 `@.checksums.json`. `util.loadDump(..., {dryRun: true})` reports dump-content
 errors without importing, and the loader has explicit errors for incomplete
@@ -221,41 +236,71 @@ actually observe and redact:
 - exact effective grants and the absence of write/admin/file privileges; and
 - exact MySQL Shell 8.4.0 client identity.
 
-The intended source identity has only:
+### Exact 8.4.0 least-privilege result
 
-- `SELECT`, `SHOW VIEW`, `TRIGGER`, `EVENT`, and `LOCK TABLES` on the one
-  schema; and
-- the dynamic `SHOW_ROUTINE` privilege if routines exist and the exact Shell
-  8.4.0 drill proves it is required.
+The attempted source identity had `SELECT`, `SHOW VIEW`, `TRIGGER`, `EVENT`,
+and `LOCK TABLES` on the one schema. It first failed role introspection.
+Granting only the additional `SELECT` on `mysql.default_roles` allowed the
+exact pinned Shell 8.4.0 `dumpSchemas()` process to return zero, but its stdout
+still reported all of the following:
 
-Oracle's
+- no `BACKUP_ADMIN`;
+- no `RELOAD`, so no global read lock;
+- no `LOCK TABLES` and `SELECT` on the `mysql` system tables, so those tables
+  could not be locked;
+- no `REPLICATION CLIENT`, so binary-log information was unavailable; and
+- **consistency cannot be guaranteed**.
+
+This disproves the prior claim that the schema-scoped grant set produces a
+strict, warning-free, dependable online dump. A zero process result is not
+success under this plugin's artifact contract. Capture and inspect both output
+streams—Shell emitted these diagnostics on stdout—and reject that explicit
+consistency warning before publication. Missing binary-log coordinates may or
+may not matter to single-schema recovery, but this research does not authorize
+ignoring that unexpected diagnostic.
+
+Oracle documents why Shell reads the role grant tables and identifies
+`mysql.default_roles` in the
+[grant-table reference](https://dev.mysql.com/doc/refman/8.4/en/grant-tables.html).
+Its dump
+[requirements and restrictions](https://dev.mysql.com/doc/mysql-shell/8.4/en/mysql-shell-utilities-dump-instance-schema.html)
+document the `RELOAD`/`LOCK TABLES` substitution, the no-`BACKUP_ADMIN`
+consistency behavior, role-table reads, and the `REPLICATION CLIENT`
+requirement for binary-log coordinates. The
 [privilege reference](https://dev.mysql.com/doc/refman/8.4/en/privileges-provided.html)
-states that `SHOW_ROUTINE` permits routine backup without broad global
-`SELECT`. Do not grant `BACKUP_ADMIN`, `RELOAD`, `PROCESS`, `FILE`, `SUPER`,
-write DML, DDL, account-management, replication, or GTID privileges. The
-MySQL Shell manual documents schema/table-scoped `LOCK TABLES` as the
-substitute for `RELOAD` when `consistent: true`.
+defines those privileges and states that `SHOW_ROUTINE` can permit routine
+backup without broad global `SELECT`.
 
-The exact local drill must prove this grant set rather than trusting prose. If
-Shell 8.4.0 needs global `SELECT`, `RELOAD`, `BACKUP_ADMIN`, or another broad
-privilege for the selected schema and object set, stop and ask. Do not silently
-drop routines/events/triggers to avoid the decision.
+No replacement grant set is selected here. The user must choose one policy
+before implementation or any production work:
 
-Run `util.dumpSchemas([schema], ...)` with consistency, checksums, routines,
-events, and triggers explicitly enabled, users excluded, progress hidden, and
-bounded threads/chunk size. Use a private empty temporary directory. Treat
-nonzero exit, cancellation, timeout, any consistency error, missing completion
-metadata, source catalog drift, or unexpected warning as failure and publish
-nothing. MySQL Shell converts unsafe text-form types such as BLOB to Base64 and
-documents a per-value limit of about 0.74 times destination
-`max_allowed_packet`; probe and drill that boundary rather than claiming
-unbounded large-object support.
+1. Authorize a precisely enumerated broader source identity/capability set and
+   prove that it makes the exact online Shell run warning-free without source
+   writes; or
+2. Approve a separately designed quiesced/downtime alternative whose writer
+   stop is externally proved for the entire authoritative boundary and whose
+   Shell options and validation rules are then redrilled exactly.
 
-`LOCK INSTANCE FOR BACKUP` remains a rejected default. Oracle documents that
+Do not silently drop routines, events, triggers, binary data, or other
+authoritative objects to avoid this decision.
+
+Only after that policy decision, run `util.dumpSchemas([schema], ...)` with the
+approved consistency mode, checksums, routines, events, and triggers explicitly
+enabled, users excluded, progress hidden, and bounded threads/chunk size. Use a
+private empty temporary directory. Treat nonzero exit, cancellation, timeout,
+any consistency error or uncertainty (including on stdout with exit zero),
+missing completion metadata, source catalog drift, or unexpected warning as
+failure and publish nothing. MySQL Shell converts unsafe text-form types such
+as BLOB to Base64 and documents a per-value limit of about 0.74 times
+destination `max_allowed_packet`; probe and drill that boundary rather than
+claiming unbounded large-object support.
+
+`LOCK INSTANCE FOR BACKUP` is not an inferred fallback. Oracle documents that
 it permits DML while blocking operations that can invalidate a physical
 snapshot, but it requires global `BACKUP_ADMIN` and affects the whole server
 ([statement reference](https://dev.mysql.com/doc/refman/8.4/en/lock-instance-for-backup.html)).
-It is a future explicitly approved production option, not a fallback.
+Whether to authorize that or any other broader capability is part of the open
+user decision, not a policy chosen by this research.
 
 ## Strict artifact contract
 
@@ -341,8 +386,10 @@ Docker socket, privileged mode, production mount, or production credential.
 
 Each clean round performs the complete sequence, not half a sequence per run:
 
-1. Create a fresh source, schema-scoped read-only backup identity, separate
-   application/definer identity, and synthetic phase A through supported SQL.
+1. Create a fresh source, the exact backup identity or quiescence control from
+   the user-approved policy, a separate application/definer identity, and
+   synthetic phase A through supported SQL. Prove the approved identity cannot
+   write and that the exact dump produces no consistency uncertainty.
    Cover parent/child rows and FK, generated value, unique/check/index state,
    `AUTO_INCREMENT`, UTF-8/null/escaping, view, procedure/function, trigger,
    disabled/far-future event, partition, BIT/spatial value, and a deterministic
@@ -434,20 +481,26 @@ The current implementation is a legacy baseline, not current-contract proof:
 
 ## Production gates and STOP conditions
 
-Local implementation and exact Docker drills may proceed without production
-contact. Production remains backup-only and needs separate explicit approval
-for a new target/configuration, scoped backup identity, `LOCK TABLES` grant,
-network attachment, schedule, and the brief writer-stall characteristic. A
-later approved read-only probe must confirm the exact runtime image/server
-version, schema, engines, objects, grants, packet limit, TLS behavior, and
-application role. No production restore is permitted.
+Toolchain identity and read-only research are complete, but plugin
+implementation, the acceptance drill, and production activation are stopped
+until the user chooses between a broader-privilege online contract and a
+separately specified quiesced/downtime contract. After that choice, the exact
+Docker drill must prove the selected policy before any production request.
+Production remains backup-only and would still need separate explicit approval
+for a new target/configuration, exact backup identity or quiescence mechanism,
+network attachment, schedule, and any lock or writer-stall effect. A later
+approved read-only probe must confirm the exact runtime image/server version,
+schema, engines, objects, grants, packet limit, TLS behavior, and application
+role. No production restore is permitted.
 
 Stop rather than weakening the result if:
 
+- no explicit policy choice has resolved the demonstrated consistency warning;
 - any base table is not InnoDB;
-- the exact Shell consistency algorithm cannot run with schema-scoped
-  privileges or reports uncertainty;
-- production cannot tolerate the short alignment lock;
+- the exact Shell consistency algorithm reports uncertainty, even with exit
+  status zero;
+- the selected policy's lock, writer stop, or downtime cannot be proved and
+  tolerated across the complete authoritative boundary;
 - exact routines/events/triggers require broad global data/admin access;
 - the exact MySQL Shell package is unavailable, changes from the recorded
   SHA-256, fails its version/architecture assertion, or cannot run with the

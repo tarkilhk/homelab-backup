@@ -6,18 +6,24 @@
 - **Effort**: XL
 - **Risk**: HIGH
 - **Depends on**: Plan 001 foundation
-- **State**: IN PROGRESS
+- **State**: BLOCKED — pending privilege/consistency decision
 - **Restore capability**: `partial`
 - **Production status**: local work only; every production restore is forbidden
 - **Fixed point**: `463703e`
 
 ## Outcome
 
-Replace the legacy raw-SQL `mysql` plugin with one strict Oracle MySQL 8.4
-single-schema foundation using first-party MySQL Shell 8.4.0
-`util.dumpSchemas()` and `util.loadDump()`. Prove two clean rounds, each with
-distinct phase-A/phase-B scheduled artifacts and two independently fresh
-create-only restores on immutable linux/amd64 MySQL 8.4.0 servers.
+Determine an approved strict Oracle MySQL 8.4 single-schema recovery boundary,
+then replace the legacy raw-SQL `mysql` plugin only if that boundary can be
+implemented without weakening consistency or least privilege. The original
+candidate used first-party MySQL Shell 8.4.0 `util.dumpSchemas()` and
+`util.loadDump()`, but the exact pinned local probe disproved its proposed
+schema-only privilege contract. No implementation may publish a Shell dump
+until the decision gate below is resolved.
+
+If a safe boundary is approved, prove two clean rounds, each with distinct
+phase-A/phase-B scheduled artifacts and two independently fresh create-only
+restores on immutable linux/amd64 MySQL 8.4.0 servers.
 
 This is not a MariaDB abstraction. Standard Notes may later consume this deep
 core as one member of its separately quiesced database-plus-uploads composite;
@@ -88,12 +94,38 @@ RestoreService staging/audit.
 Reject write/DDL/account/replication/file/admin privileges, global data access,
 `RELOAD`, `BACKUP_ADMIN`, `PROCESS`, `FILE`, and `SUPER`.
 
-Run `util.dumpSchemas()` with `consistent:true`, `checksum:true`, users excluded,
-routines/events/triggers included, progress disabled, bounded threads/chunking,
-and GTID application disabled. Treat every warning or consistency diagnostic as
-fatal. Stability requires the documented brief schema-table lock while all
-worker snapshots align, then the Shell consistency check without BACKUP_ADMIN.
-Any non-InnoDB table or ambiguous consistency result is a STOP.
+The exact pinned local probe established that this proposed grant set is not
+sufficient for warning-free `util.dumpSchemas()`:
+
+1. the schema-only identity failed before dumping because Shell attempted role
+   introspection;
+2. adding read access to `mysql.default_roles` allowed the utility to continue;
+3. Shell then reported that it could not acquire a global read lock, could not
+   lock the `mysql` system tables, could not read binary-log coordinates, and
+   that consistency could not be guaranteed; and
+4. Shell exited zero after writing a dump despite those warnings, so exit status
+   and completion metadata alone cannot establish this contract.
+
+The strict worker correctly rejected that result because warnings and an
+explicit consistency failure are fatal. Satisfying the observed path requires
+some combination of role/system-schema reads or locks and global `RELOAD`,
+`REPLICATION CLIENT`, or `BACKUP_ADMIN` authority. Those privileges exceed the
+approved contract and must not be added implicitly.
+
+### Required user decision
+
+Choose one before this milestone resumes:
+
+- approve a separately audited broader MySQL Shell identity and its production
+  risk;
+- approve bounded application quiescence and redesign the contract around a
+  strict logical dump that does not claim unsupported online consistency; or
+- classify the generic online MySQL foundation as blocked and leave
+  application recovery to the already selected native/composite boundaries.
+
+Until then, keep the worker/artifact work uncommitted, publish no Shell artifact,
+and make no production grant, target, schedule, downtime, or connectivity
+change. Any non-InnoDB table or ambiguous consistency result remains a STOP.
 
 ## Artifact and validation contract
 
@@ -152,7 +184,8 @@ Return `partial` with explicit external prerequisites.
    all-InnoDB/least-privilege failures through the public test seam.
 4. Parent-owned Shell worker workspace, private option input, fixed script/
    argv/env, one cumulative deadline, warning/consistency/error handling, and
-   termination/reap on timeout or repeated cancellation.
+   termination/reap on timeout or repeated cancellation. This slice is locally
+   unit-green but deliberately uncommitted at the privilege decision gate.
 5. Strict bounded manifest/tar validator and real scheduled private backup with
    sidecar, stable pre/post catalog fence, unique publication, and no residue.
 6. Restore authorization, descriptor/provenance binding, absent-schema preflight,
@@ -212,6 +245,10 @@ Mark `DONE (local)` only after every item passes. Production remains gated on
 read-only runtime inventory plus explicit approval for network/target/schedule,
 the schema-scoped identity and `LOCK TABLES` grant, brief writer stall, and one
 backup-only run. Production restore is forbidden.
+
+The current exact result does not satisfy these completion conditions. Do not
+mark the plan `DONE (local)` or claim a consistent artifact until the required
+user decision is recorded and the selected boundary passes a fresh exact drill.
 
 ## STOP conditions
 

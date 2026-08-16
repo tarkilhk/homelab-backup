@@ -33,7 +33,7 @@ files, partial files, and artifacts with missing or inconsistent sidecars.
 | Cal.com | Partial | Restores one exact Cal.com 6.2.0 PostgreSQL 16 archive transactionally into an explicitly authorized fresh sentinel database and verifies migration, catalog, and control-plane marker equality. The original encryption/deployment configuration, external providers, and application lifecycle remain operator prerequisites. |
 | Gitea | Automatic | Restores a validated native dump into an explicitly labeled isolated Gitea 1.27.1 container, verifies application state, and rolls back on failure. |
 | Homelab Backup | Partial | Creates a validated database only in a fresh sentinel-marked offline directory. Booting and verifying the exact recorded backend image remains a separate operator step. |
-| MySQL | Partial | Imports only into an empty database and validates tables; MySQL DDL is non-transactional, so a failed import requires the destination to be reset before retry. |
+| MySQL (legacy) | Partial | The existing adapter imports only into an empty database and validates tables. Plan 019 current-contract revalidation is blocked because exact MySQL Shell 8.4.0 could not prove consistent online capture without broader privileges; do not treat the v0.2.1 baseline as current recovery evidence. |
 | PostgreSQL | Automatic | Restores one strictly validated PostgreSQL 16 named-database archive into an explicitly authorized fresh `template0` database with the exact sentinel, in one transaction. Cluster roles, tablespaces, server configuration, and application lifecycle remain external prerequisites. |
 | Profilarr | Automatic | Creates and independently validates a complete Profilarr 1.1.5 SQLite control plane and reconstructed all-ref Git repository in a fresh sentinel-marked local directory. Radarr, Sonarr, Git hosting, credentials, and exact-image boot remain separate recovery-stack prerequisites. |
 | Prowlarr | Automatic | Uploads an exact validated Prowlarr 2.4.0.5397 control-plane archive, restarts the isolated destination, and proves a different ready process. External indexers and download clients remain recovery prerequisites. |
@@ -282,7 +282,10 @@ Backup.
   bounded and the rollback artifact remains available through readiness checks.
 - MySQL restore is intentionally partial: use a new, empty, isolated database.
   A failed non-transactional import may leave objects behind and must not be
-  retried until that destination is reset.
+  retried until that destination is reset. The legacy adapter has not passed
+  the current two-round contract. Exact MySQL Shell 8.4.0 revalidation is
+  blocked pending explicit approval of broader source privileges or a proven
+  quiescence boundary; see `plans/019-mysql-8-4-shell.md`.
 - PostgreSQL restore accepts only a private RestoreService-staged artifact whose
   size, SHA-256, source identity, catalog, TOC, and sidecar provenance all match.
   The destination must be a separately authorized PostgreSQL 16 database created

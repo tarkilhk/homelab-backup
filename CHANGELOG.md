@@ -65,6 +65,11 @@ All notable changes to Homelab Backup are recorded here. This project follows
 - Sidecars now bind every newly written artifact to its byte size and SHA-256
   digest. Artifacts created by older versions without both fields are rejected
   by validation and restore; create fresh backups before upgrading.
+- Generic Oracle MySQL recovery is explicitly classified as a legacy-only,
+  blocked contract after exact MySQL Shell 8.4.0 testing returned zero while
+  warning that consistency could not be guaranteed with the proposed
+  schema-scoped identity. Broader privileges or a proven quiescence boundary
+  require an explicit decision before implementation resumes.
 
 ## [0.2.1] - 2026-08-15
 
