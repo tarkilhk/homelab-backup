@@ -6,7 +6,7 @@
 - **Effort**: L
 - **Risk**: CRITICAL
 - **Depends on**: Plan 001 foundation and explicit scheduled-downtime approval
-- **State**: BLOCKED
+- **State**: DONE (local)
 - **Production status**: BLOCKED; every production restore remains forbidden
 - **Fixed point**: `d4ffa2f`
 
@@ -33,9 +33,16 @@ is not guaranteed coherent. The selected dependable workflow briefly stops the
 source for every full backup, captures all components while static, restarts it
 in cancellation-shielded cleanup, and proves readiness before publication.
 
-Do not implement or activate that behavior until the user explicitly approves
-scheduled Vaultwarden stop/start during backups. Ordinary permission to trigger
-a production backup does not authorize service downtime.
+The user approved brief scheduled Vaultwarden stop/start for this backup
+contract. Production activation remains separate and blocked until the rollout
+gates below are satisfied.
+
+The user also confirmed that file Sends are not used. The implementation still
+captures and validates `sends/` when present, but this milestone does not claim
+end-to-end file-Send recovery. The exact drill requires zero Sends and proves
+the actively used secure-note and attachment boundary. If file Sends are used
+later, their client-level recovery must be revalidated before they are added to
+the supported recovery claim.
 
 ## Exact contract
 
@@ -116,19 +123,42 @@ otherwise leave the disposable destination stopped with a critical failure.
 
 Use only the immutable image on an internal disposable Docker network with no
 published ports. Create one source and two fresh labeled destinations with
-separate named `/data` volumes. Use Vaultwarden's supported Web Vault flow or
-the official Bitwarden client to create phase-distinct synthetic secure notes,
-attachment bytes, and file-Send bytes without placing credentials in arguments
-or logs.
+separate named `/data` volumes. Use Vaultwarden's supported Web Vault flow and
+the official Bitwarden client to create phase-distinct synthetic secure notes
+and attachment bytes without placing credentials in arguments or logs. Prove
+the source contains zero file Sends; file-Send recovery is outside this
+milestone's tested claim.
 
 For A and B, prove distinct private artifacts, sidecars, sizes, hashes,
 manifests, and source restart transitions. Restore each through
 `RestoreService` to an independent fresh destination. Decrypt/read the expected
-note and verify attachment and file-Send plaintext SHA-256, prove A/B
-separation, restart each destination, and repeat application evidence. Run the
-whole A/B recovery sequence twice from clean state and audit all containers,
-volumes, networks, helpers, images introduced by the drill, files, listeners,
-and synthetic credentials for absence.
+note, verify attachment plaintext SHA-256, confirm no file Sends appeared,
+prove A/B separation, restart each destination, and repeat application
+evidence. Run the whole A/B recovery sequence twice from clean state and audit
+all containers, volumes, networks, helpers, images introduced by the drill,
+files, listeners, and synthetic credentials for absence.
+
+## Verification evidence
+
+- Focused Vaultwarden suite:
+  `pytest -q tests/plugins/test_vaultwarden_plugin.py` — 22 passed in 3.79s.
+- Exact immutable-image drill:
+  `RUN_VAULTWARDEN_DOCKER_DRILL=1 pytest -q
+  tests/integration/test_vaultwarden_docker_drill.py -x -vv` — 2 passed in
+  1279.96s. Each clean round produced distinct A/B backups and restored them to
+  two independent fresh destinations, with Web Vault note and attachment proof
+  before and after restart.
+- Full backend suite: `pytest -q` — 1404 passed, 17 skipped in 330.65s.
+- Backend typing: `mypy app` — success across 105 source files. Changed
+  Vaultwarden and scheduler files also pass Black, isort, and focused mypy.
+- Frontend `npm run lint` and `npm run build` pass; the build reports only the
+  existing Vite chunk-size advisory.
+- JavaScript syntax, `git diff --check`, scoped secret-pattern scan, and the
+  final labeled Docker resource audit pass. Repository-wide Black/isort still
+  report unrelated pre-existing formatting debt in 19/11 legacy test files;
+  every file changed by this milestone passes both checks.
+- File Sends were absent by user-selected scope. Source, artifact, and restored
+  evidence recorded zero Sends; end-to-end Send recovery remains unclaimed.
 
 ## Verification and completion
 
@@ -137,7 +167,7 @@ and synthetic credentials for absence.
 - full backend and frontend gates pass;
 - mypy, changed-file Black/isort, SemVer, diff, secret scan, and resource audit
   pass;
-- two independent reviewers find no unresolved P0/P1 Standards or Spec issue;
+- one final Standards/Spec review finds no unresolved P0/P1 issue;
 - compatibility, recovery, changelog, and ledger documentation are current;
   and
 - the milestone is committed independently and never pushed or deployed as

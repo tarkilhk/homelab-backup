@@ -5,6 +5,13 @@ All notable changes to Homelab Backup are recorded here. This project follows
 
 ## [Unreleased]
 
+### Changed
+
+- Revalidate Vaultwarden 1.37.1 with coherent stop-based component backups,
+  exact image/layout checks, strict private artifacts, isolated fresh-container
+  restores, rollback, and two clean Web Vault note/attachment recovery rounds.
+  File Sends are unused and remain outside the client-level recovery claim.
+
 ## [0.3.3] - 2026-08-21
 
 ### Fixed

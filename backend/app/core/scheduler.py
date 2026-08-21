@@ -335,6 +335,8 @@ def _perform_target_run(db: Session, job: JobModel, run: RunModel, *, target_id:
         }
         if "base_url" in config_dict:
             source_identity["base_url"] = _canonical_source_origin(config_dict["base_url"])
+        if "container_name" in config_dict:
+            source_identity["container_name"] = config_dict["container_name"]
         target_run.source_identity_json = (
             json.dumps(source_identity, sort_keys=True, separators=(",", ":"))
             if source_identity

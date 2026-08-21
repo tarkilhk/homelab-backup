@@ -380,6 +380,15 @@ a running fresh destination and always proves application readiness.
 
 ## Exact local Docker drill
 
+### User-selected scope for the current milestone
+
+The user confirmed on 2026-08-21 that file Sends are not used. The plugin should
+continue to capture and strictly validate `sends/` when present, but the current
+milestone must not claim client-level file-Send recovery. Its exact drill must
+prove zero source Sends and cover the actively used secure-note and attachment
+state. If file Sends are adopted later, add a separate exact client-level
+backup/restore drill before treating them as supported recovery evidence.
+
 No database injection is necessary. Vaultwarden's own exact-tag Playwright
 suite demonstrates Web Vault account creation and Send creation/viewing
 ([account helper](https://github.com/dani-garcia/vaultwarden/blob/2629bcbe1380c894e3a7f52cafcac3988edb8fbb/playwright/tests/setups/user.ts),
@@ -405,21 +414,18 @@ For each of two clean rounds:
 1. Confirm image digest, OCI revision, version, mount separation, no published
    ports, and source/destination health.
 2. Through the Web Vault, create a fresh synthetic account. Through the Web
-   Vault or official CLI, create a uniquely named encrypted secure note, attach
-   a small unique file, and create a file Send with different unique bytes.
+   Vault or official CLI, create a uniquely named encrypted secure note and
+   attach a small unique file. Prove the source has zero file Sends.
 3. Run the plugin backup. Independently validate private permissions, sidecar
    size/hash, exact members, database integrity/schema/migration, component
    inventory, and distinct artifact path/hash. Confirm the source was restarted
    healthy and the one native temporary snapshot was removed.
 4. Restore to that round's separate fresh destination. Log in through the
    supported client, read/decrypt the secure-note marker, download/decrypt the
-   attachment, and compare its plaintext SHA-256. Open the restored Send through
-   its public flow (preserving the client-side fragment key while using the
-   destination origin), download/decrypt it, and compare its different plaintext
-   SHA-256. The server's attachment and Send download handlers read the restored
-   filesystem payloads
-   ([attachment route](https://github.com/dani-garcia/vaultwarden/blob/2629bcbe1380c894e3a7f52cafcac3988edb8fbb/src/api/web.rs#L197-L206),
-   [Send route](https://github.com/dani-garcia/vaultwarden/blob/2629bcbe1380c894e3a7f52cafcac3988edb8fbb/src/api/core/sends.rs#L602-L622)).
+   attachment, and compare its plaintext SHA-256. Confirm the destination still
+   has zero file Sends. The server's attachment download handler reads the
+   restored filesystem payload
+   ([attachment route](https://github.com/dani-garcia/vaultwarden/blob/2629bcbe1380c894e3a7f52cafcac3988edb8fbb/src/api/web.rs#L197-L206)).
 5. Prove exact image/version, new process readiness, restored configuration
    structure, restored RSA fingerprint, and absence of phase leakage. Round two
    must use different note and payload markers and a different artifact hash.
@@ -442,7 +448,11 @@ Finally remove all containers, volumes, networks, client state, credentials,
 artifacts, sidecars, and helper objects. A post-drill Docker audit must show no
 resource with the unique drill prefix.
 
-## Concrete gaps in the existing plugin
+## Pre-milestone gaps in the existing plugin
+
+The Plan 015 implementation closes the following local code and proof gaps.
+They remain here as the historical baseline that motivated the clean-break
+contract; production rollout gates are still active.
 
 Prioritized against the current repository contract:
 

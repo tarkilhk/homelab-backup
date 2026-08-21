@@ -46,7 +46,7 @@ files, partial files, and artifacts with missing or inconsistent sidecars.
 | Readarr | Automatic | Uploads an exact validated Readarr 0.4.18.2805 control-plane archive, restarts the isolated destination, and proves a different ready process. Books and download working data remain external. |
 | SFTPGo | Partial | Creates a validated SFTPGo 2.7.5 provider database only in a fresh sentinel-marked offline directory; application boot verification remains separate. |
 | Sonarr | Automatic | Uploads an exact validated 4.0.19.2979-ls320 control-plane archive only to an authorized fresh local destination, then proves restored content through two distinct restart cycles. Episodes and download data remain external. |
-| Vaultwarden | Automatic | Stops the destination, restores a validated component manifest through an isolated helper, checks SQLite, proves Docker health or `/alive`, and rolls back before restart on failure. |
+| Vaultwarden | Automatic | Restores the exact validated 1.37.1 default-`/data` component artifact only to a fresh labeled and allowlisted local container, proves SQLite/files and exact Docker health, and rolls back before restart on failure. |
 
 The backend rejects automated restore requests for manual-only plugins. Copying an
 artifact into another directory is not reported as a successful restore.
@@ -271,15 +271,18 @@ Backup.
 
 ## Plugin-specific cautions
 
-- Vaultwarden backup requires a version with the built-in `/vaultwarden backup`
-  command (introduced in Vaultwarden 1.32.1). The generated SQLite snapshot is
-  checked with `PRAGMA quick_check` before publication. Attachments and
-  `config.json`, when present, are bundled with that snapshot.
-- Vaultwarden restore requires `data_path` to exactly match a writable Docker
-  mount. The backend needs Docker-socket access. A Docker healthcheck is preferred;
-  otherwise configure an unauthenticated `health_url` or allow the backend to
-  reach the container's auto-detected `/alive` endpoint. Restore commands are
-  bounded and the rollback artifact remains available through readiness checks.
+- Vaultwarden backup is pinned to exact 1.37.1 and requires
+  `container_name` plus `allow_service_stop=true`. It briefly stops the source,
+  runs the native SQLite snapshot from an exact-image networkless helper,
+  captures the default `/data` database, attachments, Sends, RSA key, and
+  optional configuration while static, then restarts and proves exact health
+  before publication.
+- Vaultwarden restore requires the explicit isolated-restore flag, exact local
+  container allowlist, restore-destination label, distinct source identity, and
+  a fresh exact-image destination with one writable `/data` mount. Arbitrary
+  paths, alternate storage layouts, and `health_url` fallbacks are rejected.
+  File Sends are currently unused and were zero in the exact drill; their
+  client-level recovery must be revalidated before relying on that feature.
 - MySQL restore is intentionally partial: use a new, empty, isolated database.
   A failed non-transactional import may leave objects behind and must not be
   retried until that destination is reset. The legacy adapter has not passed
@@ -333,7 +336,8 @@ The following isolated drills were run with synthetic data and no published port
   `PLUGIN_COMPATIBILITY.md`; two clean rounds produced twelve strict backups
   and twelve fresh RestoreService destinations with two-restart persistence.
 - Readarr 0.4.18.2805 and Prowlarr 2.4.0.5397 (pinned linux/amd64 manifests)
-- Vaultwarden 1.37.1
+- Vaultwarden 1.37.1 using linux/amd64 manifest
+  `sha256:e9efdf001bf0d68c21f2cbfb8e1d9b5961a7ca9c85e0a7e58bf51a13b997d744`
 - WordPress 7.0.2
 - Invoice Ninja 5.13.31
 - Gitea 1.27.1

@@ -42,7 +42,7 @@ included in a broad image job, or a plugin directory exists.
 | Gitea Actions runners | `stateless` | Runners are disposable executors; configuration is declared in Git. |
 | Gitea OCI/package registry | `plugin-local` | Included in the Gitea native dump contract; production artifact proof remains. |
 | Bitwarden Lite | `blocked` | Active pilot declaration still floats on `beta`, while the canonical vault route remains on NAS Vaultwarden. Confirm authoritative use and pin an exact version before designing PostgreSQL/files coverage. |
-| Vaultwarden | `blocked` | Exact 1.37.1 research proves the existing live SQLite-then-files capture is not one coherent recovery point. Current-contract repair and two fresh application-level restore rounds are locally feasible, but implementation and production activation require explicit approval for a short Vaultwarden stop/start during every full backup. |
+| Vaultwarden | `plugin-local` | Exact 1.37.1 stop-based A/B backups and four independent fresh restores passed across two clean rounds, including Web Vault secure-note and attachment recovery before and after restart. File Sends are unused and remain outside the client-level recovery claim. Production still requires the exact image declaration, opted-in stop schedule, target/run evidence, and a backup-only validation. |
 | Standard Notes | `blocked` | Exact composite boundary requires a short scheduled source downtime; explicit approval is pending. |
 | Monica | `blocked` | Declared Monica 4.1.2/MariaDB 12.3 state shows near-zero recent use. Confirm valuable company CRM data before researching a composite plugin. |
 | Metabase | `planned-plugin` | Named shared-PostgreSQL database is authoritative; explicit production target/run evidence remains. |
