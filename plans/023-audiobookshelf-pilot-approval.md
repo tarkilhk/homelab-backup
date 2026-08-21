@@ -4,9 +4,10 @@
 
 - **Prepared**: 2026-08-21
 - **Attempted**: 2026-08-21
-- **State**: READY FOR PATCH RELEASE AND SAFE RETRY
-- **Production writes performed**: versioned deployment and one unscheduled
-  target were created, validation failed closed, and both were rolled back
+- **State**: BLOCKED ON READ-ONLY METADATA INVENTORY
+- **Production writes performed**: two versioned deployments and two
+  unscheduled targets were created; both validation attempts failed closed and
+  both deployments and targets were rolled back
 - **Production restore**: forbidden
 
 ## Pilot outcome
@@ -44,6 +45,33 @@ exact optional table, has positive and malformed-table regressions, and still
 rejects all other extra state. The updated exact-image drill preserved the
 upgrade-path table through two backups, two fresh restores, and app
 boot/restart verification in two clean runs (`62.47s` and `42.13s`).
+
+Release `v0.3.2` was then cut from commit
+`2ff70fac987d9b4b924071fff1a09c5b2837542f`. Both its main workflow
+(`32451533012`) and tag workflow (`32452073028`) passed. The published OCI
+indexes and linux/amd64 manifests are:
+
+- backend index `sha256:ad530752dc5444a91aa0b248cc7ebdd91bd3131f08791a10b7406fb9f6465a92`,
+  amd64 `sha256:a34a13e9a1851ffe7627eadb131c51180a0bfa5dcc0929cf6106de023f542207`;
+- frontend index `sha256:3b4724dc8fdf3fbb1608e84b5dbdab1d40c3bc054e4f00bf3d1f82ff960e7d24`,
+  amd64 `sha256:deb5ed857aa28dba04680bc53006ea61e52d81fecd6de533ed2e31bfe6f7f6e7`.
+
+Infrastructure commit `ddb9be9` deployed those images and the same two
+read-only mounts. Production returned healthy and ready, retained all sixteen
+existing targets and jobs, and exposed the partial Audiobookshelf plugin. The
+new target reused ID `17`; its non-mutating test accepted the corrected
+database contract but failed closed while reading the mounted metadata roots:
+
+```text
+Audiobookshelf filesystem operation failed
+```
+
+No schedule, Run, TargetRun, artifact, or sidecar was created. Target `17` was
+deleted and infrastructure commit `8cfd8e5` reverted the deployment. The final
+audit found the prior healthy/ready plugin set and the original sixteen targets
+and jobs. The next retry is blocked until a one-shot read-only inventory proves
+whether `/metadata/items` and `/metadata/authors` exist and are traversable and
+whether either tree contains a symlink or non-regular entry.
 
 ## Read-only inventory
 
@@ -189,14 +217,17 @@ or modify Audiobookshelf state and never attempt a production restore.
 ## Human access required before retry
 
 Release, deployment, target creation, validation, and rollback authority were
-sufficient for the first attempt. The only missing evidence is the schema-only
-live inventory described above. The preferred options are, in order:
+sufficient for both attempts. The schema blocker is closed. The only missing
+evidence is a structure-only inventory of the two mounted metadata subtrees.
+The preferred options are, in order:
 
 1. an operator runs a reviewed one-shot read-only diagnostic on the Docker host
-   and returns only the redacted schema inventory; or
+   and returns only existence, type, mode, entry-count, and traversal-error
+   evidence for `/metadata/items` and `/metadata/authors`; or
 2. the operator approves a temporary, reviewed Gitea Actions/Ansible diagnostic
-   that mounts only the Audiobookshelf config root read-only, has no network,
-   emits only the allowed schema fields, and removes itself after capture.
+   that mounts only the Audiobookshelf metadata root read-only, has no network,
+   emits only those allowed structural fields, and removes itself after
+   capture.
 
 Do not grant a general production shell, Docker socket, Portainer token,
 Audiobookshelf administrator credential, writable mount, or metadata/media
