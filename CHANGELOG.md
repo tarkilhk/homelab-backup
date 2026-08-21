@@ -5,6 +5,8 @@ All notable changes to Homelab Backup are recorded here. This project follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-22
+
 ### Changed
 
 - Revalidate Vaultwarden 1.37.1 with coherent stop-based component backups,
@@ -151,7 +153,8 @@ All notable changes to Homelab Backup are recorded here. This project follows
 - Repaired Pi-hole v6 authentication and current database, Servarr, Jellyfin,
   Invoice Ninja, Vaultwarden, and WordPress backup behavior.
 
-[Unreleased]: https://github.com/tarkilhk/homelab-backup/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/tarkilhk/homelab-backup/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/tarkilhk/homelab-backup/compare/v0.3.3...v0.4.0
 [0.3.3]: https://github.com/tarkilhk/homelab-backup/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/tarkilhk/homelab-backup/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/tarkilhk/homelab-backup/compare/v0.3.0...v0.3.1

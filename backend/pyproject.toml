@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "homelab-backup"
-version = "0.3.3"
+version = "0.4.0"
 description = "Homelab backup system with plugin architecture"
 authors = [
     {name = "Homelab Backup Team", email = "team@homelab-backup.com"}
