@@ -1283,7 +1283,7 @@ async def test_backup_cumulative_timeout_reaps_dump_and_publishes_nothing(
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     monkeypatch.setattr("app.plugins.postgresql.plugin.BACKUP_BASE_PATH", str(tmp_path))
-    monkeypatch.setattr("app.plugins.postgresql.plugin.BACKUP_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr("app.plugins.postgresql.plugin.BACKUP_TIMEOUT_SECONDS", 0.2)
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     context = BackupContext(
         job_id="postgresql-timeout",
