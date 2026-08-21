@@ -177,6 +177,16 @@ def make_exact_artifact(tmp_path: Path, *, phase: str = "a") -> Path:
     return artifact
 
 
+def test_exact_artifact_is_private_under_a_normal_process_umask(tmp_path: Path) -> None:
+    previous_umask = os.umask(0o022)
+    try:
+        artifact = make_exact_artifact(tmp_path)
+    finally:
+        os.umask(previous_umask)
+
+    assert stat.S_IMODE(artifact.stat().st_mode) == 0o600
+
+
 @pytest.mark.asyncio
 async def test_discovery_schema_and_exact_configuration_contract() -> None:
     plugin = get_plugin("vaultwarden")

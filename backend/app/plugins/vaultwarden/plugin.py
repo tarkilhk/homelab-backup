@@ -1322,21 +1322,27 @@ printf '%s\n' "$generated" > /tmp/generated-name
             "rsa_public_key_sha256": evidence.rsa_public_key_sha256,
         }
         manifest_bytes = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        with tarfile.open(artifact, "w:gz") as archive:
-            for path in files:
-                relative = path.relative_to(source_dir).as_posix()
-                info = archive.gettarinfo(str(path), arcname=relative)
+        descriptor = os.open(
+            artifact,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb") as output:
+            with tarfile.open(fileobj=output, mode="w:gz") as archive:
+                for path in files:
+                    relative = path.relative_to(source_dir).as_posix()
+                    info = archive.gettarinfo(str(path), arcname=relative)
+                    info.mode = 0o600
+                    info.uid = 0
+                    info.gid = 0
+                    info.uname = ""
+                    info.gname = ""
+                    with path.open("rb") as source:
+                        archive.addfile(info, source)
+                info = tarfile.TarInfo("backup-manifest.json")
+                info.size = len(manifest_bytes)
                 info.mode = 0o600
-                info.uid = 0
-                info.gid = 0
-                info.uname = ""
-                info.gname = ""
-                with path.open("rb") as source:
-                    archive.addfile(info, source)
-            info = tarfile.TarInfo("backup-manifest.json")
-            info.size = len(manifest_bytes)
-            info.mode = 0o600
-            archive.addfile(info, io.BytesIO(manifest_bytes))
+                archive.addfile(info, io.BytesIO(manifest_bytes))
 
     async def _upload_restore_archive(
         self,
