@@ -4,10 +4,12 @@
 
 - **Prepared**: 2026-08-21
 - **Attempted**: 2026-08-21
-- **State**: READY FOR `v0.3.3` PATCH RELEASE AND SAFE RETRY
-- **Production writes performed**: two versioned deployments and two
-  unscheduled targets were created; both validation attempts failed closed and
-  both deployments and targets were rolled back
+- **Completed**: 2026-08-21
+- **State**: COMPLETE — PRODUCTION PILOT VERIFIED
+- **Production writes performed**: two failed versioned deployments and their
+  unscheduled targets were safely rolled back; the corrected `v0.3.3`
+  deployment, target `17`, job `17`, and first backup Run/TargetRun `665` are
+  active and successful
 - **Production restore**: forbidden
 
 ## Pilot outcome
@@ -85,6 +87,30 @@ drill passed twice from clean state (`56.44s` and `43.07s`), exercising the
 absent source shape before the existing populated A/B backup and two fresh
 restore/boot/restart sequence.
 
+Release `v0.3.3` was cut from commit
+`9288639a4d67b92416545988e69f81dbf33049a4`. Its main workflow
+(`32455277134`) and tag workflow (`32455833885`) passed. The published OCI
+indexes and linux/amd64 manifests are:
+
+- backend index `sha256:5444aa06cc7f3cca83538d5830ffc6be8ad03aba7afdbbb8dcef9d39a27e2aa0`,
+  amd64 `sha256:72e5635cb7660f25e3f6ba5bde261e0178240bebbceaa58200906f819dd267fd`;
+- frontend index `sha256:8d8c54efc4331b03b79c2989c079fcd3a39d7112cc14f42a1caa8bd4ce5c695d`,
+  amd64 `sha256:c830fed885eae91e6239652e6aaf8001b9c72541c3f380e7c085259ad0f0cae8`.
+
+Infrastructure commit `fe8997b` deployed those versioned images and only the
+two approved read-only Audiobookshelf control-plane mounts. Production returned
+healthy and ready, retained the original sixteen targets and jobs, and the
+mandatory non-mutating test for new target `17` passed. Job `17`, `Daily
+Audiobookshelf Backup`, is enabled at `30 5 * * *` Asia/Singapore with no
+retention override. The explicitly authorized first backup completed through
+Run and TargetRun `665` in 3.30 seconds. It published a private 21,818-byte
+artifact with SHA-256
+`c116a4d8f85182536d64fc9a1da51a7811db96dea9de49ead0246dcc7f9c10c0`.
+The filesystem inventory independently rediscovered the same path and size
+from its valid sidecar. Protection inventory reports no gap, zero consecutive
+failures, and the next run at 2026-08-22 05:30 Asia/Singapore. No production
+restore, Audiobookshelf write, container restart, or media access occurred.
+
 ## Read-only inventory
 
 The dev server successfully reached the declared primary production backend at
@@ -110,11 +136,11 @@ The declared source is Audiobookshelf 2.36.0 on the same Docker VM:
 
 The plugin needs the first two roots only. The media root remains excluded.
 
-## Approval A: versioned Homelab Backup release
+## Approval A: versioned Homelab Backup release (completed)
 
-Retry release: `v0.3.2`. Release `v0.3.1` remains immutable and valid, but its
-strict fresh-database schema contract rejected the legitimate production
-upgrade-path table before any backup was attempted.
+Successful retry release: `v0.3.3`. Releases `v0.3.1` and `v0.3.2` remain
+immutable; their production tests failed closed before any backup was
+attempted.
 
 Before release:
 
@@ -129,16 +155,16 @@ Before release:
 Do not deploy a floating `latest`, branch build, dirty tree, or the WIP
 checkpoint.
 
-## Approval B: primary backend Compose change
+## Approval B: primary backend Compose change (completed)
 
-After the immutable `v0.3.2` images exist, change only
+The immutable `v0.3.3` images were deployed by changing only
 `docker.compose/system/homelab-backup/homelab-backup.yaml` in `homelab-infra`:
 
 ```diff
  services:
    backend:
 -    image: tarkilhk/homelab-backup:backend-v0.2.1
-+    image: tarkilhk/homelab-backup:backend-v0.3.2
++    image: tarkilhk/homelab-backup:backend-v0.3.3
      volumes:
      - /mnt/nas-shared/backup/homelab-backup:/backups
      - /docker-apps/homelab-backup/db:/app/db
@@ -147,7 +173,8 @@ After the immutable `v0.3.2` images exist, change only
 +    - /docker-apps/audiobookshelf/metadata:/sources/audiobookshelf/metadata:ro
 ```
 
-Update the frontend to `frontend-v0.3.2` in the same reviewed deployment commit.
+The frontend was updated to `frontend-v0.3.3` in the same reviewed deployment
+commit.
 Do not change the NAS deployment during this pilot.
 
 This grants no Audiobookshelf network, API credential, media path, Docker
@@ -164,7 +191,7 @@ Post-deploy read-only checks:
 - no media path is visible to the backend; and
 - existing targets/jobs remain present.
 
-## Approval C: production target
+## Approval C: production target (completed)
 
 Create exactly one target after Approval B passes:
 
@@ -182,7 +209,7 @@ Immediately call the target's non-destructive `/test` endpoint. Stop without
 creating a job unless it proves the exact 2.36.0 SQLite and metadata contract
 through the two read-only mounts.
 
-## Approval D: schedule and first backup
+## Approval D: schedule and first backup (completed)
 
 After the target test succeeds, use its automatically created tag to create:
 
@@ -196,8 +223,9 @@ After the target test succeeds, use its automatically created tag to create:
 
 - Timezone: backend deployment timezone, Asia/Singapore.
 - Retention override: none, matching existing production jobs.
-- First validation: allow the schedule to dispatch naturally. Do not use a
-  manual trigger unless separately approved to accelerate the pilot.
+- First validation: the user explicitly authorized an immediate backup-only
+  trigger rather than waiting for the first natural dispatch. Run `665`
+  succeeded; the recurring schedule remains enabled.
 
 ## Acceptance evidence
 
@@ -213,8 +241,8 @@ The pilot passes only when:
 6. `/api/v1/protection/targets` reports no gap for Audiobookshelf; and
 7. the measured duration, size, and source effect are reviewed before Wave 2.
 
-Then update the Audiobookshelf ledger row from `plugin-local` to
-`verified-plugin` and commit the redacted evidence separately.
+All seven acceptance conditions passed. The ledger row is updated from
+`plugin-local` to `verified-plugin` in the separate redacted evidence commit.
 
 ## Failure and rollback
 
@@ -226,11 +254,11 @@ If the scheduled backup fails, disable only the new job, preserve its run
 evidence and any published artifact, and diagnose before retrying. Do not delete
 or modify Audiobookshelf state and never attempt a production restore.
 
-## Human access required before retry
+## Human access required
 
-Release, deployment, target creation, validation, rollback, and the required
-structure-only metadata inventory are complete. No additional human access is
-required for the `v0.3.3` retry.
+Release, deployment, target creation, validation, scheduling, and the first
+backup-only run are complete. No additional human access is required for this
+pilot.
 
 Do not grant a general production shell, Docker socket, Portainer token,
 Audiobookshelf administrator credential, writable mount, or metadata/media

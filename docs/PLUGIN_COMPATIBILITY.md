@@ -104,8 +104,8 @@ or graceful shutdown, so the plugin does not claim zero-second RPO. Production
 restore remains forbidden; the create-only restore contract is for isolated
 local drills.
 
-The Audiobookshelf plugin is locally verified but not deployed. A 2026-08-21
-production pilot and one corrected retry mounted only
+The Audiobookshelf plugin is locally and production verified. Two initial
+2026-08-21 pilot attempts mounted only
 `/docker-apps/audiobookshelf/config:/sources/audiobookshelf/config:ro` and
 `/docker-apps/audiobookshelf/metadata:/sources/audiobookshelf/metadata:ro`, but
 the first mandatory target test rejected the live 2.36.0 database as a
@@ -123,6 +123,12 @@ exact-image drills pass. It still does not need
 Audiobookshelf network access, an administrator credential, the Docker socket,
 downtime, or access to audiobook and ebook media. Production restore remains
 forbidden; the create-only restore contract is for isolated local drills.
+Release `v0.3.3` subsequently passed the mandatory non-mutating production
+test. Target/job `17` is scheduled daily at 05:30 Asia/Singapore, and its first
+backup-only Run/TargetRun `665` completed successfully in 3.30 seconds. The
+private 21,818-byte artifact was rediscovered from its valid sidecar, its
+recorded SHA-256 is retained in protection evidence, and the target reports no
+protection gap or consecutive failure.
 
 The Hindsight plugin is locally verified but not yet deployed. Production
 activation needs only a user-approved attachment to the private Hindsight
