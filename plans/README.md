@@ -27,6 +27,7 @@ Each executor must read its plan fully, honor STOP conditions, and update status
 | 020 | Revalidate Pi-hole 2026.07.2 Teleporter recovery | P1 | L | 001 foundation; consistency/source-authority decisions | BLOCKED |
 | 021 | Revalidate Jellyfin 10.11.11 recovery | P2 | L | 001 foundation; boundary/downtime/authority decisions | BLOCKED |
 | 022 | Revalidate Radarr, Sonarr, and Lidarr native recovery | P2 | L | 014 Servarr foundation | DONE (local) |
+| 023 | Promote plugin-local services through production rollout | P0 | XL | completed local plugin milestones; approved production changes | TODO |
 
 Status: `TODO`, `IN PROGRESS`, `DONE`, `BLOCKED`, or `REJECTED`.
 
