@@ -1922,7 +1922,9 @@ async def test_restore_cumulative_timeout_reaps_pg_restore_and_preserves_artifac
         "user": "backup_reader",
     }
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
-    monkeypatch.setattr("app.plugins.postgresql.plugin.RESTORE_TIMEOUT_SECONDS", 0.01)
+    # Leave enough of the cumulative deadline for CI to complete the mocked
+    # preflight and reach the blocking restore child whose teardown is under test.
+    monkeypatch.setattr("app.plugins.postgresql.plugin.RESTORE_TIMEOUT_SECONDS", 1.0)
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     monkeypatch.setenv("HOMELAB_BACKUP_ALLOW_ISOLATED_RESTORE", "1")
     monkeypatch.setenv(
