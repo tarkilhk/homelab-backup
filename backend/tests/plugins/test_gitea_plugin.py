@@ -303,6 +303,7 @@ async def test_backup_stops_dumps_streams_and_restarts_gitea(
 ) -> None:
     requests: list[tuple[str, str]] = []
     running = True
+    expected_dump = _gitea_dump_zip()
 
     async def handler(request: httpx.Request) -> httpx.Response:
         nonlocal running
@@ -338,7 +339,7 @@ async def test_backup_stops_dumps_streams_and_restarts_gitea(
             if path == "/tmp/gitea-dump.zip":
                 return httpx.Response(
                     200,
-                    content=_docker_file_archive("gitea-dump.zip", _gitea_dump_zip()),
+                    content=_docker_file_archive("gitea-dump.zip", expected_dump),
                 )
         if request.method == "POST" and request.url.path.endswith("/stop"):
             running = False
@@ -401,7 +402,7 @@ async def test_backup_stops_dumps_streams_and_restarts_gitea(
 
     artifact_path = Path(result["artifact_path"])
     assert artifact_path.is_file()
-    assert artifact_path.read_bytes() == _gitea_dump_zip()
+    assert artifact_path.read_bytes() == expected_dump
     sidecar = read_backup_sidecar(str(artifact_path))
     assert sidecar is not None
     assert sidecar["plugin_name"] == "gitea"
