@@ -6,8 +6,9 @@
 - **Effort**: L
 - **Risk**: CRITICAL
 - **Depends on**: Plan 001 foundation and explicit scheduled-downtime approval
-- **State**: DONE (local)
-- **Production status**: BLOCKED; every production restore remains forbidden
+- **State**: DONE
+- **Production status**: VERIFIED for scheduled backups; every production
+  restore remains forbidden
 - **Fixed point**: `d4ffa2f`
 
 ## Outcome
@@ -34,8 +35,9 @@ source for every full backup, captures all components while static, restarts it
 in cancellation-shielded cleanup, and proves readiness before publication.
 
 The user approved brief scheduled Vaultwarden stop/start for this backup
-contract. Production activation remains separate and blocked until the rollout
-gates below are satisfied.
+contract. Production activation completed on release `v0.4.0`; the exact-image
+target, daily schedule, non-destructive preflight, and one backup-only run all
+passed. Production restore remains forbidden.
 
 The user also confirmed that file Sends are not used. The implementation still
 captures and validates `sends/` when present, but this milestone does not claim
@@ -141,14 +143,15 @@ files, listeners, and synthetic credentials for absence.
 ## Verification evidence
 
 - Focused Vaultwarden suite:
-  `pytest -q tests/plugins/test_vaultwarden_plugin.py` — 22 passed in 3.79s.
+  `pytest -q tests/plugins/test_vaultwarden_plugin.py` — 23 passed in 3.93s.
 - Exact immutable-image drill:
   `RUN_VAULTWARDEN_DOCKER_DRILL=1 pytest -q
   tests/integration/test_vaultwarden_docker_drill.py -x -vv` — 2 passed in
   1279.96s. Each clean round produced distinct A/B backups and restored them to
   two independent fresh destinations, with Web Vault note and attachment proof
   before and after restart.
-- Full backend suite: `pytest -q` — 1404 passed, 17 skipped in 330.65s.
+- Full backend suite in release CI: `pytest -q` — 1405 passed, 17 skipped in
+  321.18s.
 - Backend typing: `mypy app` — success across 105 source files. Changed
   Vaultwarden and scheduler files also pass Black, isort, and focused mypy.
 - Frontend `npm run lint` and `npm run build` pass; the build reports only the
@@ -170,12 +173,15 @@ files, listeners, and synthetic credentials for absence.
 - one final Standards/Spec review finds no unresolved P0/P1 issue;
 - compatibility, recovery, changelog, and ledger documentation are current;
   and
-- the milestone is committed independently and never pushed or deployed as
-  part of local work.
+- the milestone is committed independently before production rollout.
 
-Mark `DONE (local)` only after every gate passes. Production remains blocked
-until the exact image is pinned, the target opts into stop-based backups, the
-schedule/downtime is approved, and a backup-only production validation succeeds.
+All local and production backup gates passed. TarkilNAS runs exact Vaultwarden
+1.37.1 manifest `sha256:e9efdf001bf0d68c21f2cbfb8e1d9b5961a7ca9c85e0a7e58bf51a13b997d744`
+with Homelab Backup `v0.4.0`. Target `1` passed its non-destructive preflight;
+daily job `1` remains enabled at `0 4 * * *` Asia/Singapore; backup Run `264`
+and TargetRun `263` succeeded and published a sidecar-discovered 601,253-byte
+artifact with recorded SHA-256. Vaultwarden returned healthy before publication
+and remained healthy afterward. No production restore was attempted.
 
 ## STOP conditions
 

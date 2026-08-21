@@ -283,6 +283,11 @@ Backup.
   paths, alternate storage layouts, and `health_url` fallbacks are rejected.
   File Sends are currently unused and were zero in the exact drill; their
   client-level recovery must be revalidated before relying on that feature.
+- Production release `v0.4.0` runs the approved stop-based Vaultwarden backup
+  daily at 04:00 Asia/Singapore. Target/job `1` and backup Run/TargetRun
+  `264`/`263` are the rollout evidence; the artifact was discovered from its
+  sidecar after Vaultwarden returned healthy. This does not authorize a
+  production restore.
 - MySQL restore is intentionally partial: use a new, empty, isolated database.
   A failed non-transactional import may leave objects behind and must not be
   retried until that destination is reset. The legacy adapter has not passed

@@ -28,7 +28,7 @@ carrying these versions forward by assumption.
 | SFTPGo | `drakkan/sftpgo:v2.7.5-alpine` (`9888a3d`; drill pinned OCI index `sha256:d1e2877600aba270ac395bf76fc7c8a2a0bb4ac83c3e6c180a0540f5d4c3efb2`) | Two live WAL-backed online SQLite snapshots through a read-only bind, complete schema-33 validation, transient-state scrubbing, private artifacts, valid sidecars, independent hashes, and semantic phase differences passed | Two fresh create-only restores and separate exact-image boots proved authentication, SQLite readiness, users/public keys, admins, groups, folders, shares, API keys, roles, and event metadata; capability remains `partial` because the plugin does not control destination lifecycle |
 | Sonarr | `ghcr.io/linuxserver/sonarr:4.0.19.2979-ls320` (drill pinned linux/amd64 manifest `sha256:f6bf16c4c5a0c6c99833eab891671ded0f06f553f30c7b0702e98f455c5642cc`) | Four exact native SQLite backups across two clean rounds were uniquely attributed, copied by an unprivileged runner from the fixed read-only mount, strictly validated, privately published with structural sidecars, and removed from the native source only after durable publication | Four fresh RestoreService destinations proved phase-specific tags and control-plane structure through two restart/content cycles each; capability is `automatic` for the Sonarr control plane, while episodes and download data remain external |
 | Termix | `ghcr.io/lukegus/termix:release-2.3.2` (drill pinned OCI index `sha256:06a27a3dc22ae426cf0681fcdbdb58732f2aab56d8ce9e95f4deea18306e5c2f`) | Two stable encrypted-state snapshots through a genuine read-only bind, strict v2/AES-256-GCM authentication, SQLite integrity/schema checks, private manifests/artifacts, valid sidecars, and independent phase hashes passed locally | Two fresh create-only restores and separate exact-image boots proved password authentication plus phase-specific host/snippet content; capability remains `partial` because the plugin does not control destination lifecycle |
-| Vaultwarden | `vaultwarden/server:1.37.1` (drill pinned linux/amd64 manifest `sha256:e9efdf001bf0d68c21f2cbfb8e1d9b5961a7ca9c85e0a7e58bf51a13b997d744`, source `2629bcbe1380c894e3a7f52cafcac3988edb8fbb`) | Four quiesced component backups across two clean rounds used the native SQLite snapshot, strict database-to-file validation, private artifacts, sidecars, exact image/layout checks, and safe source restart | Four fresh labeled RestoreService destinations proved Web Vault secure-note and attachment recovery before and after restart. Capability is `automatic` for the validated default `/data` boundary; file Sends were absent and are not client-level recovery evidence |
+| Vaultwarden | `vaultwarden/server:1.37.1` (production and drill pin linux/amd64 manifest `sha256:e9efdf001bf0d68c21f2cbfb8e1d9b5961a7ca9c85e0a7e58bf51a13b997d744`, source `2629bcbe1380c894e3a7f52cafcac3988edb8fbb`) | Four quiesced component backups across two clean rounds used the native SQLite snapshot, strict database-to-file validation, private artifacts, sidecars, exact image/layout checks, and safe source restart. Production `v0.4.0` target/job `1` passed preflight and backup Run/TargetRun `264`/`263` published a sidecar-discovered 601,253-byte artifact with recorded SHA-256 | Four fresh labeled RestoreService destinations proved Web Vault secure-note and attachment recovery before and after restart. Capability is `automatic` for the validated default `/data` boundary; file Sends were absent and are not client-level recovery evidence. Production restore remains forbidden |
 
 The repository still contains the previously verified WordPress plugin.
 Current program scope excludes WordPress because the service is no longer used.
@@ -66,9 +66,11 @@ access is host-equivalent privilege even when the socket is mounted read-only, s
 the backend must remain on a trusted network and target only the declared local
 Vaultwarden container.
 
-The repaired v0.2.1 deployment completed its backup-only production validation
-for the configured targets after the isolated local drills. Historical runs made
-by older images are not evidence for a newly changed plugin or component image.
+Vaultwarden production backup is verified on release `v0.4.0`. The immutable
+1.37.1 image, strict stop-based target, approved daily 04:00 Asia/Singapore job,
+non-destructive preflight, source restart/readiness, private artifact, and
+sidecar discovery all passed in backup Run `264`. Historical runs made by older
+images are not evidence for a newly changed plugin or component image.
 
 No production restore is permitted. Production validation remains limited to
 non-destructive connectivity checks and native backup/export triggers. Every
