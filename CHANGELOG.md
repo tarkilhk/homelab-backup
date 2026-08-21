@@ -5,6 +5,8 @@ All notable changes to Homelab Backup are recorded here. This project follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-21
+
 ### Added
 
 - A version-pinned Gitea 1.27.1 plugin with consistent native dumps, bounded
@@ -120,6 +122,7 @@ All notable changes to Homelab Backup are recorded here. This project follows
 - Repaired Pi-hole v6 authentication and current database, Servarr, Jellyfin,
   Invoice Ninja, Vaultwarden, and WordPress backup behavior.
 
-[Unreleased]: https://github.com/tarkilhk/homelab-backup/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/tarkilhk/homelab-backup/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/tarkilhk/homelab-backup/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/tarkilhk/homelab-backup/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/tarkilhk/homelab-backup/releases/tag/v0.2.0
