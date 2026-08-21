@@ -34,18 +34,19 @@ The plugin needs the first two roots only. The media root remains excluded.
 
 ## Approval A: versioned Homelab Backup release
 
-Recommended release: `v0.3.0`, because the unreleased program adds multiple
-capabilities and intentional clean-breaking artifact/config contracts after
-`v0.2.1`.
+Deployment release: `v0.3.1`. The initial `v0.3.0` tag failed CI before image
+publication because three tests were not portable across release version and
+CI umask; the immutable tag was retained and the focused fixes moved to this
+patch release.
 
 Before release:
 
 1. finish and commit the current Plan 022 closure;
 2. run the repository's single final backend/frontend release gate;
 3. synchronize `VERSION`, backend/frontend package versions and lockfile;
-4. move Unreleased notes to the dated `0.3.0` section;
+4. record the focused fixes in the dated `0.3.1` section;
 5. merge the exact reviewed commit to `main`;
-6. create and push `v0.3.0`; and
+6. create and push `v0.3.1` only after main CI passes; and
 7. record the published backend/frontend image digests.
 
 Do not deploy a floating `latest`, branch build, dirty tree, or the WIP
@@ -53,14 +54,14 @@ checkpoint.
 
 ## Approval B: primary backend Compose change
 
-After the immutable `v0.3.0` images exist, change only
+After the immutable `v0.3.1` images exist, change only
 `docker.compose/system/homelab-backup/homelab-backup.yaml` in `homelab-infra`:
 
 ```diff
  services:
    backend:
 -    image: tarkilhk/homelab-backup:backend-v0.2.1
-+    image: tarkilhk/homelab-backup:backend-v0.3.0
++    image: tarkilhk/homelab-backup:backend-v0.3.1
      volumes:
      - /mnt/nas-shared/backup/homelab-backup:/backups
      - /docker-apps/homelab-backup/db:/app/db
@@ -69,7 +70,7 @@ After the immutable `v0.3.0` images exist, change only
 +    - /docker-apps/audiobookshelf/metadata:/sources/audiobookshelf/metadata:ro
 ```
 
-Update the frontend to `frontend-v0.3.0` in the same reviewed deployment commit.
+Update the frontend to `frontend-v0.3.1` in the same reviewed deployment commit.
 Do not change the NAS deployment during this pilot.
 
 This grants no Audiobookshelf network, API credential, media path, Docker
@@ -153,7 +154,7 @@ or modify Audiobookshelf state and never attempt a production restore.
 Codex currently has enough read access to prepare and validate this packet, but
 cannot complete the rollout without:
 
-1. approval of release version `v0.3.0` and its final merge/tag;
+1. approval of release version `v0.3.1` and its final merge/tag;
 2. write access to the `homelab-infra` workspace if Codex should prepare the
    Compose diff there;
 3. the operator's commit/push of the reviewed `homelab-infra` change, as that

@@ -15,6 +15,7 @@ import zipfile
 from collections.abc import Callable
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from importlib.metadata import version as installed_package_version
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Generator, cast
@@ -669,7 +670,7 @@ def test_plugin_is_discoverable_with_flat_schema_and_automatic_restore(
     assert loader_entry == {
         "key": plugin_key,
         "name": plugin_key,
-        "version": "0.2.1",
+        "version": installed_package_version("homelab-backup"),
         "restore_capability": "automatic",
     }
     assert get_plugin(plugin_key).restore_capability == "automatic"

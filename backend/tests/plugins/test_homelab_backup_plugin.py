@@ -320,6 +320,7 @@ async def test_backup_revalidates_written_zip_before_publication(
         original_writer(snapshot_path, archive_path)
         replacement = archive_path.with_suffix(".tampered.zip")
         _tamper_archive(archive_path, replacement, "digest")
+        replacement.chmod(0o600)
         replacement.replace(archive_path)
 
     monkeypatch.setattr(homelab_backup_module, "BACKUP_BASE_PATH", str(backup_root))
