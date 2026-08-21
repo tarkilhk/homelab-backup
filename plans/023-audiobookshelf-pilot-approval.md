@@ -4,7 +4,7 @@
 
 - **Prepared**: 2026-08-21
 - **Attempted**: 2026-08-21
-- **State**: BLOCKED ON READ-ONLY METADATA INVENTORY
+- **State**: READY FOR `v0.3.3` PATCH RELEASE AND SAFE RETRY
 - **Production writes performed**: two versioned deployments and two
   unscheduled targets were created; both validation attempts failed closed and
   both deployments and targets were rolled back
@@ -72,6 +72,18 @@ audit found the prior healthy/ready plugin set and the original sixteen targets
 and jobs. The next retry is blocked until a one-shot read-only inventory proves
 whether `/metadata/items` and `/metadata/authors` exist and are traversable and
 whether either tree contains a symlink or non-regular entry.
+
+The reviewed one-shot diagnostic then proved that the mounted metadata root is
+present but both optional children are absent with `ENOENT`; no content or
+filename was read. Audiobookshelf creates those native trees lazily, so this is
+valid empty state rather than corruption. The plugin now accepts an absent
+child only when its metadata parent exists as a real directory, emits explicit
+empty archive roots, and recreates them during create-only restore. It still
+rejects a missing metadata mount, symlinks, special entries, and unresolved DB
+references. The focused suite passed 35 tests, and the expanded exact 2.36.0
+drill passed twice from clean state (`56.44s` and `43.07s`), exercising the
+absent source shape before the existing populated A/B backup and two fresh
+restore/boot/restart sequence.
 
 ## Read-only inventory
 
@@ -216,18 +228,9 @@ or modify Audiobookshelf state and never attempt a production restore.
 
 ## Human access required before retry
 
-Release, deployment, target creation, validation, and rollback authority were
-sufficient for both attempts. The schema blocker is closed. The only missing
-evidence is a structure-only inventory of the two mounted metadata subtrees.
-The preferred options are, in order:
-
-1. an operator runs a reviewed one-shot read-only diagnostic on the Docker host
-   and returns only existence, type, mode, entry-count, and traversal-error
-   evidence for `/metadata/items` and `/metadata/authors`; or
-2. the operator approves a temporary, reviewed Gitea Actions/Ansible diagnostic
-   that mounts only the Audiobookshelf metadata root read-only, has no network,
-   emits only those allowed structural fields, and removes itself after
-   capture.
+Release, deployment, target creation, validation, rollback, and the required
+structure-only metadata inventory are complete. No additional human access is
+required for the `v0.3.3` retry.
 
 Do not grant a general production shell, Docker socket, Portainer token,
 Audiobookshelf administrator credential, writable mount, or metadata/media

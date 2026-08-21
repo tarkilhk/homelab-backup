@@ -318,9 +318,7 @@ def _wait_for_library_item(container: str, token: str, library_id: str) -> dict[
     raise RuntimeError("Audiobookshelf did not scan the disposable synthetic audiobook")
 
 
-def _initialize_source(
-    container: str,
-) -> dict[str, str]:
+def _initialize_root(container: str) -> None:
     _request(
         container,
         "POST",
@@ -328,6 +326,15 @@ def _initialize_source(
         body={"newRoot": {"username": _ROOT_USERNAME, "password": _ROOT_PASSWORD}},
     )
     _wait_for_status(container, initialized=True)
+
+
+def _initialize_source(
+    container: str,
+    *,
+    root_initialized: bool = False,
+) -> dict[str, str]:
+    if not root_initialized:
+        _initialize_root(container)
     root = _login(container, _ROOT_USERNAME, _ROOT_PASSWORD)
     token = root["accessToken"]
 
@@ -1030,7 +1037,28 @@ def test_two_live_backups_restore_to_fresh_exact_audiobookshelf_images(
             media_path,
             initialized=False,
         )
-        ids = _initialize_source(source_container)
+        _initialize_root(source_container)
+        assert not (source_metadata / "items").exists()
+        assert not (source_metadata / "authors").exists()
+        empty_artifact = _run_backup(
+            runner_image,
+            source_config,
+            source_metadata,
+            artifact_root,
+        )
+        with zipfile.ZipFile(empty_artifact) as archive:
+            empty_names = {member.filename for member in archive.infolist()}
+        assert "metadata-items/" in empty_names
+        assert "metadata-authors/" in empty_names
+        assert not any(
+            name.startswith("metadata-items/") and name != "metadata-items/" for name in empty_names
+        )
+        assert not any(
+            name.startswith("metadata-authors/") and name != "metadata-authors/"
+            for name in empty_names
+        )
+
+        ids = _initialize_source(source_container, root_initialized=True)
         _replace_disposable_author_image(
             source_container,
             source_config,

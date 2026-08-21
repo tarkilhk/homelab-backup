@@ -116,8 +116,10 @@ table contract and passed two clean exact-image backup/restore drills. Its
 production retry accepted the database but failed closed with a filesystem
 error while reading the metadata mount. Both attempts created no schedule or
 backup and rolled back their target and deployment. A read-only structural
-inventory of `/metadata/items` and `/metadata/authors` is now required before
-another retry. It still does not need
+inventory proved both lazily created children were legitimately absent. The
+plugin now represents that shape as explicit empty archive roots only while the
+metadata mount itself is present and safe; focused tests and two expanded clean
+exact-image drills pass. It still does not need
 Audiobookshelf network access, an administrator credential, the Docker socket,
 downtime, or access to audiobook and ebook media. Production restore remains
 forbidden; the create-only restore contract is for isolated local drills.

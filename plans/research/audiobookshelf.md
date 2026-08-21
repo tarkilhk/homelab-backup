@@ -91,6 +91,12 @@ Include only these metadata subtrees, matching the native format:
   files;
 - `/metadata/authors`: author images.
 
+Audiobookshelf creates these subdirectories lazily. A valid instance with no
+native item metadata or author images may have neither directory. Treat each
+absent child as an empty tree only when the mounted `/metadata` root itself is
+present and safe; still reject a missing root, symlink, special entry, or an
+unresolved database reference.
+
 Exact source sets those native roots
 ([`BackupManager.js`](https://github.com/advplyr/audiobookshelf/blob/96d4021a3cd45f67bf374b65abafbe5d73e926b5/server/managers/BackupManager.js#L20-L28))
 and archives only the SQLite snapshot, those two trees, and a `details` member
@@ -182,7 +188,9 @@ validation:
 4. Snapshot sorted source metadata entries (relative path, regular-file type,
    size and timestamps), copy only the two native trees into private staging,
    then snapshot the source entries again. Retry a bounded number of times if
-   the trees changed; fail if they never stabilize.
+   the trees changed; fail if they never stabilize. Represent a lazily absent
+   `items` or `authors` child as an explicit empty archive root, but only while
+   the mounted metadata parent remains present and safe.
 5. Require every DB-referenced included file to exist in staging, be non-empty,
    remain under its expected root, and decode as a supported image. Parse every
    staged `metadata.json`; reject malformed JSON. Hash every staged file.
@@ -309,8 +317,8 @@ Stop rather than weaken the contract if any of these is true:
 
 - `/config` is not a local filesystem or cannot be mounted read-only together
   with its WAL/SHM companions;
-- `/metadata/items` and `/metadata/authors` cannot be mounted read-only without
-  broad host or media access;
+- the `/metadata` root cannot be mounted read-only without broad host or media
+  access; lazily absent `items` and `authors` children are valid empty state;
 - the source DB is not exact v2.36.0, fails integrity/foreign-key checks, lacks
   its root user, or contains an unexpected schema;
 - an included DB reference escapes the declared metadata roots, is missing,

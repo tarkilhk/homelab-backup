@@ -518,6 +518,23 @@ async def test_test_accepts_exact_upgraded_source_with_sequelize_metadata(
 
 
 @pytest.mark.anyio
+async def test_test_accepts_absent_empty_metadata_subtrees(tmp_path: Path) -> None:
+    config, metadata = _source(tmp_path, references=False)
+    (metadata / "items").rmdir()
+    (metadata / "authors").rmdir()
+
+    assert await get_plugin("audiobookshelf").test(_config(config, metadata)) is True
+
+
+@pytest.mark.anyio
+async def test_test_rejects_missing_metadata_root(tmp_path: Path) -> None:
+    config, _ = _source(tmp_path, references=False)
+
+    with pytest.raises(FileNotFoundError, match="filesystem operation"):
+        await get_plugin("audiobookshelf").test(_config(config, tmp_path / "missing-metadata"))
+
+
+@pytest.mark.anyio
 async def test_test_rejects_malformed_sequelize_metadata_table(tmp_path: Path) -> None:
     config, metadata = _source(tmp_path)
     with sqlite3.connect(config / "absdatabase.sqlite") as connection:
@@ -860,11 +877,13 @@ def test_fsync_tree_flushes_files_and_nested_directories(
 
 
 @pytest.mark.anyio
-async def test_empty_native_metadata_roots_backup_and_restore(
+async def test_absent_native_metadata_roots_backup_and_restore(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source_config, source_metadata = _source(tmp_path, references=False)
+    (source_metadata / "items").rmdir()
+    (source_metadata / "authors").rmdir()
     backup_root = tmp_path / "backups"
     monkeypatch.setattr("app.plugins.audiobookshelf.plugin.BACKUP_BASE_PATH", str(backup_root))
     plugin = get_plugin("audiobookshelf")

@@ -5,6 +5,14 @@ All notable changes to Homelab Backup are recorded here. This project follows
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-08-21
+
+### Fixed
+
+- Treat absent Audiobookshelf `metadata/items` and `metadata/authors`
+  directories as empty native state when the read-only metadata root itself is
+  present, while retaining strict failure for a missing root or unsafe entries.
+
 ## [0.3.2] - 2026-08-21
 
 ### Fixed
@@ -136,7 +144,8 @@ All notable changes to Homelab Backup are recorded here. This project follows
 - Repaired Pi-hole v6 authentication and current database, Servarr, Jellyfin,
   Invoice Ninja, Vaultwarden, and WordPress backup behavior.
 
-[Unreleased]: https://github.com/tarkilhk/homelab-backup/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/tarkilhk/homelab-backup/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/tarkilhk/homelab-backup/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/tarkilhk/homelab-backup/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/tarkilhk/homelab-backup/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/tarkilhk/homelab-backup/compare/v0.2.1...v0.3.0

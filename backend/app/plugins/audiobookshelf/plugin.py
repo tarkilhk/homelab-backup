@@ -550,7 +550,19 @@ def _snapshot_database(source: Path, destination: Path) -> None:
 
 
 def _metadata_files(root: Path) -> dict[str, FileEvidence]:
-    if not root.exists() or not root.is_dir() or root.is_symlink():
+    try:
+        root_status = root.lstat()
+    except FileNotFoundError:
+        try:
+            parent_status = root.parent.lstat()
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                "Audiobookshelf metadata source directory was not found"
+            ) from exc
+        if not stat.S_ISDIR(parent_status.st_mode) or stat.S_ISLNK(parent_status.st_mode):
+            raise FileNotFoundError("Audiobookshelf metadata source directory was not found")
+        return {}
+    if not stat.S_ISDIR(root_status.st_mode) or stat.S_ISLNK(root_status.st_mode):
         raise FileNotFoundError("Audiobookshelf metadata source directory was not found")
     evidence: dict[str, FileEvidence] = {}
     for path in sorted(root.rglob("*")):
