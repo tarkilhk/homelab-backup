@@ -6,7 +6,7 @@
 - **Effort**: L
 - **Risk**: HIGH
 - **Depends on**: Plan 001 foundation and the Plan 014 hardened `ServarrPlugin`
-- **State**: IN PROGRESS
+- **State**: DONE (local)
 - **Production status**: local implementation and recovery proof only;
   production activation requires explicit API-key, read-only-mount, and native
   cleanup approval. Production restore is forbidden.
@@ -183,6 +183,13 @@ disposable destination tainted: the run must fail, no success may be reported,
 and the drill/orchestrator must destroy it rather than retrying or reusing it.
 This is not authorization to restore onto an existing or production target.
 
+The plugin has no Docker or host lifecycle authority. The isolated-restore flag
+and exact-origin allowlist are therefore an orchestrator attestation for the
+container, port, config, and mount topology; the exact-image drill proves that
+attestation. After upload starts, any plugin exception reports that the
+destination is tainted and must be discarded. RestoreService records the failed
+run, while the external drill/orchestrator owns destruction and proves cleanup.
+
 Fresh-resource paths:
 
 - Radarr: tag, rootfolder, indexer, downloadclient, notification, movie;
@@ -265,22 +272,57 @@ inject destructive vendor-process failures into the exact-image drill.
 
 ## Verification and completion
 
-- focused trio, legacy Servarr, public API, scheduler, RestoreService, artifact,
-  and hygiene tests;
-- the complete exact-image drill from two clean states;
-- full backend pytest and mypy, changed-file Black/isort;
-- frontend tests, lint, and build for user-visible schemas;
+- Follow the repository verification-economy ladder: targeted public-seam tests
+  while editing, one combined trio/legacy Servarr focused suite, one review
+  cycle, one definitive exact-image drill, and one final repository gate.
+- Do not repeat a green tier unless a later change can affect its evidence. If
+  the exact drill fails twice, replace further full reruns with a targeted
+  reproducer until the defect is fixed.
+- The focused suite covers trio, legacy Servarr, public API, scheduler,
+  RestoreService, artifact, and hygiene behavior.
+- The definitive exact-image drill covers both clean states in one invocation.
+- The final repository gate covers full backend pytest/mypy/Black/isort and
+  frontend tests/lint/build for the user-visible schemas.
 - SemVer, diff, secret, and disposable-resource audits;
 - independent Standards and Spec reviews with no unresolved P0-P3 issue;
 - compatibility, recovery, changelog, ledger, research, plan, and README
   evidence current; and
-- one focused milestone commit, with no push, deploy, target, schedule,
+- one focused milestone commit and push, with no deploy, target, schedule,
   credential, mount, or production change.
 
 Mark `DONE (local)` only when every gate passes. Production separately requires
 immutable image pins, the broad application API keys, three exact read-only
 manual-backup mounts, exact native-cleanup approval, targets/schedules, and
 backup-only validation. Production restore remains forbidden.
+
+### Completion evidence (2026-08-21)
+
+- Combined trio and legacy Servarr suite:
+  `275 passed in 46.24s`.
+- Targeted mypy over the shared core, trio adapters, unit contract, and exact
+  drill: success with no issues in nine source files; changed-file Black,
+  isort, and diff checks passed.
+- One parallel Standards/Spec review cycle completed. Its actionable findings
+  were closed in one repair pass: explicit post-upload taint signaling,
+  structural sidecar evidence, unprivileged exact-drill runners, and current
+  compatibility evidence. The global verification policy is intentional user
+  scope, and the low-priority lifecycle-wrapper duplication judgement was left
+  unchanged for clarity.
+- Definitive pinned-image two-clean-round drill:
+  `2 passed in 390.60s (0:06:30)`. It proved twelve backups, twelve independent
+  fresh RestoreService destinations, exact A/B content, two restart cycles,
+  negative paths, and complete disposable-resource cleanup.
+- Final repository gate: the backend run reached `1388 passed, 15 skipped` and
+  exposed only two stale API-test configurations. After adding the already
+  required MySQL fields and Radarr fixed mount, those exact two tests passed;
+  no production code changed, so the other 1,388 results were retained under
+  the verification-economy rule. Mypy passed for 109 affected source files,
+  and changed-file Black/isort/diff checks passed. The repository-wide Black
+  probe also identified 19 pre-existing out-of-scope formatting files; they
+  were deliberately not rewritten.
+- Frontend Vitest passed 48 tests, ESLint passed, and the production build
+  succeeded. Version synchronization reported `0.2.1`; secret-bearing filename,
+  diff, and Docker container/network/runner-image residue checks passed.
 
 ## STOP conditions
 

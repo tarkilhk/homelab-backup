@@ -23,6 +23,27 @@ If you are asked to add a new backup plugin, follow `ADDING_PLUGINS.md` exactly.
   accurate `restore_capability`. Prove restores only against an isolated local
   destination; production restores are forbidden.
 
+### Verification economy
+
+Use an escalating verification ladder for each milestone:
+
+1. While editing, run only the smallest test or static check that exercises the
+   changed public seam.
+2. Once the behavior is stable, run the affected focused suite once.
+3. Run one Standards/Spec review cycle and address its actionable findings in
+   one repair pass. Repeat review only for a new P0/P1 finding.
+4. Run the expensive exact-image drill once after code and focused checks are
+   stable. If it fails twice, stop the drill loop and diagnose with a targeted
+   reproducer.
+5. Run repository-wide backend/frontend gates once, after the focused suite,
+   review, and exact drill are green.
+
+Reuse fresh evidence when no relevant code, fixture, dependency, or contract
+has changed. Record exact commands and results in the milestone plan. Keep one
+milestone active at a time and pause before starting the next milestone. Use a
+scoped subagent only when its bounded task can replace root-agent work; do not
+duplicate implementation or verification across agents.
+
 ### Backend specifics (high level)
 - **Virtual environment required**: When running backend commands (e.g. `pip`, `pytest`), always use a venv to avoid externally-managed-environment errors. Create with `python3 -m venv .venv` in `backend/`, then use `.venv/bin/pip` and `.venv/bin/pytest`, or activate first. Full steps: `backend/README.md` (Development and testing).
 - Plugin contract and discovery are defined under `backend/app/core/plugins/` and `backend/app/plugins/`.

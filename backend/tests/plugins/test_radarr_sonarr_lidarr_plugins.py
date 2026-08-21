@@ -1458,6 +1458,7 @@ async def test_backup_publishes_exact_private_artifact_sidecar_and_cleans_native
     migration = contract.migration
     base_url = contract.base_url
     plugin = get_plugin(plugin_key)
+    assert isinstance(plugin, servarr_module.ServarrPlugin)
     backup_directory = tmp_path / "native-backups"
     backup_directory.mkdir()
     monkeypatch.setattr(type(plugin), "native_backup_mount", backup_directory)
@@ -1545,6 +1546,10 @@ async def test_backup_publishes_exact_private_artifact_sidecar_and_cleans_native
     assert stat.S_IMODE(sidecar.stat().st_mode) == 0o600
     sidecar_data = json.loads(sidecar.read_text(encoding="utf-8"))
     assert sidecar_data["package_version"] == package_version
+    assert sidecar_data["archive_members"] == sorted(["INFO", "config.xml", f"{plugin_key}.db"])
+    assert sidecar_data["archive_member_count"] == 3
+    assert set(sidecar_data["database_tables"]) >= plugin.required_native_tables
+    assert sidecar_data["database_table_count"] >= len(plugin.required_native_tables)
     assert sidecar_data["artifact_bytes"] == len(archive_bytes)
     assert sidecar_data["sha256"] == hashlib.sha256(archive_bytes).hexdigest()
     serialized_sidecar = json.dumps(sidecar_data)
@@ -1561,13 +1566,16 @@ async def test_backup_publishes_exact_private_artifact_sidecar_and_cleans_native
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("contract", IDENTITY_CONTRACTS)
-@pytest.mark.parametrize("content_matches", (True, False), ids=("match", "mismatch"))
-async def test_restore_waits_for_restored_key_and_verifies_archive_content(
+@pytest.mark.parametrize(
+    "content_outcome",
+    ("match", "first-restart-mismatch", "persistence-restart-mismatch"),
+)
+async def test_restore_requires_content_through_two_restart_cycles(
     caplog: pytest.LogCaptureFixture,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     contract: _IdentityContract,
-    content_matches: bool,
+    content_outcome: str,
 ) -> None:
     caplog.set_level(logging.INFO)
     plugin_key = contract.plugin_key
@@ -1598,9 +1606,10 @@ async def test_restore_waits_for_restored_key_and_verifies_archive_content(
     monkeypatch.setattr(plugin, "restore_poll_interval_seconds", 0.0)
     observed_fresh_paths: list[str] = []
     status_calls = 0
+    restart_calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal status_calls
+        nonlocal restart_calls, status_calls
         if request.method == "GET" and request.url.path == f"{api_prefix}/system/status":
             status_calls += 1
             expected_key = (
@@ -1615,15 +1624,16 @@ async def test_restore_waits_for_restored_key_and_verifies_archive_content(
                     "packageVersion": package_version,
                     "databaseType": "sqlite",
                     "migrationVersion": migration,
-                    "startTime": (
-                        "2026-08-16T00:00:00Z" if status_calls == 1 else "2026-08-16T00:01:00Z"
-                    ),
+                    "startTime": f"2026-08-16T00:0{status_calls - 1}:00Z",
                 },
             )
         if request.method == "GET" and request.url.path.startswith(f"{api_prefix}/"):
             observed_fresh_paths.append(request.url.path.removeprefix(f"{api_prefix}/"))
             if request.url.path == f"{api_prefix}/tag" and status_calls > 1:
-                label = restored_label if content_matches else "unexpected-restored-marker"
+                mismatch = (content_outcome == "first-restart-mismatch" and status_calls == 2) or (
+                    content_outcome == "persistence-restart-mismatch" and status_calls == 3
+                )
+                label = "unexpected-restored-marker" if mismatch else restored_label
                 return httpx.Response(200, json=[{"id": 1, "label": label}])
             return httpx.Response(200, json=[])
         if request.method == "POST" and request.url.path == (
@@ -1634,7 +1644,11 @@ async def test_restore_waits_for_restored_key_and_verifies_archive_content(
             assert b"config.xml" in request.content
             return httpx.Response(200, json={"restartRequired": True})
         if request.method == "POST" and request.url.path == f"{api_prefix}/system/restart":
-            assert request.headers["X-Api-Key"] == "destination-synthetic-key"
+            restart_calls += 1
+            expected_key = (
+                "destination-synthetic-key" if restart_calls == 1 else "restored-synthetic-key"
+            )
+            assert request.headers["X-Api-Key"] == expected_key
             return httpx.Response(200, json={"restarting": True})
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
@@ -1661,11 +1675,17 @@ async def test_restore_waits_for_restored_key_and_verifies_archive_content(
         },
     )
 
-    if not content_matches:
-        with pytest.raises(RuntimeError, match="restored content"):
+    if content_outcome != "match":
+        with pytest.raises(RuntimeError, match="discard the disposable destination"):
             await plugin.restore(context)
-        assert observed_fresh_paths == list(FRESH_RESOURCE_PATHS[plugin_key]) + ["tag"]
-        assert status_calls == 2
+        if content_outcome == "first-restart-mismatch":
+            assert observed_fresh_paths == list(FRESH_RESOURCE_PATHS[plugin_key]) + ["tag"]
+            assert status_calls == 2
+            assert restart_calls == 1
+        else:
+            assert observed_fresh_paths == list(FRESH_RESOURCE_PATHS[plugin_key]) * 2 + ["tag"]
+            assert status_calls == 3
+            assert restart_calls == 2
         assert f"{app_name} restore started" in caplog.text
         assert f"{app_name} restore failed" in caplog.text
         assert "duration_seconds" in caplog.text
@@ -1676,8 +1696,9 @@ async def test_restore_waits_for_restored_key_and_verifies_archive_content(
     assert result["status"] == "success"
     assert result["artifact_path"] == str(artifact)
     assert result["artifact_bytes"] == artifact.stat().st_size
-    assert observed_fresh_paths == list(FRESH_RESOURCE_PATHS[plugin_key]) * 2
-    assert status_calls == 2
+    assert observed_fresh_paths == list(FRESH_RESOURCE_PATHS[plugin_key]) * 3
+    assert status_calls == 3
+    assert restart_calls == 2
     assert f"{app_name} restore started" in caplog.text
     assert f"{app_name} restore succeeded" in caplog.text
     assert str(artifact) in caplog.text
@@ -1783,9 +1804,10 @@ def test_restore_service_stages_verified_artifact_and_records_successful_audit(
     )
     monkeypatch.setattr(plugin, "restore_poll_interval_seconds", 0.0)
     status_calls = 0
+    restart_calls = 0
 
     def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal status_calls
+        nonlocal restart_calls, status_calls
         if request.method == "GET" and request.url.path == f"{api_prefix}/system/status":
             status_calls += 1
             return httpx.Response(
@@ -1796,9 +1818,7 @@ def test_restore_service_stages_verified_artifact_and_records_successful_audit(
                     "packageVersion": package_version,
                     "databaseType": "sqlite",
                     "migrationVersion": migration,
-                    "startTime": (
-                        "2026-08-16T00:00:00Z" if status_calls == 1 else "2026-08-16T00:01:00Z"
-                    ),
+                    "startTime": f"2026-08-16T00:0{status_calls - 1}:00Z",
                 },
             )
         if request.method == "GET" and request.url.path.startswith(f"{api_prefix}/"):
@@ -1806,6 +1826,7 @@ def test_restore_service_stages_verified_artifact_and_records_successful_audit(
         if request.method == "POST" and request.url.path.endswith("/system/backup/restore/upload"):
             return httpx.Response(200, json={"restartRequired": True})
         if request.method == "POST" and request.url.path.endswith("/system/restart"):
+            restart_calls += 1
             return httpx.Response(200, json={"restarting": True})
         raise AssertionError(f"Unexpected request: {request.method} {request.url}")
 
@@ -1849,6 +1870,8 @@ def test_restore_service_stages_verified_artifact_and_records_successful_audit(
     assert metadata["artifact_bytes"] == artifact_size
     assert metadata["artifact_sha256"] == artifact_sha256
     assert metadata["source_database_identity"] == {"base_url": base_url}
+    assert status_calls == 3
+    assert restart_calls == 2
     assert artifact.stat().st_ino == artifact_inode
     assert hashlib.sha256(artifact.read_bytes()).hexdigest() == artifact_sha256
     assert not list(artifact_directory.glob(".homelab-backup-restore-*"))

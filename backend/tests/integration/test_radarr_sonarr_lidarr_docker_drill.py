@@ -348,7 +348,7 @@ def _start_app(
         "-v",
         f"{config_root}:/config",
     ]
-    arguments.extend(("-e", "PUID=0", "-e", "PGID=0", "-e", "TZ=Etc/UTC"))
+    arguments.extend(("-e", "PUID=1000", "-e", "PGID=1000", "-e", "TZ=Etc/UTC"))
     arguments.append(service.image)
     _docker(*arguments)
     status = _wait_ready(container, service, api_key)
@@ -378,6 +378,11 @@ def _assert_exact_app(
     assert status["appName"] == service.app_name
     assert status["version"] == service.version
     assert status["packageVersion"] == service.package_version
+    environment = json.loads(
+        _docker("inspect", "--format", "{{json .Config.Env}}", container).stdout
+    )
+    assert "PUID=1000" in environment
+    assert "PGID=1000" in environment
     assert str(status["databaseType"]).lower() == "sqlite"
     assert status["migrationVersion"] == service.migration
     assert status["urlBase"] == ""
@@ -415,7 +420,7 @@ def _create_runner(
         "--network",
         network,
         "--user",
-        "0:0",
+        "1000:1000",
         "--read-only",
         "--tmpfs",
         "/tmp:rw,noexec,nosuid,size=256m",
@@ -429,10 +434,6 @@ def _create_runner(
         "no-new-privileges:true",
         "--cap-drop",
         "ALL",
-        "--cap-add",
-        "DAC_OVERRIDE",
-        "--cap-add",
-        "CHOWN",
     ]
     for key, value in environment:
         arguments.extend(("-e", f"{key}={value}"))
@@ -450,6 +451,13 @@ def _create_runner(
     assert _docker(
         "inspect", "--format", "{{json .HostConfig.PortBindings}}", name
     ).stdout.strip() in {"null", "{}"}
+    assert _docker("inspect", "--format", "{{.Config.User}}", name).stdout.strip() == "1000:1000"
+    assert json.loads(
+        _docker("inspect", "--format", "{{json .HostConfig.CapAdd}}", name).stdout
+    ) in (None, [])
+    assert json.loads(
+        _docker("inspect", "--format", "{{json .HostConfig.CapDrop}}", name).stdout
+    ) == ["ALL"]
     try:
         return _docker("start", "--attach", name, timeout=360)
     finally:
@@ -523,13 +531,6 @@ async def main():
     )
     result = await plugin.backup(context)
     validated = validate_backup_artifact(result['artifact_path'], plugin, context)
-    # The exact PUID=0 topology writes private root-owned source archives, so
-    # this runner also runs as root. Hand only the already-published synthetic
-    # evidence back to the invoking pytest UID while preserving mode 0600.
-    os.chown(result['artifact_path'], int(os.environ['DRILL_HOST_UID']),
-             int(os.environ['DRILL_HOST_GID']))
-    os.chown(result['artifact_path'] + '.meta.json', int(os.environ['DRILL_HOST_UID']),
-             int(os.environ['DRILL_HOST_GID']))
     __import__('sys').stdout.write(json.dumps({{
         'artifact_path': result['artifact_path'],
         'artifact_bytes': validated.size_bytes,
@@ -547,11 +548,7 @@ asyncio.run(main())
             (native_directory, f"/sources/{service.key}/backups", False),
             (artifact_root, "/backups", True),
         ),
-        environment=(
-            ("SYNTHETIC_API_KEY", api_key),
-            ("DRILL_HOST_UID", str(os.getuid())),
-            ("DRILL_HOST_GID", str(os.getgid())),
-        ),
+        environment=(("SYNTHETIC_API_KEY", api_key),),
     )
     result = _json_result(completed)
     runner_path = Path(cast(str, result["artifact_path"]))
@@ -591,6 +588,10 @@ def _inspect_artifact(
         "source_backup_id",
         "source_backup_time",
         "source_backup_type",
+        "archive_members",
+        "archive_member_count",
+        "database_tables",
+        "database_table_count",
         "validation",
     ):
         assert evidence_key in sidecar, f"RED: sidecar lacks {evidence_key} evidence"
@@ -600,6 +601,10 @@ def _inspect_artifact(
     assert sidecar["database_backend"] == "sqlite"
     assert sidecar["database_migration"] == service.migration
     assert sidecar["source_backup_type"] == "manual"
+    assert sidecar["archive_members"] == sorted(["INFO", "config.xml", service.database])
+    assert sidecar["archive_member_count"] == 3
+    assert set(sidecar["database_tables"]) >= service.required_tables
+    assert sidecar["database_table_count"] >= len(service.required_tables)
     assert sidecar["validation"] == "strict-native-v1"
     serialized_sidecar = json.dumps(sidecar, sort_keys=True)
     assert not any(secret in serialized_sidecar for secret in _SYNTHETIC_KEYS)
@@ -1296,7 +1301,10 @@ def test_two_online_backups_restore_to_fresh_exact_images_twice(tmp_path: Path) 
                             artifact_root=artifact_root,
                         )
                         resource_containers.discard(command_runner)
-                        assert command_case in command_result["message"].lower()
+                        expected_error = (
+                            "collision" if command_case == "ambiguous" else command_case
+                        )
+                        assert expected_error in command_result["message"].lower()
                         if command_case == "ambiguous":
                             _cleanup_manual_backups(source_container, service, source_key)
 

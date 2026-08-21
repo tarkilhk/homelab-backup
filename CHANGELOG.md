@@ -44,6 +44,12 @@ All notable changes to Homelab Backup are recorded here. This project follows
   attributed native copy, and prove isolated upload/restart recovery in two
   clean exact-image drill rounds. Books, download data, and external services
   remain separate prerequisites.
+- Exact Radarr 6.3.0.10514-ls313, Sonarr 4.0.19.2979-ls320, and Lidarr
+  3.1.0.4875-ls38 control-plane adapters over the hardened Servarr module, with
+  fixed read-only native-backup mounts, strict bounded archive validation,
+  structural sidecars, exact post-publication cleanup, and twelve fresh local
+  restores proving content through two restart cycles across two clean rounds.
+  Media and download payloads remain separate recovery prerequisites.
 - A hardened exact Invoice Ninja 5.13.31 native export/import contract with
   strict signed-download and archive validation, private transactional
   artifacts, fresh local-only RestoreService imports, application-level marker

@@ -96,10 +96,13 @@ class _ArchiveEvidence:
     inode: int
     artifact_bytes: int
     sha256: str
+    structure: "_RestoreContentEvidence"
 
 
 @dataclass(frozen=True)
 class _RestoreContentEvidence:
+    archive_members: tuple[str, ...]
+    database_tables: tuple[str, ...]
     resource_counts: tuple[tuple[str, int], ...]
     tag_labels_sha256: str
 
@@ -326,7 +329,7 @@ def _backup_process_worker(
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
         artifact_fd = os.open(artifact_path, flags)
-        evidence.plugin._validate_exact_native_archive(
+        structure = evidence.plugin._validate_exact_native_archive(
             Path(f"/proc/self/fd/{artifact_fd}"),
             validation_root=Path(f"/proc/self/fd/{validation_fd}"),
             limits=evidence.limits,
@@ -337,6 +340,7 @@ def _backup_process_worker(
             inode=status.st_ino,
             artifact_bytes=status.st_size,
             sha256=_hash_descriptor(artifact_fd),
+            structure=structure,
         )
         _send_worker_result(connection, ("ok", "", result))
     except BaseException as exc:
@@ -1290,6 +1294,8 @@ class ServarrPlugin(BackupPlugin):
             ):
                 raise RuntimeError(f"{self.app_name} backup database migration is incompatible")
             return _RestoreContentEvidence(
+                archive_members=tuple(sorted(expected_members)),
+                database_tables=tuple(sorted(tables)),
                 resource_counts=tuple(resource_counts),
                 tag_labels_sha256=tag_labels_sha256,
             )
@@ -1663,6 +1669,7 @@ class ServarrPlugin(BackupPlugin):
                         raise RuntimeError(f"{self.app_name} backup archive did not appear")
                     await asyncio.sleep(self.poll_interval_seconds)
 
+                validated_structure: _RestoreContentEvidence | None = None
                 with create_backup_artifact(
                     self,
                     context,
@@ -1702,6 +1709,7 @@ class ServarrPlugin(BackupPlugin):
                                 raise RuntimeError(
                                     f"{self.app_name} backup worker returned an invalid result"
                                 )
+                            validated_structure = payload.structure
                             publication_flags = os.O_RDONLY
                             if hasattr(os, "O_NOFOLLOW"):
                                 publication_flags |= os.O_NOFOLLOW
@@ -1759,6 +1767,10 @@ class ServarrPlugin(BackupPlugin):
                     if backup_directory is None:
                         self._validate_archive(artifact.temporary_path)
                     if backup_directory is not None:
+                        if validated_structure is None:
+                            raise RuntimeError(
+                                f"{self.app_name} backup structural evidence is missing"
+                            )
                         artifact.sidecar_metadata.update(
                             {
                                 "application": self.app_name,
@@ -1769,6 +1781,10 @@ class ServarrPlugin(BackupPlugin):
                                 "source_backup_id": backup_item["id"],
                                 "source_backup_type": backup_item["type"],
                                 "source_backup_time": backup_item["time"],
+                                "archive_members": list(validated_structure.archive_members),
+                                "archive_member_count": len(validated_structure.archive_members),
+                                "database_tables": list(validated_structure.database_tables),
+                                "database_table_count": len(validated_structure.database_tables),
                                 "validation": "strict-native-v1",
                             }
                         )
@@ -1862,6 +1878,7 @@ class ServarrPlugin(BackupPlugin):
         verified_size = (
             os.fstat(artifact_fd).st_size if artifact_fd is not None else artifact.stat().st_size
         )
+        destination_mutated = False
         try:
             content_evidence = (
                 restore_worker_evidence.content
@@ -1920,6 +1937,7 @@ class ServarrPlugin(BackupPlugin):
                     os.close(upload_descriptor)
                     raise ValueError(f"{self.app_name} restore artifact changed before upload")
                 with os.fdopen(upload_descriptor, "rb") as artifact_file:
+                    destination_mutated = True
                     upload = await client.post(
                         upload_url,
                         headers=headers,
@@ -1988,6 +2006,13 @@ class ServarrPlugin(BackupPlugin):
                 "artifact_bytes": verified_size,
                 "message": f"{self.app_name} restore completed and restarted successfully",
             }
+        except Exception:
+            if destination_mutated:
+                raise RuntimeError(
+                    f"{self.app_name} restore failed after destination mutation; "
+                    "discard the disposable destination"
+                ) from None
+            raise
         finally:
             if artifact_fd is not None:
                 os.close(artifact_fd)

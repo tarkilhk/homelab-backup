@@ -40,12 +40,12 @@ files, partial files, and artifacts with missing or inconsistent sidecars.
 | WordPress | Automatic | Replaces site files, imports the database, validates both, and rolls back on failure. The destination must be an isolated mounted WordPress root. |
 | Invoice Ninja | Partial | Imports only into an explicitly authorized fresh local destination, verifies company/client/invoice markers, and records a partial outcome. Version 5.13.31 exposes no terminal import status and cannot reliably recover embedded document bytes into a fresh private destination. |
 | Jellyfin (legacy) | Automatic | The existing adapter stages a minimally validated native archive and treats an observed restart/readiness transition as success. Plan 021 current-contract revalidation is blocked: the archive is not coherent across all reads, omits authoritative `/config` state, requires unrestricted Administrator authority, and exposes no terminal restore/rollback proof. Do not treat the v0.2.1 baseline as complete recovery evidence. |
-| Lidarr | Automatic | Uploads a validated archive, restarts Lidarr, and waits for a new ready process. |
+| Lidarr | Automatic | Uploads an exact validated 3.1.0.4875-ls38 control-plane archive only to an authorized fresh local destination, then proves restored content through two distinct restart cycles. Music and download data remain external. |
 | Pi-hole (legacy) | Automatic | The existing adapter imports a minimally checked Teleporter ZIP and proves only that an export remains possible. Plan 020 current-contract revalidation is blocked pending explicit export-consistency and source-authority policies; do not treat the v0.2.1 baseline as complete recovery evidence. |
-| Radarr | Automatic | Uploads a validated archive, restarts Radarr, and waits for a new ready process. |
+| Radarr | Automatic | Uploads an exact validated 6.3.0.10514-ls313 control-plane archive only to an authorized fresh local destination, then proves restored content through two distinct restart cycles. Movies and download data remain external. |
 | Readarr | Automatic | Uploads an exact validated Readarr 0.4.18.2805 control-plane archive, restarts the isolated destination, and proves a different ready process. Books and download working data remain external. |
 | SFTPGo | Partial | Creates a validated SFTPGo 2.7.5 provider database only in a fresh sentinel-marked offline directory; application boot verification remains separate. |
-| Sonarr | Automatic | Uploads a validated archive, restarts Sonarr, and waits for a new ready process. |
+| Sonarr | Automatic | Uploads an exact validated 4.0.19.2979-ls320 control-plane archive only to an authorized fresh local destination, then proves restored content through two distinct restart cycles. Episodes and download data remain external. |
 | Vaultwarden | Automatic | Stops the destination, restores a validated component manifest through an isolated helper, checks SQLite, proves Docker health or `/alive`, and rolls back before restart on failure. |
 
 The backend rejects automated restore requests for manual-only plugins. Copying an
@@ -328,7 +328,10 @@ The following isolated drills were run with synthetic data and no published port
   against the PostgreSQL 16.14 manifest above
 - Pi-hole 2026.07.2
 - Jellyfin 10.11.11
-- Lidarr 3.1.0.4875, Radarr 6.3.0.10514, and Sonarr 4.0.19.2979
+- Lidarr 3.1.0.4875-ls38, Radarr 6.3.0.10514-ls313, and Sonarr
+  4.0.19.2979-ls320 using the pinned linux/amd64 manifests recorded in
+  `PLUGIN_COMPATIBILITY.md`; two clean rounds produced twelve strict backups
+  and twelve fresh RestoreService destinations with two-restart persistence.
 - Readarr 0.4.18.2805 and Prowlarr 2.4.0.5397 (pinned linux/amd64 manifests)
 - Vaultwarden 1.37.1
 - WordPress 7.0.2

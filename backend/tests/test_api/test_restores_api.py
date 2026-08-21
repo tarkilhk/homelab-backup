@@ -4,6 +4,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -33,7 +34,7 @@ def _create_target(client: TestClient, name: str, plugin: str, config: dict) -> 
         },
     )
     assert response.status_code == 201, response.text
-    return response.json()["id"]
+    return cast(int, response.json()["id"])
 
 
 def _get_tag_id_for_target(client: TestClient, target_name: str) -> int:
@@ -217,7 +218,15 @@ def test_restore_rejects_plugin_mismatch(
         client,
         "Destination MySQL",
         "mysql",
-        {"host": "db.local", "user": "root", "password": "pw", "database": "test"},
+        {
+            "mode": "restore_destination",
+            "host": "db.local",
+            "port": 3306,
+            "user": "root",
+            "password": "pw",
+            "database": "test",
+            "ssl_mode": "REQUIRED",
+        },
     )
 
     artifact_path = tmp_path / "pihole.zip"
@@ -248,7 +257,11 @@ def test_restore_missing_artifact_path(
         client,
         "Source Radarr",
         "radarr",
-        {"base_url": "http://radarr.local", "api_key": "token"},
+        {
+            "base_url": "http://radarr.local",
+            "api_key": "token",
+            "backup_directory": "/sources/radarr/backups",
+        },
     )
     source_tag_id = _get_tag_id_for_target(client, "Source Radarr")
     job = _create_job(db_session_override, source_tag_id, "Backup Radarr")
@@ -257,7 +270,11 @@ def test_restore_missing_artifact_path(
         client,
         "Destination Radarr",
         "radarr",
-        {"base_url": "http://radarr.local", "api_key": "token"},
+        {
+            "base_url": "http://radarr.local",
+            "api_key": "token",
+            "backup_directory": "/sources/radarr/backups",
+        },
     )
 
     missing_path = tmp_path / "radarr.json"
