@@ -548,6 +548,12 @@ def _replace_disposable_author_image(
     destination.unlink(missing_ok=True)
     shutil.copyfile(fixture, destination)
     with sqlite3.connect(source_config / "absdatabase.sqlite") as connection:
+        connection.execute('CREATE TABLE IF NOT EXISTS "SequelizeMeta" ("name" TEXT)')
+        if connection.execute('SELECT COUNT(*) FROM "SequelizeMeta"').fetchone() == (0,):
+            connection.execute(
+                'INSERT INTO "SequelizeMeta" ("name") VALUES (?)',
+                ("v2.26.0-create-auth-tables.js",),
+            )
         updated = connection.execute(
             "UPDATE authors SET imagePath = ? WHERE id = ?",
             (f"/metadata/authors/{author_id}.png", author_id),
@@ -885,6 +891,10 @@ def _assert_restored_files(config_path: Path, metadata_path: Path) -> None:
     database = config_path / "absdatabase.sqlite"
     assert database.is_file() and not database.is_symlink()
     assert stat.S_IMODE(database.stat().st_mode) == 0o600
+    with sqlite3.connect(database) as connection:
+        assert connection.execute('PRAGMA table_info("SequelizeMeta")').fetchall() == [
+            (0, "name", "TEXT", 0, None, 0)
+        ]
     assert (metadata_path / "items").is_dir()
     assert (metadata_path / "authors").is_dir()
     assert not any(path.suffix.lower() in _MEDIA_EXTENSIONS for path in config_path.rglob("*"))

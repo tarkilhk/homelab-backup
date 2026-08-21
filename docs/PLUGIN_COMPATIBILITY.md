@@ -110,12 +110,13 @@ production pilot mounted only
 `/docker-apps/audiobookshelf/metadata:/sources/audiobookshelf/metadata:ro`, but
 the mandatory target test rejected the live 2.36.0 database as a non-exact
 schema before any schedule or backup was created. The target and deployment
-were rolled back. Production activation now requires a schema-only live
-inventory and a proved regression for any legitimate upgrade-path difference.
-It still does not need Audiobookshelf network access, an administrator
-credential, the Docker socket, downtime, or access to audiobook and ebook
-media. Production restore remains forbidden; the create-only restore contract
-is for isolated local drills.
+were rolled back. A schema-only inventory proved every required 2.36.0 table
+and column matched and identified only the native `SequelizeMeta(name)` table
+retained by upgraded databases. The strict optional-table regression and two
+clean exact-image backup/restore drills now pass. It still does not need
+Audiobookshelf network access, an administrator credential, the Docker socket,
+downtime, or access to audiobook and ebook media. Production restore remains
+forbidden; the create-only restore contract is for isolated local drills.
 
 The Hindsight plugin is locally verified but not yet deployed. Production
 activation needs only a user-approved attachment to the private Hindsight
