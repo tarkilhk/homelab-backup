@@ -3,9 +3,46 @@
 ## Status
 
 - **Prepared**: 2026-08-21
-- **State**: READY FOR HUMAN APPROVAL
-- **Production writes performed**: none
+- **Attempted**: 2026-08-21
+- **State**: BLOCKED AFTER SAFE PILOT ROLLBACK
+- **Production writes performed**: versioned deployment and one unscheduled
+  target were created, validation failed closed, and both were rolled back
 - **Production restore**: forbidden
+
+## Pilot outcome
+
+Release `v0.3.1` was cut from commit `a0683550d7e99dc9011f916cc49ac763d0f53cfc`
+after the complete main and tag workflows passed. The published OCI indexes are:
+
+- backend: `sha256:3260322f88d98eb57ea868f72b2a44bfef10716b9585357a8290edff8e5e4682`;
+- frontend: `sha256:60b1828a66aae1d8c94bf25c96073c01a944f875e22b99d62a8ac9474d89bdfb`.
+
+The exact infrastructure change was deployed in `homelab-infra` commit
+`017c4e5`. Production returned healthy and ready, exposed the Audiobookshelf
+plugin with `partial` restore capability, and retained all sixteen existing
+targets and jobs. Target `17` was then created with only the two approved
+read-only paths. Its mandatory non-mutating connectivity test failed closed:
+
+```text
+Audiobookshelf database schema is not exact 2.36.0
+```
+
+The live unauthenticated status endpoint independently reported server version
+`2.36.0`, so this is a live-schema difference rather than an application-tag
+drift. No job, schedule, Run, TargetRun, artifact, or sidecar was created.
+
+The failed unscheduled target was deleted, infrastructure commit `017c4e5` was
+reverted by commit `7abd915`, and GitOps restored the prior healthy deployment.
+The final read-only audit again found the original plugin catalog and sixteen
+targets. No Audiobookshelf state was written, stopped, restarted, or restored.
+
+Before retrying, obtain a schema-only inventory from the live read-only
+`/docker-apps/audiobookshelf/config/absdatabase.sqlite`: non-system table names,
+each table's column names, and the `version`/`maxVersion` values from
+`migrationsMeta`. Do not collect row data, users, paths, hashes, tokens, or
+metadata filenames. Compare that inventory with the exact 2.36.0 fresh-image
+schema, add a regression for any legitimate upgrade-path difference, and rerun
+the local exact drill before cutting another release.
 
 ## Read-only inventory
 
@@ -149,21 +186,18 @@ If the scheduled backup fails, disable only the new job, preserve its run
 evidence and any published artifact, and diagnose before retrying. Do not delete
 or modify Audiobookshelf state and never attempt a production restore.
 
-## Human access/approval required
+## Human access required before retry
 
-Codex currently has enough read access to prepare and validate this packet, but
-cannot complete the rollout without:
+Release, deployment, target creation, validation, and rollback authority were
+sufficient for the first attempt. The only missing evidence is the schema-only
+live inventory described above. The preferred options are, in order:
 
-1. approval of release version `v0.3.1` and its final merge/tag;
-2. write access to the `homelab-infra` workspace if Codex should prepare the
-   Compose diff there;
-3. the operator's commit/push of the reviewed `homelab-infra` change, as that
-   repository explicitly reserves production deployment commits for the human
-   operator;
-4. the operator/CI/Portainer deployment of the primary Homelab Backup stack;
-5. approval to create the exact target and daily 05:30 schedule; and
-6. approval for a manual backup trigger only if waiting for the first scheduled
-   run is undesirable.
+1. an operator runs a reviewed one-shot read-only diagnostic on the Docker host
+   and returns only the redacted schema inventory; or
+2. the operator approves a temporary, reviewed Gitea Actions/Ansible diagnostic
+   that mounts only the Audiobookshelf config root read-only, has no network,
+   emits only the allowed schema fields, and removes itself after capture.
 
-No new secret, Audiobookshelf credential, production SSH, Docker socket,
-Portainer token, or protected-service control is required for this pilot.
+Do not grant a general production shell, Docker socket, Portainer token,
+Audiobookshelf administrator credential, writable mount, or metadata/media
+access. Those are unnecessary and materially broader than the blocker.
