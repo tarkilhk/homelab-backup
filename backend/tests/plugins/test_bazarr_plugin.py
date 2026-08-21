@@ -389,7 +389,10 @@ def _configure_fast_backup_poll(
 ) -> None:
     plugin_module = importlib.import_module("app.plugins.bazarr.plugin")
     monkeypatch.setattr(plugin_module, "BACKUP_BASE_PATH", str(backup_root), raising=False)
-    monkeypatch.setattr(plugin_module, "_BACKUP_DEADLINE_SECONDS", 1.0, raising=False)
+    # CI runners can spend more than one second constructing the synthetic
+    # SQLite/ZIP response inside the mocked trigger request. Keep this bound
+    # short while leaving enough time for attribution to observe that response.
+    monkeypatch.setattr(plugin_module, "_BACKUP_DEADLINE_SECONDS", 5.0, raising=False)
     monkeypatch.setattr(plugin_module, "_POLL_INTERVAL_SECONDS", 0.0, raising=False)
     monkeypatch.setattr(plugin_module, "_STABILITY_OBSERVATIONS", 2, raising=False)
 
