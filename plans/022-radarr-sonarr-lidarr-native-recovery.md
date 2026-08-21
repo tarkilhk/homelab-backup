@@ -312,12 +312,9 @@ backup-only validation. Production restore remains forbidden.
   `2 passed in 390.60s (0:06:30)`. It proved twelve backups, twelve independent
   fresh RestoreService destinations, exact A/B content, two restart cycles,
   negative paths, and complete disposable-resource cleanup.
-- Final repository gate: the backend run reached `1388 passed, 15 skipped` and
-  exposed only two stale API-test configurations. After adding the already
-  required MySQL fields and Radarr fixed mount, those exact two tests passed;
-  no production code changed, so the other 1,388 results were retained under
-  the verification-economy rule. Mypy passed for 109 affected source files,
-  and changed-file Black/isort/diff checks passed. The repository-wide Black
+- Final repository gate after the single timing-fixture repair:
+  `1390 passed, 15 skipped in 313.99s`. Mypy passed for 105 source files, and
+  changed-file Black/isort/diff checks passed. The repository-wide Black/isort
   probe also identified 19 pre-existing out-of-scope formatting files; they
   were deliberately not rewritten.
 - Frontend Vitest passed 48 tests, ESLint passed, and the production build
