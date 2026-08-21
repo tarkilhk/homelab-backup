@@ -4,7 +4,7 @@
 
 - **Prepared**: 2026-08-21
 - **Attempted**: 2026-08-21
-- **State**: BLOCKED AFTER SAFE PILOT ROLLBACK
+- **State**: READY FOR PATCH RELEASE AND SAFE RETRY
 - **Production writes performed**: versioned deployment and one unscheduled
   target were created, validation failed closed, and both were rolled back
 - **Production restore**: forbidden
@@ -36,13 +36,14 @@ reverted by commit `7abd915`, and GitOps restored the prior healthy deployment.
 The final read-only audit again found the original plugin catalog and sixteen
 targets. No Audiobookshelf state was written, stopped, restarted, or restored.
 
-Before retrying, obtain a schema-only inventory from the live read-only
-`/docker-apps/audiobookshelf/config/absdatabase.sqlite`: non-system table names,
-each table's column names, and the `version`/`maxVersion` values from
-`migrationsMeta`. Do not collect row data, users, paths, hashes, tokens, or
-metadata filenames. Compare that inventory with the exact 2.36.0 fresh-image
-schema, add a regression for any legitimate upgrade-path difference, and rerun
-the local exact drill before cutting another release.
+A schema-only read of the live database then confirmed `version` and
+`maxVersion` are both `2.36.0`. Every required table and column matched the
+fresh-image contract; the sole difference was Sequelize's native legacy
+`SequelizeMeta(name)` migration table. The validator now permits only that
+exact optional table, has positive and malformed-table regressions, and still
+rejects all other extra state. The updated exact-image drill preserved the
+upgrade-path table through two backups, two fresh restores, and app
+boot/restart verification in two clean runs (`62.47s` and `42.13s`).
 
 ## Read-only inventory
 
@@ -71,19 +72,18 @@ The plugin needs the first two roots only. The media root remains excluded.
 
 ## Approval A: versioned Homelab Backup release
 
-Deployment release: `v0.3.1`. The initial `v0.3.0` tag failed CI before image
-publication because three tests were not portable across release version and
-CI umask; the immutable tag was retained and the focused fixes moved to this
-patch release.
+Retry release: `v0.3.2`. Release `v0.3.1` remains immutable and valid, but its
+strict fresh-database schema contract rejected the legitimate production
+upgrade-path table before any backup was attempted.
 
 Before release:
 
 1. finish and commit the current Plan 022 closure;
 2. run the repository's single final backend/frontend release gate;
 3. synchronize `VERSION`, backend/frontend package versions and lockfile;
-4. record the focused fixes in the dated `0.3.1` section;
+4. record the focused fix in the dated `0.3.2` section;
 5. merge the exact reviewed commit to `main`;
-6. create and push `v0.3.1` only after main CI passes; and
+6. create and push `v0.3.2` only after main CI passes; and
 7. record the published backend/frontend image digests.
 
 Do not deploy a floating `latest`, branch build, dirty tree, or the WIP
@@ -91,14 +91,14 @@ checkpoint.
 
 ## Approval B: primary backend Compose change
 
-After the immutable `v0.3.1` images exist, change only
+After the immutable `v0.3.2` images exist, change only
 `docker.compose/system/homelab-backup/homelab-backup.yaml` in `homelab-infra`:
 
 ```diff
  services:
    backend:
 -    image: tarkilhk/homelab-backup:backend-v0.2.1
-+    image: tarkilhk/homelab-backup:backend-v0.3.1
++    image: tarkilhk/homelab-backup:backend-v0.3.2
      volumes:
      - /mnt/nas-shared/backup/homelab-backup:/backups
      - /docker-apps/homelab-backup/db:/app/db
@@ -107,7 +107,7 @@ After the immutable `v0.3.1` images exist, change only
 +    - /docker-apps/audiobookshelf/metadata:/sources/audiobookshelf/metadata:ro
 ```
 
-Update the frontend to `frontend-v0.3.1` in the same reviewed deployment commit.
+Update the frontend to `frontend-v0.3.2` in the same reviewed deployment commit.
 Do not change the NAS deployment during this pilot.
 
 This grants no Audiobookshelf network, API credential, media path, Docker

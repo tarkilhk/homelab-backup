@@ -402,6 +402,9 @@ _REQUIRED_SCHEMA: dict[str, frozenset[str]] = {
         }
     ),
 }
+_OPTIONAL_UPGRADE_SCHEMA: dict[str, frozenset[str]] = {
+    "SequelizeMeta": frozenset({"name"}),
+}
 _REFERENCE_COLUMNS = (
     ("books", "coverPath"),
     ("podcasts", "coverPath"),
@@ -514,11 +517,18 @@ def _validate_database(path: Path) -> frozenset[str]:
                 "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
             )
         )
-        if observed_tables != frozenset(_REQUIRED_SCHEMA):
+        required_tables = frozenset(_REQUIRED_SCHEMA)
+        allowed_tables = required_tables | frozenset(_OPTIONAL_UPGRADE_SCHEMA)
+        if not required_tables.issubset(observed_tables) or not observed_tables.issubset(
+            allowed_tables
+        ):
             raise ValueError("Audiobookshelf database schema is not exact 2.36.0")
         for table, required_columns in _REQUIRED_SCHEMA.items():
             columns = _table_columns(connection, table)
             if columns != required_columns:
+                raise ValueError("Audiobookshelf database schema is not exact 2.36.0")
+        for table, required_columns in _OPTIONAL_UPGRADE_SCHEMA.items():
+            if table in observed_tables and _table_columns(connection, table) != required_columns:
                 raise ValueError("Audiobookshelf database schema is not exact 2.36.0")
         versions = dict(connection.execute("SELECT key, value FROM migrationsMeta"))
         if (

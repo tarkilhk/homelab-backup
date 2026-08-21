@@ -503,6 +503,31 @@ async def test_test_accepts_exact_read_only_source(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_test_accepts_exact_upgraded_source_with_sequelize_metadata(
+    tmp_path: Path,
+) -> None:
+    config, metadata = _source(tmp_path)
+    with sqlite3.connect(config / "absdatabase.sqlite") as connection:
+        connection.execute('CREATE TABLE "SequelizeMeta" ("name" TEXT)')
+        connection.execute(
+            'INSERT INTO "SequelizeMeta" ("name") VALUES (?)',
+            ("v2.26.0-create-auth-tables.js",),
+        )
+
+    assert await get_plugin("audiobookshelf").test(_config(config, metadata)) is True
+
+
+@pytest.mark.anyio
+async def test_test_rejects_malformed_sequelize_metadata_table(tmp_path: Path) -> None:
+    config, metadata = _source(tmp_path)
+    with sqlite3.connect(config / "absdatabase.sqlite") as connection:
+        connection.execute('CREATE TABLE "SequelizeMeta" ("name" TEXT, "unexpectedState" TEXT)')
+
+    with pytest.raises(ValueError, match="schema"):
+        await get_plugin("audiobookshelf").test(_config(config, metadata))
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize("missing", ["config_path", "metadata_path"])
 async def test_invalid_configuration_raises(tmp_path: Path, missing: str) -> None:
     config, metadata = _source(tmp_path)

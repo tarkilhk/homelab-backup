@@ -172,7 +172,9 @@ validation:
    Never copy the live DB/WAL/SHM files directly.
 2. Require `PRAGMA quick_check = ok`, an empty `PRAGMA foreign_key_check`, the
    complete required table/column set, a root user, and `migrationsMeta.version
-   = 2.36.0` in the snapshot.
+   = 2.36.0` in the snapshot. Upgraded databases may retain Sequelize's native
+   `SequelizeMeta` migration table; accept it only with the exact single `name`
+   column and continue rejecting every other extra table or column.
 3. Derive the DB reference manifest for item/podcast covers and author images.
    Classify references under `/metadata/items` or `/metadata/authors` as
    included, references under `/audiobooks` as explicitly external, and reject
